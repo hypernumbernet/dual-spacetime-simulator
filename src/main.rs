@@ -1,7 +1,8 @@
 //コンソールウィンドウを非表示にする
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use egui::{epaint::Shadow, vec2, Align, Align2, Color32, CornerRadius, Frame, Margin, Window};
+use crate::render::ParticleRenderPipeline;
+use egui::{Align, Align2, Color32, CornerRadius, Frame, Margin, Window, epaint::Shadow, vec2};
 use egui_winit_vulkano::{Gui, GuiConfig};
 use vulkano_util::{
     context::{VulkanoConfig, VulkanoContext},
@@ -11,7 +12,6 @@ use winit::{
     application::ApplicationHandler, error::EventLoopError, event::WindowEvent,
     event_loop::EventLoop,
 };
-use crate::render::ParticleRenderPipeline;
 
 mod render;
 
@@ -32,34 +32,48 @@ impl Default for App {
     fn default() -> Self {
         let context = VulkanoContext::new(VulkanoConfig::default());
         let windows = VulkanoWindows::default();
-        Self { context, windows, render_pipeline: None, gui: None }
+        Self {
+            context,
+            windows,
+            render_pipeline: None,
+            gui: None,
+        }
     }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.windows.create_window(event_loop, &self.context, &WindowDescriptor::default(), |ci| {
-            ci.image_format = vulkano::format::Format::B8G8R8A8_UNORM;
-            ci.min_image_count = ci.min_image_count.max(2);
-        });
-
-        // Create out gui pipeline
+        self.windows.create_window(
+            event_loop,
+            &self.context,
+            &WindowDescriptor::default(),
+            |ci| {
+                ci.image_format = vulkano::format::Format::B8G8R8A8_UNORM;
+                ci.min_image_count = ci.min_image_count.max(2);
+            },
+        );
         let render_pipeline = ParticleRenderPipeline::new(
             self.context.graphics_queue().clone(),
-            self.windows.get_primary_renderer_mut().unwrap().swapchain_format(),
+            self.windows
+                .get_primary_renderer_mut()
+                .unwrap()
+                .swapchain_format(),
             self.context.memory_allocator(),
         );
-
-        // Create gui subpass
         self.gui = Some(Gui::new_with_subpass(
             event_loop,
             self.windows.get_primary_renderer_mut().unwrap().surface(),
-            self.windows.get_primary_renderer_mut().unwrap().graphics_queue(),
+            self.windows
+                .get_primary_renderer_mut()
+                .unwrap()
+                .graphics_queue(),
             render_pipeline.gui_pass(),
-            self.windows.get_primary_renderer_mut().unwrap().swapchain_format(),
+            self.windows
+                .get_primary_renderer_mut()
+                .unwrap()
+                .swapchain_format(),
             GuiConfig::default(),
         ));
-
         self.render_pipeline = Some(render_pipeline);
     }
 
@@ -70,9 +84,7 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         let renderer = self.windows.get_renderer_mut(window_id).unwrap();
-
         let gui = self.gui.as_mut().unwrap();
-
         match event {
             WindowEvent::Resized(_) => {
                 renderer.resize();
@@ -84,7 +96,6 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                // Set immediate UI in redraw here
                 gui.immediate_ui(|gui| {
                     let ctx = gui.context();
                     Window::new("Transparent Window")
@@ -107,18 +118,13 @@ impl ApplicationHandler for App {
                             ui.colored_label(Color32::BLACK, "Content :)");
                         });
                 });
-
-                // Acquire swapchain future
                 match renderer.acquire(Some(std::time::Duration::from_millis(10)), |_| {}) {
                     Ok(future) => {
-                        // Render gui
                         let after_future = self.render_pipeline.as_mut().unwrap().render(
                             future,
                             renderer.swapchain_image_view(),
                             gui,
                         );
-
-                        // Present swapchain
                         renderer.present(after_future, true);
                     }
                     Err(vulkano::VulkanError::OutOfDate) => {
@@ -129,16 +135,13 @@ impl ApplicationHandler for App {
             }
             _ => (),
         }
-
         if window_id == renderer.window().id() {
-            // Update Egui integration so the UI works!
             let _pass_events_to_game = !gui.update(&event);
         }
     }
 
     fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
         let renderer = self.windows.get_primary_renderer().unwrap();
-
         renderer.window().request_redraw();
     }
 }

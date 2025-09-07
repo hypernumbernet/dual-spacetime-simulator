@@ -1,29 +1,28 @@
-
-use std::sync::Arc;
 use egui_winit_vulkano::Gui;
+use std::sync::Arc;
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
-        allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo},
         AutoCommandBufferBuilder, CommandBufferInheritanceInfo, CommandBufferUsage,
         RenderPassBeginInfo, SubpassBeginInfo, SubpassContents,
+        allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo},
     },
     device::{Device, Queue},
     format::Format,
-    image::{view::ImageView, SampleCount},
+    image::{SampleCount, view::ImageView},
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     pipeline::{
+        DynamicState, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo,
         graphics::{
+            GraphicsPipelineCreateInfo,
             color_blend::{ColorBlendAttachmentState, ColorBlendState},
             input_assembly::InputAssemblyState,
             multisample::MultisampleState,
             rasterization::RasterizationState,
             vertex_input::{Vertex, VertexDefinition},
             viewport::{Viewport, ViewportState},
-            GraphicsPipelineCreateInfo,
         },
         layout::PipelineDescriptorSetLayoutCreateInfo,
-        DynamicState, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo,
     },
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
     sync::GpuFuture,
@@ -70,24 +69,33 @@ impl ParticleRenderPipeline {
         let render_pass = Self::create_render_pass(queue.device().clone(), image_format);
         let (pipeline, subpass) =
             Self::create_pipeline(queue.device().clone(), render_pass.clone());
-
         let vertex_buffer = Buffer::from_iter(
             allocator.clone(),
-            BufferCreateInfo { usage: BufferUsage::VERTEX_BUFFER, ..Default::default() },
+            BufferCreateInfo {
+                usage: BufferUsage::VERTEX_BUFFER,
+                ..Default::default()
+            },
             AllocationCreateInfo {
                 memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
                     | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                 ..Default::default()
             },
             [
-                ParticleVertex { position: [-0.5, -0.25], color: [1.0, 0.0, 0.0, 1.0] },
-                ParticleVertex { position: [0.0, 0.5], color: [0.0, 1.0, 0.0, 1.0] },
-                ParticleVertex { position: [0.25, -0.1], color: [0.0, 0.0, 1.0, 1.0] },
+                ParticleVertex {
+                    position: [-0.5, -0.25],
+                    color: [1.0, 0.0, 0.0, 1.0],
+                },
+                ParticleVertex {
+                    position: [0.0, 0.5],
+                    color: [0.0, 1.0, 0.0, 1.0],
+                },
+                ParticleVertex {
+                    position: [0.25, -0.1],
+                    color: [0.0, 0.0, 1.0, 1.0],
+                },
             ],
         )
         .unwrap();
-
-        // Create an allocator for command-buffer data
         let command_buffer_allocator = StandardCommandBufferAllocator::new(
             queue.device().clone(),
             StandardCommandBufferAllocatorCreateInfo {
@@ -96,8 +104,14 @@ impl ParticleRenderPipeline {
             },
         )
         .into();
-
-        Self { queue, render_pass, pipeline, subpass, vertex_buffer, command_buffer_allocator }
+        Self {
+            queue,
+            render_pass,
+            pipeline,
+            subpass,
+            vertex_buffer,
+            command_buffer_allocator,
+        }
     }
 
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
@@ -135,12 +149,11 @@ impl ParticleRenderPipeline {
             .expect("failed to create shader module")
             .entry_point("main")
             .unwrap();
-
         let vertex_input_state = ParticleVertex::per_vertex().definition(&vs).unwrap();
-
-        let stages =
-            [PipelineShaderStageCreateInfo::new(vs), PipelineShaderStageCreateInfo::new(fs)];
-
+        let stages = [
+            PipelineShaderStageCreateInfo::new(vs),
+            PipelineShaderStageCreateInfo::new(fs),
+        ];
         let layout = PipelineLayout::new(
             device.clone(),
             PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
@@ -148,24 +161,27 @@ impl ParticleRenderPipeline {
                 .unwrap(),
         )
         .unwrap();
-
         let subpass = Subpass::from(render_pass, 0).unwrap();
         (
-            GraphicsPipeline::new(device, None, GraphicsPipelineCreateInfo {
-                stages: stages.into_iter().collect(),
-                vertex_input_state: Some(vertex_input_state),
-                input_assembly_state: Some(InputAssemblyState::default()),
-                viewport_state: Some(ViewportState::default()),
-                rasterization_state: Some(RasterizationState::default()),
-                multisample_state: Some(MultisampleState::default()),
-                color_blend_state: Some(ColorBlendState::with_attachment_states(
-                    subpass.num_color_attachments(),
-                    ColorBlendAttachmentState::default(),
-                )),
-                dynamic_state: [DynamicState::Viewport].into_iter().collect(),
-                subpass: Some(subpass.clone().into()),
-                ..GraphicsPipelineCreateInfo::layout(layout)
-            })
+            GraphicsPipeline::new(
+                device,
+                None,
+                GraphicsPipelineCreateInfo {
+                    stages: stages.into_iter().collect(),
+                    vertex_input_state: Some(vertex_input_state),
+                    input_assembly_state: Some(InputAssemblyState::default()),
+                    viewport_state: Some(ViewportState::default()),
+                    rasterization_state: Some(RasterizationState::default()),
+                    multisample_state: Some(MultisampleState::default()),
+                    color_blend_state: Some(ColorBlendState::with_attachment_states(
+                        subpass.num_color_attachments(),
+                        ColorBlendAttachmentState::default(),
+                    )),
+                    dynamic_state: [DynamicState::Viewport].into_iter().collect(),
+                    subpass: Some(subpass.clone().into()),
+                    ..GraphicsPipelineCreateInfo::layout(layout)
+                },
+            )
             .unwrap(),
             subpass,
         )
@@ -183,15 +199,15 @@ impl ParticleRenderPipeline {
             CommandBufferUsage::OneTimeSubmit,
         )
         .unwrap();
-
         let dimensions = image.image().extent();
-        let framebuffer = Framebuffer::new(self.render_pass.clone(), FramebufferCreateInfo {
-            attachments: vec![image],
-            ..Default::default()
-        })
+        let framebuffer = Framebuffer::new(
+            self.render_pass.clone(),
+            FramebufferCreateInfo {
+                attachments: vec![image],
+                ..Default::default()
+            },
+        )
         .unwrap();
-
-        // Begin render pipeline commands
         builder
             .begin_render_pass(
                 RenderPassBeginInfo {
@@ -204,8 +220,6 @@ impl ParticleRenderPipeline {
                 },
             )
             .unwrap();
-
-        // Render first draw pass
         let mut secondary_builder = AutoCommandBufferBuilder::secondary(
             self.command_buffer_allocator.clone(),
             self.queue.queue_family_index(),
@@ -233,27 +247,28 @@ impl ParticleRenderPipeline {
             .bind_vertex_buffers(0, self.vertex_buffer.clone())
             .unwrap();
         unsafe {
-            secondary_builder.draw(self.vertex_buffer.len() as u32, 1, 0, 0).unwrap();
+            secondary_builder
+                .draw(self.vertex_buffer.len() as u32, 1, 0, 0)
+                .unwrap();
         }
         let cb = secondary_builder.build().unwrap();
         builder.execute_commands(cb).unwrap();
-
-        // Move on to next subpass for gui
         builder
-            .next_subpass(Default::default(), SubpassBeginInfo {
-                contents: SubpassContents::SecondaryCommandBuffers,
-                ..Default::default()
-            })
+            .next_subpass(
+                Default::default(),
+                SubpassBeginInfo {
+                    contents: SubpassContents::SecondaryCommandBuffers,
+                    ..Default::default()
+                },
+            )
             .unwrap();
-        // Draw gui on subpass
         let cb = gui.draw_on_subpass_image([dimensions[0], dimensions[1]]);
         builder.execute_commands(cb).unwrap();
-
-        // Last end render pass
         builder.end_render_pass(Default::default()).unwrap();
         let command_buffer = builder.build().unwrap();
-        let after_future = before_future.then_execute(self.queue.clone(), command_buffer).unwrap();
-
+        let after_future = before_future
+            .then_execute(self.queue.clone(), command_buffer)
+            .unwrap();
         after_future.boxed()
     }
 }
@@ -261,9 +276,7 @@ impl ParticleRenderPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vulkano_util::{
-        context::{VulkanoConfig, VulkanoContext},
-    };
+    use vulkano_util::context::{VulkanoConfig, VulkanoContext};
     #[test]
     fn test_pipeline_creation() {
         let context = VulkanoContext::new(VulkanoConfig::default());
