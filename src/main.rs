@@ -1,8 +1,9 @@
-//コンソールウィンドウを非表示にする
+//Hide the console window on Windows in release mode
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use crate::render::ParticleRenderPipeline;
-use egui::{Align, Align2, Color32, CornerRadius, Frame, Margin, Window, epaint::Shadow, vec2};
+use crate::ui::draw_ui;
+use crate::types::UiState;
 use egui_winit_vulkano::{Gui, GuiConfig};
 use vulkano_util::{
     context::{VulkanoConfig, VulkanoContext},
@@ -14,6 +15,8 @@ use winit::{
 };
 
 mod render;
+mod ui;
+mod types;
 
 pub fn main() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new().unwrap();
@@ -26,6 +29,7 @@ pub struct App {
     windows: VulkanoWindows,
     render_pipeline: Option<ParticleRenderPipeline>,
     gui: Option<Gui>,
+    ui_state: UiState,
 }
 
 impl Default for App {
@@ -37,6 +41,7 @@ impl Default for App {
             windows,
             render_pipeline: None,
             gui: None,
+            ui_state: UiState::default(),
         }
     }
 }
@@ -98,25 +103,7 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 gui.immediate_ui(|gui| {
                     let ctx = gui.context();
-                    Window::new("Transparent Window")
-                        .anchor(Align2([Align::RIGHT, Align::TOP]), vec2(-545.0, 500.0))
-                        .resizable(false)
-                        .default_width(300.0)
-                        .frame(
-                            Frame::NONE
-                                .fill(Color32::from_white_alpha(125))
-                                .shadow(Shadow {
-                                    spread: 8,
-                                    blur: 10,
-                                    color: Color32::from_black_alpha(125),
-                                    ..Default::default()
-                                })
-                                .corner_radius(CornerRadius::same(5))
-                                .inner_margin(Margin::same(10)),
-                        )
-                        .show(&ctx, |ui| {
-                            ui.colored_label(Color32::BLACK, "Content :)");
-                        });
+                    draw_ui(&mut self.ui_state, &ctx);
                 });
                 match renderer.acquire(Some(std::time::Duration::from_millis(10)), |_| {}) {
                     Ok(future) => {
