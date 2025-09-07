@@ -1,5 +1,5 @@
 use crate::types::UiState;
-use egui::{CentralPanel, SidePanel};
+use egui::SidePanel;
 
 pub fn draw_ui(ui_state: &mut UiState, ctx: &egui::Context) {
     SidePanel::right("input_panel")
@@ -16,8 +16,4 @@ pub fn draw_ui(ui_state: &mut UiState, ctx: &egui::Context) {
                     .prefix("Gravity: "),
             );
         });
-    CentralPanel::default().show(ctx, |ui| {
-        ui.heading("Main View");
-        ui.label("3D particle simulation will be displayed here.");
-    });
 }

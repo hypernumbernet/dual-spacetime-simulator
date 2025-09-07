@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 egui_winit_vulkano = "0.28"
 egui = "0.31"
-egui_demo_lib = "0.31"
 winit = "0.30"
 vulkano = "0.35"
 vulkano-shaders = "0.35"
@@ -18,6 +17,3 @@ rand = "0.8"
 [dev-dependencies]
 mockall = "0.13"
 cgmath = "0.18"
-
-[build-dependencies]
-vulkano-shaders = "0.35"  # ビルド時にシェーダーをコンパイルするための依存関係
