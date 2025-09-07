@@ -4,20 +4,20 @@
 
 ## 1. プロジェクト全体のディレクトリ構造
 ```
-particle_simulation/
+dual-spacetime-simulator/
 ├── src/
 │   ├── main.rs                 # エントリーポイントとApp構造体の定義
-│   ├── ui.rs                   # UI関連のロジック（入力ペイン、状態管理）
-│   ├── render.rs               # 3Dレンダリング関連のロジック（パイプライン、描画）
-│   ├── simulation.rs           # 粒子シミュレーションのロジック（物理計算、粒子状態）
-│   ├── types.rs                # 共有される型定義（構造体、列挙型）
-│   ├── shaders/                # シェーダーファイル
-│   │   ├── vertex.glsl         # 頂点シェーダー
-│   │   └── fragment.glsl       # フラグメントシェーダー
-│   └── tests/                  # テストコード
-│       ├── ui_tests.rs         # UI関連のテスト
-│       ├── simulation_tests.rs # シミュレーション関連のテスト
-│       └── render_tests.rs     # レンダリング関連のテスト
+│   ├── ui.rs                   # UIロジック（入力ペイン、状態管理）
+│   ├── render.rs               # 3Dレンダリングロジック（パイプライン、描画）
+│   ├── simulation.rs           # 粒子シミュレーションロジック
+│   ├── types.rs                # 共有型定義（App、UiState、SimulationStateなど）
+│   └── shaders/                # シェーダーファイル
+│       ├── vertex.glsl         # 頂点シェーダー
+│       └── fragment.glsl       # フラグメントシェーダー
+├── tests/                      # 結合テストコード
+│   ├── ui_tests.rs             # UI関連の結合テスト
+│   ├── simulation_tests.rs     # シミュレーション関連の結合テスト
+│   ├── render_tests.rs         # レンダリング関連の結合テスト
 ├── Cargo.toml                  # 依存関係とプロジェクト設定
 └── README.md                   # プロジェクト概要とビルド手順
 ```
@@ -76,22 +76,22 @@ particle_simulation/
     - 初期実装ではサンプルコードのシェーダーをほぼそのまま使用し、粒子描画用に後で調整。
   - **依存**: `vulkano_shaders`マクロでコンパイル。
 
-- **`src/tests/ui_tests.rs`**:
-  - **役割**: UI関連のユニットテスト。
+- **`tests/ui_tests.rs`**:
+  - **役割**: UI関連の結合テスト。
   - **内容**:
     - `UiState`の更新ロジックをテスト（例: スライダー入力で値が正しく更新されるか）。
     - モックUIコンテキストを使用して`draw_ui`関数の動作を確認。
   - **依存モジュール**: `ui`、`types`。
 
-- **`src/tests/simulation_tests.rs`**:
-  - **役割**: シミュレーション関連のユニットテスト。
+- **`tests/simulation_tests.rs`**:
+  - **役割**: シミュレーション関連の結合テスト。
   - **内容**:
     - `update_simulation`関数のテスト（例: 重力適用後の粒子位置/速度の変化）。
     - 初期実装ではダミー関数をテストし、後で拡張。
   - **依存モジュール**: `simulation`、`types`。
 
-- **`src/tests/render_tests.rs`**:
-  - **役割**: レンダリング関連のユニットテスト。
+- **`tests/render_tests.rs`**:
+  - **役割**: レンダリング関連の結合テスト。
   - **内容**:
     - `render_scene`関数のテスト（例: 頂点バッファの内容が正しいか）。
     - Vulkanoのモックオブジェクトを使用した簡易テスト。

@@ -257,3 +257,21 @@ impl ParticleRenderPipeline {
         after_future.boxed()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vulkano_util::{
+        context::{VulkanoConfig, VulkanoContext},
+    };
+    #[test]
+    fn test_pipeline_creation() {
+        let context = VulkanoContext::new(VulkanoConfig::default());
+        let pipeline = ParticleRenderPipeline::new(
+            context.graphics_queue().clone(),
+            Format::B8G8R8A8_UNORM,
+            context.memory_allocator(),
+        );
+        assert!(Arc::strong_count(&pipeline.pipeline) > 0);
+    }
+}
