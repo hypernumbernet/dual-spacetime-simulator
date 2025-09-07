@@ -4,27 +4,20 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# メイン統合クレート: egui, winit, vulkanoの連携を提供。高性能3D/GUIレンダリングを実現。
-# 理由: プロジェクト指定のegui_winit_vulkanoを使用。依存としてegui ^0.31, winit ^0.30, vulkano ^0.35 を内部で引き込む。
-egui_winit_vulkano = "0.28.0"
-
-# Vulkanシェーダーコンパイルクレート: GLSLをSPIR-Vに変換。
-# 理由: 粒子描画シェーダーをコンパイル。関数例: vulkano_shaders::shader! マクロでシェーダーコードをRust関数に変換。
-vulkano-shaders = "0.35.0"
-
-# バイト操作ユーティリティ: Vulkanバッファ転送に安全に使用（Podトレイト）。
-# 理由: 粒子データ（Vec<Particle>）をGPUバッファに転送。関数例: bytemuck::cast_slice で &[f32] をバイトスライスに変換。
-bytemuck = "1.23.2"
-
-# リニア代数クレート: 3D位置/変換計算。
-# 理由: Particle位置の操作（[f32; 3]）。関数例: cgmath::Vector3::new で粒子座標を扱う。
-cgmath = "0.18.0"
-
-# 画像処理（オプション）: 将来の粒子テクスチャ用。
-# 理由: 粒子をスプライトとして描画する場合に使用。関数例: image::load_from_memory でテクスチャ読み込み。
-image = { version = "0.25.6", optional = true }
+egui_winit_vulkano = "0.28"
+egui = "0.31"
+egui_demo_lib = "0.31"
+winit = "0.30"
+vulkano = "0.35"
+vulkano-shaders = "0.35"
+vulkano-util = "0.35"
+bytemuck = "1.23"
+anyhow  = "1.0"
+rand = "0.8"
 
 [dev-dependencies]
-# モックテストクレート: TDDでモック生成。
-# 理由: AppStateやRenderの単体テスト。関数例: mockall::mock! でトレイトをモックし、expect_foo().returning(...) で振る舞い定義。
-mockall = "0.13.1"
+mockall = "0.13"
+cgmath = "0.18"
+
+[build-dependencies]
+vulkano-shaders = "0.35"  # ビルド時にシェーダーをコンパイルするための依存関係
