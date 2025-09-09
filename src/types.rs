@@ -17,7 +17,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            acquire_timeout_ms: 10, // Default to 10ms as per original value
+            acquire_timeout_ms: 500,
         }
     }
 }
