@@ -3,7 +3,7 @@
 
 use crate::render::ParticleRenderPipeline;
 use crate::ui::draw_ui;
-use crate::types::UiState;
+use crate::types::{AppConfig, UiState};
 use egui_winit_vulkano::{Gui, GuiConfig};
 use vulkano_util::{
     context::{VulkanoConfig, VulkanoContext},
@@ -30,6 +30,7 @@ pub struct App {
     render_pipeline: Option<ParticleRenderPipeline>,
     gui: Option<Gui>,
     ui_state: UiState,
+    config: AppConfig,
 }
 
 impl Default for App {
@@ -42,6 +43,7 @@ impl Default for App {
             render_pipeline: None,
             gui: None,
             ui_state: UiState::default(),
+            config: AppConfig::default(),
         }
     }
 }
@@ -105,7 +107,7 @@ impl ApplicationHandler for App {
                     let ctx = gui.context();
                     draw_ui(&mut self.ui_state, &ctx);
                 });
-                match renderer.acquire(Some(std::time::Duration::from_millis(10)), |_| {}) {
+                match renderer.acquire(Some(std::time::Duration::from_millis(self.config.acquire_timeout_ms)), |_| {}) {
                     Ok(future) => {
                         let after_future = self.render_pipeline.as_mut().unwrap().render(
                             future,
