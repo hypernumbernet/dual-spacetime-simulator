@@ -13,12 +13,14 @@ use winit::{
     application::ApplicationHandler, error::EventLoopError, event::WindowEvent,
     event_loop::EventLoop,
 };
+use log::{error, warn};
 
 mod render;
 mod ui;
 mod types;
 
 pub fn main() -> Result<(), EventLoopError> {
+    env_logger::init(); // Initialize logger
     let event_loop = EventLoop::new().unwrap();
     let mut app = App::default();
     event_loop.run_app(&mut app)
@@ -117,10 +119,18 @@ impl ApplicationHandler for App {
                         renderer.present(after_future, true);
                     }
                     Err(vulkano::VulkanError::OutOfDate) => {
+                        warn!("Swapchain out of date, resizing");
                         renderer.resize();
                     }
-                    Err(e) => panic!("Failed to acquire swapchain future: {}", e),
-                };
+                    Err(vulkano::VulkanError::Timeout) => {
+                        warn!("Swapchain acquire timed out, requesting redraw");
+                        renderer.window().request_redraw();
+                    }
+                    Err(e) => {
+                        error!("Failed to acquire swapchain future: {}", e);
+                        renderer.window().request_redraw();
+                    }
+                }
             }
             _ => (),
         }
