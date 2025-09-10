@@ -2,28 +2,34 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use crate::render::ParticleRenderPipeline;
+use crate::types::UiState;
 use crate::ui::draw_ui;
-use crate::types::{AppConfig, UiState};
 use egui_winit_vulkano::{Gui, GuiConfig};
 use vulkano_util::{
     context::{VulkanoConfig, VulkanoContext},
     window::{VulkanoWindows, WindowDescriptor},
 };
 use winit::{
-    application::ApplicationHandler, error::EventLoopError, event::WindowEvent,
-    event_loop::EventLoop,
+    application::ApplicationHandler,
+    error::EventLoopError,
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, EventLoop},
 };
-use log::{error, warn};
 
 mod render;
-mod ui;
 mod types;
+mod ui;
 
 pub fn main() -> Result<(), EventLoopError> {
-    env_logger::init();
     let event_loop = EventLoop::new().unwrap();
     let mut app = App::default();
     event_loop.run_app(&mut app)
+}
+
+fn generate_window_title() -> String {
+    let package_name = env!("CARGO_PKG_NAME");
+    let package_version = env!("CARGO_PKG_VERSION");
+    format!("{} v{}", package_name, package_version)
 }
 
 pub struct App {
@@ -32,7 +38,6 @@ pub struct App {
     render_pipeline: Option<ParticleRenderPipeline>,
     gui: Option<Gui>,
     ui_state: UiState,
-    config: AppConfig,
 }
 
 impl Default for App {
@@ -45,22 +50,21 @@ impl Default for App {
             render_pipeline: None,
             gui: None,
             ui_state: UiState::default(),
-            config: AppConfig::default(),
         }
     }
 }
 
 impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.windows.create_window(
-            event_loop,
-            &self.context,
-            &WindowDescriptor::default(),
-            |ci| {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let descriptor = WindowDescriptor {
+            title: generate_window_title(),
+            ..WindowDescriptor::default()
+        };
+        self.windows
+            .create_window(event_loop, &self.context, &descriptor, |ci| {
                 ci.image_format = vulkano::format::Format::B8G8R8A8_UNORM;
                 ci.min_image_count = ci.min_image_count.max(2);
-            },
-        );
+            });
         let render_pipeline = ParticleRenderPipeline::new(
             self.context.graphics_queue().clone(),
             self.windows
@@ -109,7 +113,7 @@ impl ApplicationHandler for App {
                     let ctx = gui.context();
                     draw_ui(&mut self.ui_state, &ctx);
                 });
-                match renderer.acquire(Some(std::time::Duration::from_millis(self.config.acquire_timeout_ms)), |_| {}) {
+                match renderer.acquire(None, |_| {}) {
                     Ok(future) => {
                         let after_future = self.render_pipeline.as_mut().unwrap().render(
                             future,
