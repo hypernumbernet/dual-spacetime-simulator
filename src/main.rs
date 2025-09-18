@@ -19,6 +19,7 @@ use winit::{
 mod render;
 mod types;
 mod ui;
+mod ui_styles;
 
 pub fn main() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new().unwrap();
