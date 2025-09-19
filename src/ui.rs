@@ -1,5 +1,5 @@
 use crate::types::UiState;
-use crate::ui_styles::styles::*;
+use crate::ui_styles::*;
 use egui::{Align, DragValue, Grid, Label, Layout, RichText, SidePanel, Slider};
 
 pub fn draw_ui(ui_state: &mut UiState, ctx: &egui::Context) {
@@ -7,10 +7,9 @@ pub fn draw_ui(ui_state: &mut UiState, ctx: &egui::Context) {
         .resizable(false)
         .default_width(ui_state.input_panel_width)
         .show(ctx, |ui| {
-            ui.heading("Input Panel");
             ui.horizontal(|ui| {
-                ui.label("FPS");
-                label_indicator(ui, "1000");
+                label_normal(ui, "FPS");
+                label_indicator(ui, &ui_state.fps.to_string());
             });
             Grid::new("particle_grid").striped(true).show(ui, |ui| {
                 ui.label("Parameter");

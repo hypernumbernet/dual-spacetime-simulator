@@ -4,6 +4,7 @@ pub struct UiState {
     pub particle_count: u32,
     pub max_particle_count: u32,
     pub gravity: f32,
+    pub fps: u32,
 }
 
 impl Default for UiState {
@@ -13,6 +14,7 @@ impl Default for UiState {
             particle_count: 1000,
             max_particle_count: 20000,
             gravity: 9.81,
+            fps: 0,
         }
     }
 }

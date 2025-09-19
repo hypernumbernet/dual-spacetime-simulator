@@ -17,3 +17,8 @@ rand = "0.8"
 [dev-dependencies]
 mockall = "0.13"
 cgmath = "0.18"
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
