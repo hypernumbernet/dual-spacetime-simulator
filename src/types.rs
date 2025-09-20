@@ -5,6 +5,9 @@ pub struct UiState {
     pub max_particle_count: u32,
     pub gravity: f32,
     pub fps: u32,
+    pub frame: u32,
+    pub min_window_width: f32,
+    pub min_window_height: f32,
 }
 
 impl Default for UiState {
@@ -15,6 +18,9 @@ impl Default for UiState {
             max_particle_count: 20000,
             gravity: 9.81,
             fps: 0,
+            frame: 1,
+            min_window_width: 400.0,
+            min_window_height: 300.0,
         }
     }
 }

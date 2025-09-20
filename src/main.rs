@@ -57,9 +57,15 @@ impl Default for App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let resize_constraints = vulkano_util::window::WindowResizeConstraints {
+            min_width: self.ui_state.min_window_width,
+            min_height: self.ui_state.min_window_height,
+            ..Default::default()
+        };
         let descriptor = WindowDescriptor {
             title: generate_window_title(),
-            ..WindowDescriptor::default()
+            resize_constraints,
+            ..Default::default()
         };
         self.windows
             .create_window(event_loop, &self.context, &descriptor, |ci| {

@@ -1,42 +1,28 @@
 use crate::types::UiState;
 use crate::ui_styles::*;
-use egui::{Align, DragValue, Grid, Label, Layout, RichText, SidePanel, Slider};
+use egui::{DragValue, Label, SidePanel, Slider};
 
 pub fn draw_ui(ui_state: &mut UiState, ctx: &egui::Context) {
     SidePanel::right("input_panel")
         .resizable(false)
-        .default_width(ui_state.input_panel_width)
+        //.default_width(ui_state.input_panel_width)
+        .exact_width(ui_state.input_panel_width)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 label_normal(ui, "FPS");
                 label_indicator(ui, &ui_state.fps.to_string());
             });
-            Grid::new("particle_grid").striped(true).show(ui, |ui| {
-                ui.label("Parameter");
-                ui.with_layout(Layout::right_to_left(Align::RIGHT), |ui| {
-                    ui.label(
-                        RichText::new("200.03")
-                            .color(egui::Color32::LIGHT_BLUE)
-                            .size(16.0),
-                    );
-                });
-                ui.end_row();
-                ui.label("Mass");
-                ui.with_layout(Layout::right_to_left(Align::RIGHT), |ui| {
-                    ui.label("1");
-                });
-                ui.end_row();
-                ui.label("Force");
-                ui.with_layout(Layout::right_to_left(Align::RIGHT), |ui| {
-                    ui.label("2");
-                });
-                ui.end_row();
+            ui.horizontal(|ui| {
+                label_normal(ui, "Frame");
+                label_indicator(ui, &ui_state.frame.to_string());
             });
             ui.horizontal(|ui| {
-                ui.label("Frames");
-                ui.with_layout(Layout::right_to_left(Align::RIGHT), |ui| {
-                    ui.label("0");
-                });
+                label_normal(ui, "Time (day)");
+                label_indicator_short(ui, &ui_state.frame.to_string());
+            });
+            ui.horizontal(|ui| {
+                label_normal(ui, "Time/Frame(s)");
+                label_indicator_short(ui, &ui_state.frame.to_string());
             });
             ui.add(Label::new("Particle Count:"));
             ui.add(Slider::new(
