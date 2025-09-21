@@ -94,7 +94,7 @@ pub fn label_indicator_short(ui: &mut Ui, text: &str) {
 pub fn label_normal(ui: &mut Ui, text: &str) {
     let style = LabelStyle {
         font_size: 12.0,
-        text_color: Some(Color32::WHITE),
+        text_color: Some(Color32::from_rgb(220, 220, 220)),
         padding: Some(Margin::same(2)),
         height: 20.0,
         ..Default::default()

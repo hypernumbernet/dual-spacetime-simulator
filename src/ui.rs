@@ -1,6 +1,6 @@
 use crate::types::UiState;
 use crate::ui_styles::*;
-use egui::{DragValue, Label, SidePanel, Slider};
+use egui::{Button, DragValue, Label, SidePanel, Slider, vec2};
 
 pub fn draw_ui(ui_state: &mut UiState, ctx: &egui::Context) {
     SidePanel::right("input_panel")
@@ -18,12 +18,24 @@ pub fn draw_ui(ui_state: &mut UiState, ctx: &egui::Context) {
             });
             ui.horizontal(|ui| {
                 label_normal(ui, "Time (day)");
-                label_indicator_short(ui, &ui_state.frame.to_string());
+                label_indicator_short(ui, &ui_state.simulation_time.to_string());
             });
             ui.horizontal(|ui| {
                 label_normal(ui, "Time/Frame(s)");
-                label_indicator_short(ui, &ui_state.frame.to_string());
+                label_indicator_short(ui, &ui_state.time_per_frame.to_string());
             });
+            ui.separator();
+            let button_width = ui.available_width();
+            let button_height = ui.spacing().interact_size.y * 1.5;
+            let button_size = vec2(button_width, button_height);
+            if ui
+                .add_sized(button_size, Button::new("Start/Pause"))
+                .clicked()
+            {
+                ui_state.is_running = !ui_state.is_running;
+            }
+            if ui.add_sized(button_size, Button::new("Reset")).clicked() {}
+            ui.separator();
             ui.add(Label::new("Particle Count:"));
             ui.add(Slider::new(
                 &mut ui_state.particle_count,

@@ -16,7 +16,7 @@ use vulkano::{
         graphics::{
             GraphicsPipelineCreateInfo,
             color_blend::{ColorBlendAttachmentState, ColorBlendState},
-            input_assembly::InputAssemblyState,
+            input_assembly::{InputAssemblyState, PrimitiveTopology},
             multisample::MultisampleState,
             rasterization::RasterizationState,
             vertex_input::{Vertex, VertexDefinition},
@@ -31,8 +31,8 @@ use vulkano::{
 #[repr(C)]
 #[derive(BufferContents, Vertex)]
 struct ParticleVertex {
-    #[format(R32G32_SFLOAT)]
-    position: [f32; 2],
+    #[format(R32G32B32_SFLOAT)]
+    position: [f32; 3],
     #[format(R32G32B32A32_SFLOAT)]
     color: [f32; 4],
 }
@@ -81,16 +81,31 @@ impl ParticleRenderPipeline {
                 ..Default::default()
             },
             [
+                // Red line: from (0,0,0) to (1,0,0)
                 ParticleVertex {
-                    position: [-0.5, -0.25],
+                    position: [0.0, 0.0, 0.0],
                     color: [1.0, 0.0, 0.0, 1.0],
                 },
                 ParticleVertex {
-                    position: [0.0, 0.5],
+                    position: [1.0, 0.0, 0.0],
+                    color: [1.0, 0.0, 0.0, 1.0],
+                },
+                // Green line: from (0,0,0) to (0,1,0)
+                ParticleVertex {
+                    position: [0.0, 0.0, 0.0],
                     color: [0.0, 1.0, 0.0, 1.0],
                 },
                 ParticleVertex {
-                    position: [0.25, -0.1],
+                    position: [0.0, 1.0, 0.0],
+                    color: [0.0, 1.0, 0.0, 1.0],
+                },
+                // Blue line: from (0,0,0) to (0,0,1)
+                ParticleVertex {
+                    position: [0.0, 0.0, 0.0],
+                    color: [0.0, 0.0, 1.0, 1.0],
+                },
+                ParticleVertex {
+                    position: [0.0, 0.0, 1.0],
                     color: [0.0, 0.0, 1.0, 1.0],
                 },
             ],
@@ -126,8 +141,8 @@ impl ParticleRenderPipeline {
                 }
             },
             passes: [
-                { color: [color], depth_stencil: {}, input: [] }, // Draw what you want on this pass
-                { color: [color], depth_stencil: {}, input: [] } // Gui render pass
+                { color: [color], depth_stencil: {}, input: [] },
+                { color: [color], depth_stencil: {}, input: [] }
             ]
         )
         .unwrap()
@@ -169,7 +184,10 @@ impl ParticleRenderPipeline {
                 GraphicsPipelineCreateInfo {
                     stages: stages.into_iter().collect(),
                     vertex_input_state: Some(vertex_input_state),
-                    input_assembly_state: Some(InputAssemblyState::default()),
+                    input_assembly_state: Some(InputAssemblyState {
+                        topology: PrimitiveTopology::LineList,
+                        ..Default::default()
+                    }),
                     viewport_state: Some(ViewportState::default()),
                     rasterization_state: Some(RasterizationState::default()),
                     multisample_state: Some(MultisampleState::default()),

@@ -15,11 +15,13 @@ use winit::{
     event::WindowEvent,
     event_loop::{ActiveEventLoop, EventLoop},
 };
+use crate::simulation::SimulationState;
 
 mod render;
 mod types;
 mod ui;
 mod ui_styles;
+mod simulation;
 
 pub fn main() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new().unwrap();
@@ -39,6 +41,7 @@ pub struct App {
     render_pipeline: Option<ParticleRenderPipeline>,
     gui: Option<Gui>,
     ui_state: UiState,
+    simulation_state: SimulationState,
 }
 
 impl Default for App {
@@ -51,6 +54,7 @@ impl Default for App {
             render_pipeline: None,
             gui: None,
             ui_state: UiState::default(),
+            simulation_state: SimulationState::default(),
         }
     }
 }
@@ -95,6 +99,7 @@ impl ApplicationHandler for App {
             GuiConfig::default(),
         ));
         self.render_pipeline = Some(render_pipeline);
+        self.simulation_state = SimulationState::new(self.ui_state.particle_count);
     }
 
     fn window_event(
