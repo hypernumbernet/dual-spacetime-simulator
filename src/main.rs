@@ -4,7 +4,6 @@
 use crate::render::ParticleRenderPipeline;
 use crate::types::UiState;
 use crate::ui::draw_ui;
-use egui_winit_vulkano::{Gui, GuiConfig};
 use vulkano_util::{
     context::{VulkanoConfig, VulkanoContext},
     window::{VulkanoWindows, WindowDescriptor},
@@ -16,12 +15,16 @@ use winit::{
     event_loop::{ActiveEventLoop, EventLoop},
 };
 use crate::simulation::SimulationState;
+use crate::integration::{Gui, GuiConfig};
 
 mod render;
 mod types;
 mod ui;
 mod ui_styles;
 mod simulation;
+mod integration;
+mod renderer;
+mod utils;
 
 pub fn main() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new().unwrap();

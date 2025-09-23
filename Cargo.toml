@@ -7,12 +7,14 @@ edition = "2024"
 egui_winit_vulkano = "0.28"
 egui = "0.31"
 winit = "0.30"
+egui-winit = { version = "0.31", default-features = false }
 vulkano = "0.35"
 vulkano-shaders = "0.35"
 vulkano-util = "0.35"
 bytemuck = "1.23"
 anyhow  = "1.0"
 rand = "0.8"
+ahash = "0.8"
 
 [dev-dependencies]
 mockall = "0.13"
