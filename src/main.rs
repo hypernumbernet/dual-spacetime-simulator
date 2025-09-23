@@ -1,7 +1,9 @@
 //Hide the console window on Windows in release mode
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use crate::integration::{Gui, GuiConfig};
 use crate::render::ParticleRenderPipeline;
+use crate::simulation::SimulationState;
 use crate::types::UiState;
 use crate::ui::draw_ui;
 use vulkano_util::{
@@ -14,16 +16,14 @@ use winit::{
     event::WindowEvent,
     event_loop::{ActiveEventLoop, EventLoop},
 };
-use crate::simulation::SimulationState;
-use crate::integration::{Gui, GuiConfig};
 
+mod integration;
 mod render;
+mod renderer;
+mod simulation;
 mod types;
 mod ui;
 mod ui_styles;
-mod simulation;
-mod integration;
-mod renderer;
 mod utils;
 
 pub fn main() -> Result<(), EventLoopError> {

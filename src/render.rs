@@ -1,3 +1,4 @@
+use crate::integration::Gui;
 use std::sync::Arc;
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
@@ -26,7 +27,6 @@ use vulkano::{
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
     sync::GpuFuture,
 };
-use crate::integration::Gui;
 
 #[repr(C)]
 #[derive(BufferContents, Vertex)]
