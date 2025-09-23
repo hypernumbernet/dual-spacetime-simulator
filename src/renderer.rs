@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ahash::AHashMap;
-use egui::{ClippedPrimitive, PaintCallbackInfo, Rect, TexturesDelta, epaint::Primitive};
+use egui::{ClippedPrimitive, Rect, TexturesDelta, epaint::Primitive};
 use vulkano::{
     DeviceSize, NonZeroDeviceSize,
     buffer::{
@@ -12,12 +12,8 @@ use vulkano::{
         AutoCommandBufferBuilder, BufferImageCopy, CommandBufferInheritanceInfo,
         CommandBufferUsage, CopyBufferToImageInfo, PrimaryAutoCommandBuffer,
         PrimaryCommandBufferAbstract, SecondaryAutoCommandBuffer,
-        allocator::StandardCommandBufferAllocator,
     },
-    descriptor_set::{
-        DescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator,
-        layout::DescriptorSetLayout,
-    },
+    descriptor_set::{DescriptorSet, WriteDescriptorSet, layout::DescriptorSetLayout},
     device::Queue,
     format::{Format, NumericFormat},
     image::{
@@ -31,9 +27,7 @@ use vulkano::{
     },
     memory::{
         DeviceAlignment,
-        allocator::{
-            AllocationCreateInfo, DeviceLayout, MemoryTypeFilter, StandardMemoryAllocator,
-        },
+        allocator::{AllocationCreateInfo, DeviceLayout, MemoryTypeFilter},
     },
     pipeline::{
         DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout,
@@ -724,111 +718,14 @@ impl Renderer {
                     index_cursor += mesh.indices.len() as u32;
                     vertex_cursor += mesh.vertices.len() as u32;
                 }
-                Primitive::Callback(callback) => {
-                    if callback.rect.is_positive() {
-                        let Some(callback_fn) = callback.callback.downcast_ref::<CallbackFn>()
-                        else {
-                            println!(
-                                "Warning: Unsupported render callback. Expected \
-                                 egui_winit_vulkano::CallbackFn"
-                            );
-                            continue;
-                        };
-
-                        let rect_min_x = scale_factor * callback.rect.min.x;
-                        let rect_min_y = scale_factor * callback.rect.min.y;
-                        let rect_max_x = scale_factor * callback.rect.max.x;
-                        let rect_max_y = scale_factor * callback.rect.max.y;
-
-                        let rect_min_x = rect_min_x.round();
-                        let rect_min_y = rect_min_y.round();
-                        let rect_max_x = rect_max_x.round();
-                        let rect_max_y = rect_max_y.round();
-
-                        builder
-                            .set_viewport(
-                                0,
-                                [Viewport {
-                                    offset: [rect_min_x, rect_min_y],
-                                    extent: [rect_max_x - rect_min_x, rect_max_y - rect_min_y],
-                                    depth_range: 0.0..=1.0,
-                                }]
-                                .into_iter()
-                                .collect(),
-                            )
-                            .unwrap()
-                            .set_scissor(
-                                0,
-                                [self.get_rect_scissor(
-                                    scale_factor,
-                                    framebuffer_dimensions,
-                                    *clip_rect,
-                                )]
-                                .into_iter()
-                                .collect(),
-                            )
-                            .unwrap();
-
-                        let info = egui::PaintCallbackInfo {
-                            viewport: callback.rect,
-                            clip_rect: *clip_rect,
-                            pixels_per_point: scale_factor,
-                            screen_size_px: framebuffer_dimensions,
-                        };
-                        (callback_fn.f)(
-                            info,
-                            &mut CallbackContext {
-                                builder,
-                                resources: self.render_resources(),
-                            },
-                        );
-
-                        needs_full_rebind = true;
-                        current_rect = None;
-                        current_texture = None;
-                    }
-                }
+                Primitive::Callback(_) => {}
             }
-        }
-    }
-
-    pub fn render_resources<'a>(&'a self) -> RenderResources<'a> {
-        RenderResources {
-            queue: self.queue(),
-            subpass: self.subpass.clone(),
-            memory_allocator: self.allocators.memory.clone(),
-            descriptor_set_allocator: &self.allocators.descriptor_set,
-            command_buffer_allocator: &self.allocators.command_buffer,
         }
     }
 
     pub fn queue(&self) -> Arc<Queue> {
         self.gfx_queue.clone()
     }
-
-    // pub fn allocators(&self) -> &Allocators {
-    //     &self.allocators
-    // }
-}
-
-pub struct CallbackContext<'a> {
-    pub builder: &'a mut AutoCommandBufferBuilder<SecondaryAutoCommandBuffer>,
-    pub resources: RenderResources<'a>,
-}
-
-#[derive(Clone)]
-pub struct RenderResources<'a> {
-    pub memory_allocator: Arc<StandardMemoryAllocator>,
-    pub descriptor_set_allocator: &'a StandardDescriptorSetAllocator,
-    pub command_buffer_allocator: &'a StandardCommandBufferAllocator,
-    pub queue: Arc<Queue>,
-    pub subpass: Subpass,
-}
-
-pub type CallbackFnDef = dyn Fn(PaintCallbackInfo, &mut CallbackContext) + Sync + Send;
-
-pub struct CallbackFn {
-    pub(crate) f: Box<CallbackFnDef>,
 }
 
 mod vs {
