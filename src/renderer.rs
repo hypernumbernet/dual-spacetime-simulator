@@ -56,7 +56,6 @@ const VERTICES_PER_QUAD: DeviceSize = 4;
 const VERTEX_BUFFER_SIZE: DeviceSize = 1024 * 1024 * VERTICES_PER_QUAD;
 const INDEX_BUFFER_SIZE: DeviceSize = 1024 * 1024 * 2;
 
-type VertexBuffer = Subbuffer<[egui::epaint::Vertex]>;
 type IndexBuffer = Subbuffer<[u32]>;
 
 #[repr(C)]
@@ -543,10 +542,9 @@ impl Renderer {
     fn upload_meshes(
         &mut self,
         clipped_meshes: &[ClippedPrimitive],
-    ) -> Option<(VertexBuffer, IndexBuffer)> {
-        use egui::epaint::Vertex;
+    ) -> Option<(Subbuffer<[EguiVertex]>, IndexBuffer)> {
         type Index = u32;
-        const VERTEX_ALIGN: DeviceAlignment = DeviceAlignment::of::<Vertex>();
+        const VERTEX_ALIGN: DeviceAlignment = DeviceAlignment::of::<EguiVertex>();
         const INDEX_ALIGN: DeviceAlignment = DeviceAlignment::of::<Index>();
 
         let meshes = clipped_meshes
@@ -568,7 +566,7 @@ impl Renderer {
                 return None;
             }
 
-            let total_size_bytes = total_vertices * std::mem::size_of::<Vertex>()
+            let total_size_bytes = total_vertices * std::mem::size_of::<EguiVertex>()
                 + total_indices * std::mem::size_of::<Index>();
             (
                 total_vertices,
@@ -581,12 +579,12 @@ impl Renderer {
 
         assert!(VERTEX_ALIGN >= INDEX_ALIGN);
         let (vertices, indices) = {
-            let partition_bytes = total_vertices as u64 * std::mem::size_of::<Vertex>() as u64;
+            let partition_bytes = total_vertices as u64 * std::mem::size_of::<EguiVertex>() as u64;
             (
                 buffer
                     .clone()
                     .slice(..partition_bytes)
-                    .reinterpret::<[Vertex]>(),
+                    .reinterpret::<[EguiVertex]>(),
                 buffer.slice(partition_bytes..).reinterpret::<[Index]>(),
             )
         };
@@ -595,7 +593,11 @@ impl Renderer {
             let mut vertex_write = vertices.write().unwrap();
             vertex_write
                 .iter_mut()
-                .zip(meshes.clone().flat_map(|m| &m.vertices).copied())
+                .zip(meshes.clone().flat_map(|m| &m.vertices).copied().map(|from| EguiVertex {
+                    position: from.pos.into(),
+                    tex_coords: from.uv.into(),
+                    color: from.color.to_array(),
+                }))
                 .for_each(|(into, from)| *into = from);
         }
         {

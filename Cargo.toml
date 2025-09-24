@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-egui_winit_vulkano = "0.28"
 egui = "0.31"
 winit = "0.30"
 egui-winit = { version = "0.31", default-features = false }
@@ -24,4 +23,3 @@ mockall = "0.13"
 codegen-units = 1
 lto = true
 panic = "abort"
-
