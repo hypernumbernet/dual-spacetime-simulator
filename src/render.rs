@@ -138,9 +138,9 @@ impl ParticleRenderPipeline {
             subpass,
             vertex_buffer,
             command_buffer_allocator,
-            camera_position: Point3::new(2.0, 2.0, 2.0),
+            camera_position: Point3::new(1.6, 1.6, 3.0),
             camera_target: Point3::new(0.0, 0.0, 0.0),
-            camera_up: Vector3::new(0.0, 1.0, 0.0),
+            camera_up: Vector3::new(-1.0, 0.0, 0.0),
             aspect_ratio: 1.0,
         }
     }

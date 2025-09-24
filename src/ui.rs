@@ -1,12 +1,12 @@
 use crate::types::UiState;
 use crate::ui_styles::*;
-use egui::{Button, DragValue, Label, SidePanel, Slider, vec2};
+use egui::{Button, DragValue, Label, Slider, vec2};
 
 pub fn draw_ui(ui_state: &mut UiState, ctx: &egui::Context) {
-    SidePanel::right("input_panel")
-        .resizable(false)
-        //.default_width(ui_state.input_panel_width)
-        .exact_width(ui_state.input_panel_width)
+    egui::Window::new("Control Panel")
+        .resizable(true)
+        .collapsible(true)
+        .default_width(ui_state.input_panel_width)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 label_normal(ui, "FPS");
