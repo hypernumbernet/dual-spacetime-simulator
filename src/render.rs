@@ -1,7 +1,9 @@
 use crate::integration::Gui;
 use std::sync::Arc;
+use cgmath::{perspective, Matrix4, Point3, Rad, Vector3};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
+    pipeline::Pipeline,
     command_buffer::{
         AutoCommandBufferBuilder, CommandBufferInheritanceInfo, CommandBufferUsage,
         RenderPassBeginInfo, SubpassBeginInfo, SubpassContents,
@@ -37,6 +39,12 @@ struct ParticleVertex {
     color: [f32; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, BufferContents)]
+struct PushConstants {
+    view_proj: [[f32; 4]; 4],
+}
+
 mod vs {
     vulkano_shaders::shader! {
         ty: "vertex",
@@ -58,6 +66,10 @@ pub struct ParticleRenderPipeline {
     subpass: Subpass,
     vertex_buffer: Subbuffer<[ParticleVertex]>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    camera_position: Point3<f32>,
+    camera_target: Point3<f32>,
+    camera_up: Vector3<f32>,
+    aspect_ratio: f32,
 }
 
 impl ParticleRenderPipeline {
@@ -126,6 +138,10 @@ impl ParticleRenderPipeline {
             subpass,
             vertex_buffer,
             command_buffer_allocator,
+            camera_position: Point3::new(2.0, 2.0, 2.0),
+            camera_target: Point3::new(0.0, 0.0, 0.0),
+            camera_up: Vector3::new(0.0, 1.0, 0.0),
+            aspect_ratio: 1.0,
         }
     }
 
@@ -264,6 +280,34 @@ impl ParticleRenderPipeline {
             .unwrap()
             .bind_vertex_buffers(0, self.vertex_buffer.clone())
             .unwrap();
+
+        self.aspect_ratio = dimensions[0] as f32 / dimensions[1] as f32;
+
+        let view = Matrix4::look_at_rh(
+            self.camera_position,
+            self.camera_target,
+            self.camera_up,
+        );
+        let proj = perspective(
+            Rad(std::f32::consts::FRAC_PI_4),
+            self.aspect_ratio,
+            0.1,
+            100.0,
+        );
+        let view_proj = proj * view;
+
+        let push_constants = PushConstants {
+            view_proj: view_proj.into(),
+        };
+
+        secondary_builder
+            .push_constants(
+                self.pipeline.layout().clone(),
+                0,
+                push_constants,
+            )
+            .unwrap();
+
         unsafe {
             secondary_builder
                 .draw(self.vertex_buffer.len() as u32, 1, 0, 0)
