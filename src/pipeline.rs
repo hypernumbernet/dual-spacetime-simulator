@@ -45,14 +45,13 @@ struct ParticleVertex {
     position: [f32; 3],
     #[format(R32G32B32A32_SFLOAT)]
     color: [f32; 4],
-    #[format(R32_SFLOAT)]
-    size: f32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, BufferContents)]
 struct PushConstants {
     view_proj: [[f32; 4]; 4],
+    size_scale: f32,
 }
 
 mod vs_axes {
@@ -348,8 +347,11 @@ impl ParticleRenderPipeline {
 
         self.aspect_ratio = dimensions[0] as f32 / dimensions[1] as f32;
         let view_proj = self.compute_view_proj();
+        const SIZE_RATIO: f32 = 0.02;
+        let size_scale = dimensions[1] as f32 * SIZE_RATIO;
         let push_constants = PushConstants {
             view_proj: view_proj.into(),
+            size_scale: size_scale.into(),
         };
         let viewport = Viewport {
             offset: [0.0, 0.0],
@@ -390,9 +392,12 @@ impl ParticleRenderPipeline {
         let mut particles = Vec::with_capacity(100);
         for _ in 0..100 {
             particles.push(ParticleVertex {
-                position: [rand::random::<f32>() * 2.0 - 1.0; 3],
+                position: [
+                    rand::random::<f32>() * 2.0 - 1.0,
+                    rand::random::<f32>() * 2.0 - 1.0,
+                    rand::random::<f32>() * 2.0 - 1.0,
+                ],
                 color: [1.0, 1.0, 1.0, 1.0],
-                size: 5.0 + rand::random::<f32>() * 10.0,
             });
         }
         Buffer::from_iter(
