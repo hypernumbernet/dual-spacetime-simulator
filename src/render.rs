@@ -346,9 +346,20 @@ impl ParticleRenderPipeline {
         )
         .unwrap();
 
-        self.draw_axes(&mut secondary_builder);
+        self.aspect_ratio = dimensions[0] as f32 / dimensions[1] as f32;
+        let view_proj = self.compute_view_proj();
+        let push_constants = PushConstants {
+            view_proj: view_proj.into(),
+        };
+        let viewport = Viewport {
+            offset: [0.0, 0.0],
+            extent: [dimensions[0] as f32, dimensions[1] as f32],
+            depth_range: 0.0..=1.0,
+        };
 
-        self.draw_particles(&mut secondary_builder);
+        self.draw_axes(&mut secondary_builder, &viewport, &push_constants);
+
+        self.draw_particles(&mut secondary_builder, &viewport, &push_constants);
 
         let cb = secondary_builder.build().unwrap();
         builder.execute_commands(cb).unwrap();
@@ -400,31 +411,24 @@ impl ParticleRenderPipeline {
         .unwrap()
     }
 
-    fn draw_axes(&self, builder: &mut AutoCommandBufferBuilder<SecondaryAutoCommandBuffer>) {
-        let view_proj = self.compute_view_proj();
-        let push_constants = PushConstants {
-            view_proj: view_proj.into(),
-        };
-
+    fn draw_axes(
+        &self,
+        builder: &mut AutoCommandBufferBuilder<SecondaryAutoCommandBuffer>,
+        viewport: &Viewport,
+        push_constants: &PushConstants,
+    ) {
         builder
             .bind_pipeline_graphics(self.pipeline_axes.clone())
-            .unwrap();
-
-        let viewport = Viewport {
-            offset: [0.0, 0.0],
-            extent: [self.aspect_ratio * 1000.0, 1000.0],
-            depth_range: 0.0..=1.0,
-        };
-        builder
-            .set_viewport(0, smallvec::smallvec![viewport])
-            .unwrap();
-
-        builder
+            .unwrap()
+            .set_viewport(0, [viewport.clone()].into_iter().collect())
+            .unwrap()
             .bind_vertex_buffers(0, self.axes_buffer.clone())
-            .unwrap();
-
-        builder
-            .push_constants(self.pipeline_axes.layout().clone(), 0, push_constants)
+            .unwrap()
+            .push_constants(
+                self.pipeline_axes.layout().clone(),
+                0,
+                push_constants.clone(),
+            )
             .unwrap();
 
         unsafe {
@@ -434,31 +438,24 @@ impl ParticleRenderPipeline {
         }
     }
 
-    fn draw_particles(&self, builder: &mut AutoCommandBufferBuilder<SecondaryAutoCommandBuffer>) {
-        let view_proj = self.compute_view_proj();
-        let push_constants = PushConstants {
-            view_proj: view_proj.into(),
-        };
-
+    fn draw_particles(
+        &self,
+        builder: &mut AutoCommandBufferBuilder<SecondaryAutoCommandBuffer>,
+        viewport: &Viewport,
+        push_constants: &PushConstants,
+    ) {
         builder
             .bind_pipeline_graphics(self.pipeline_particles.clone())
-            .unwrap();
-
-        let viewport = Viewport {
-            offset: [0.0, 0.0],
-            extent: [self.aspect_ratio * 1000.0, 1000.0],
-            depth_range: 0.0..=1.0,
-        };
-        builder
-            .set_viewport(0, smallvec::smallvec![viewport])
-            .unwrap();
-
-        builder
+            .unwrap()
+            .set_viewport(0, [viewport.clone()].into_iter().collect())
+            .unwrap()
             .bind_vertex_buffers(0, self.particle_buffer.clone())
-            .unwrap();
-
-        builder
-            .push_constants(self.pipeline_particles.layout().clone(), 0, push_constants)
+            .unwrap()
+            .push_constants(
+                self.pipeline_particles.layout().clone(),
+                0,
+                push_constants.clone(),
+            )
             .unwrap();
 
         unsafe {
