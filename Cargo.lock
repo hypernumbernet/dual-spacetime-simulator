@@ -387,7 +387,6 @@ dependencies = [
  "egui-winit",
  "mockall",
  "rand",
- "smallvec",
  "vulkano",
  "vulkano-shaders",
  "vulkano-util",

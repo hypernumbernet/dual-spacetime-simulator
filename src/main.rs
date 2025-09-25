@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use crate::integration::{Gui, GuiConfig};
-use crate::render::ParticleRenderPipeline;
+use crate::pipeline::ParticleRenderPipeline;
 use crate::simulation::SimulationState;
 use crate::types::UiState;
 use crate::ui::draw_ui;
@@ -18,7 +18,7 @@ use winit::{
 };
 
 mod integration;
-mod render;
+mod pipeline;
 mod renderer;
 mod simulation;
 mod types;
