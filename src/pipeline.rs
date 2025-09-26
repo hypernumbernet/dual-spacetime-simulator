@@ -1,5 +1,5 @@
 use crate::integration::Gui;
-use cgmath::{InnerSpace, Matrix4, Point3, Rad, Vector3, perspective};
+use glam::{Mat4, Vec3};
 use std::sync::Arc;
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
@@ -92,9 +92,9 @@ pub struct ParticleRenderPipeline {
     particle_buffer: Subbuffer<[ParticleVertex]>,
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-    camera_position: Point3<f32>,
-    camera_target: Point3<f32>,
-    camera_up: Vector3<f32>,
+    camera_position: Vec3,
+    camera_target: Vec3,
+    camera_up: Vec3,
     aspect_ratio: f32,
 }
 
@@ -166,9 +166,9 @@ impl ParticleRenderPipeline {
             particle_buffer,
             memory_allocator: allocator.clone(),
             command_buffer_allocator,
-            camera_position: Point3::new(1.6, 1.6, 3.0),
-            camera_target: Point3::new(0.0, 0.0, 0.0),
-            camera_up: Vector3::new(-1.0, 0.0, 0.0),
+            camera_position: Vec3::new(1.6, 1.6, 3.0),
+            camera_target: Vec3::new(0.0, 0.0, 0.0),
+            camera_up: Vec3::new(-1.0, 0.0, 0.0),
             aspect_ratio: 1.0,
         }
     }
@@ -199,12 +199,8 @@ impl ParticleRenderPipeline {
     }
 
     pub fn rotate_camera(&mut self, delta_theta: f32, delta_phi: f32) {
-        let pos = Vector3::new(
-            self.camera_position.x,
-            self.camera_position.y,
-            self.camera_position.z,
-        );
-        let r = pos.magnitude();
+        let pos = self.camera_position;
+        let r = pos.length();
         if r <= std::f32::EPSILON {
             return;
         }
@@ -221,8 +217,8 @@ impl ParticleRenderPipeline {
         let x = r * cos_phi * theta.cos();
         let y = r * phi.sin();
         let z = r * cos_phi * theta.sin();
-        self.camera_position = Point3::new(x, y, z);
-        self.camera_up = Vector3::unit_y();
+        self.camera_position = Vec3::new(x, y, z);
+        self.camera_up = Vec3::Y;
     }
 
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
@@ -394,7 +390,7 @@ impl ParticleRenderPipeline {
         const SIZE_RATIO: f32 = 0.02;
         let size_scale = dimensions[1] as f32 * SIZE_RATIO;
         let push_constants = PushConstants {
-            view_proj: view_proj.into(),
+            view_proj: view_proj.to_cols_array_2d(),
 
             size_scale: size_scale.into(),
         };
@@ -512,10 +508,10 @@ impl ParticleRenderPipeline {
         }
     }
 
-    fn compute_view_proj(&self) -> Matrix4<f32> {
-        let view = Matrix4::look_at_rh(self.camera_position, self.camera_target, self.camera_up);
-        let proj = perspective(
-            Rad(std::f32::consts::FRAC_PI_4),
+    fn compute_view_proj(&self) -> Mat4 {
+        let view = Mat4::look_at_rh(self.camera_position, self.camera_target, self.camera_up);
+        let proj = Mat4::perspective_rh(
+            std::f32::consts::FRAC_PI_4,
             self.aspect_ratio,
             0.1,
             100.0,

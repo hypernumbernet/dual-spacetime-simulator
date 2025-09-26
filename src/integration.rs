@@ -1,8 +1,7 @@
-use std::sync::Arc;
-
 use crate::renderer::Renderer;
 use egui::{ClippedPrimitive, TexturesDelta};
 use egui_winit::winit::event_loop::ActiveEventLoop;
+use std::sync::Arc;
 use vulkano::{
     command_buffer::SecondaryAutoCommandBuffer,
     device::Queue,
@@ -43,7 +42,6 @@ pub struct Gui {
     pub egui_winit: egui_winit::State,
     renderer: Renderer,
     surface: Arc<Surface>,
-
     shapes: Vec<egui::epaint::ClippedShape>,
     textures_delta: egui::TexturesDelta,
 }
@@ -124,9 +122,7 @@ impl Gui {
                  instead"
             )
         }
-
         let (clipped_meshes, textures_delta) = self.extract_draw_data_at_frame_end();
-
         self.renderer.draw_on_subpass_image(
             &clipped_meshes,
             &textures_delta,
@@ -151,7 +147,6 @@ impl Gui {
             pixels_per_point: _,
             viewport_output: _,
         } = self.egui_ctx.end_pass();
-
         self.egui_winit
             .handle_platform_output(surface_window(&self.surface), platform_output);
         self.shapes = shapes;

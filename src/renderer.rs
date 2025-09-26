@@ -1,7 +1,7 @@
-use std::sync::Arc;
-
+use crate::utils::Allocators;
 use ahash::AHashMap;
 use egui::{ClippedPrimitive, Rect, TexturesDelta, epaint::Primitive};
+use std::sync::Arc;
 use vulkano::{
     DeviceSize, NonZeroDeviceSize,
     buffer::{
@@ -50,8 +50,6 @@ use vulkano::{
     sync::GpuFuture,
 };
 
-use crate::utils::Allocators;
-
 const VERTICES_PER_QUAD: DeviceSize = 4;
 const VERTEX_BUFFER_SIZE: DeviceSize = 1024 * 1024 * VERTICES_PER_QUAD;
 const INDEX_BUFFER_SIZE: DeviceSize = 1024 * 1024 * 2;
@@ -73,17 +71,14 @@ pub struct Renderer {
     gfx_queue: Arc<Queue>,
     render_pass: Option<Arc<RenderPass>>,
     output_in_linear_colorspace: bool,
-
     #[allow(unused)]
     format: vulkano::format::Format,
     font_sampler: Arc<Sampler>,
     font_format: Format,
-
     allocators: Allocators,
     vertex_index_buffer_pool: SubbufferAllocator,
     pipeline: Arc<GraphicsPipeline>,
     subpass: Subpass,
-
     texture_desc_sets: AHashMap<egui::TextureId, Arc<DescriptorSet>>,
     texture_images: AHashMap<egui::TextureId, Arc<ImageView>>,
 }
@@ -158,7 +153,6 @@ impl Renderer {
             .expect("failed to create shader module")
             .entry_point("main")
             .unwrap();
-
         let mut blend = AttachmentBlend::alpha();
         blend.src_color_blend_factor = BlendFactor::One;
         blend.src_alpha_blend_factor = BlendFactor::OneMinusDstAlpha;
@@ -170,7 +164,6 @@ impl Renderer {
             }],
             ..ColorBlendState::default()
         };
-
         let has_depth_buffer = subpass
             .subpass_desc()
             .depth_stencil_attachment
@@ -192,14 +185,11 @@ impl Renderer {
         } else {
             None
         };
-
         let vertex_input_state = Some(EguiVertex::per_vertex().definition(&vs).unwrap());
-
         let stages = [
             PipelineShaderStageCreateInfo::new(vs),
             PipelineShaderStageCreateInfo::new(fs),
         ];
-
         let layout = PipelineLayout::new(
             gfx_queue.device().clone(),
             PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
@@ -207,7 +197,6 @@ impl Renderer {
                 .unwrap(),
         )
         .unwrap();
-
         GraphicsPipeline::new(
             gfx_queue.device().clone(),
             None,
@@ -252,6 +241,7 @@ impl Renderer {
         self.texture_desc_sets.remove(&texture_id);
         self.texture_images.remove(&texture_id);
     }
+
     fn choose_font_format(device: &vulkano::device::Device) -> Format {
         let supports_swizzle = !device
             .physical_device()
@@ -279,6 +269,7 @@ impl Renderer {
             Format::R8G8B8A8_SRGB
         }
     }
+
     fn pack_font_data_into(&self, data: &egui::FontImage, into: &mut [u8]) {
         match self.font_format {
             Format::R8G8_UNORM => {
@@ -289,7 +280,6 @@ impl Renderer {
                 let bytes = linear
                     .zip(data.srgba_pixels(None))
                     .flat_map(|(linear, srgb)| [linear, srgb.a()]);
-
                 into.iter_mut()
                     .zip(bytes)
                     .for_each(|(into, from)| *into = from);
@@ -303,6 +293,7 @@ impl Renderer {
             _ => unreachable!(),
         }
     }
+
     fn image_size_bytes(&self, delta: &egui::epaint::ImageDelta) -> usize {
         match &delta.image {
             egui::ImageData::Color(c) => c.width() * c.height() * 4,
@@ -317,6 +308,7 @@ impl Renderer {
             }
         }
     }
+
     fn update_texture_within(
         &mut self,
         id: egui::TextureId,
@@ -344,7 +336,6 @@ impl Renderer {
                 self.font_format
             }
         };
-
         if let Some(pos) = delta.pos {
             let Some(existing_image) = self.texture_images.get(&id) else {
                 panic!("attempt to write into non-existing image");
@@ -409,6 +400,7 @@ impl Renderer {
             self.texture_images.insert(id, view);
         };
     }
+
     fn update_textures(&mut self, sets: &[(egui::TextureId, egui::epaint::ImageDelta)]) {
         let total_size_bytes = sets
             .iter()
@@ -434,14 +426,12 @@ impl Renderer {
         )
         .unwrap();
         let buffer = Subbuffer::new(buffer);
-
         let mut cbb = AutoCommandBufferBuilder::primary(
             self.allocators.command_buffer.clone(),
             self.gfx_queue.queue_family_index(),
             CommandBufferUsage::OneTimeSubmit,
         )
         .unwrap();
-
         {
             let mut writer = buffer.write().unwrap();
 
@@ -459,7 +449,6 @@ impl Renderer {
                 self.update_texture_within(*id, delta, stage, mapped_stage, &mut cbb);
             }
         }
-
         let command_buffer = cbb.build().unwrap();
         command_buffer
             .execute(self.gfx_queue.clone())
@@ -539,6 +528,7 @@ impl Renderer {
         }
         buffer
     }
+
     fn upload_meshes(
         &mut self,
         clipped_meshes: &[ClippedPrimitive],
@@ -546,14 +536,12 @@ impl Renderer {
         type Index = u32;
         const VERTEX_ALIGN: DeviceAlignment = DeviceAlignment::of::<EguiVertex>();
         const INDEX_ALIGN: DeviceAlignment = DeviceAlignment::of::<Index>();
-
         let meshes = clipped_meshes
             .iter()
             .filter_map(|mesh| match &mesh.primitive {
                 Primitive::Mesh(m) => Some(m),
                 _ => None,
             });
-
         let (total_vertices, total_size_bytes) = {
             let mut total_vertices = 0;
             let mut total_indices = 0;
@@ -573,10 +561,8 @@ impl Renderer {
                 NonZeroDeviceSize::new(u64::try_from(total_size_bytes).unwrap()).unwrap(),
             )
         };
-
         let layout = DeviceLayout::new(total_size_bytes, VERTEX_ALIGN.max(INDEX_ALIGN)).unwrap();
         let buffer = self.vertex_index_buffer_pool.allocate(layout).unwrap();
-
         assert!(VERTEX_ALIGN >= INDEX_ALIGN);
         let (vertices, indices) = {
             let partition_bytes = total_vertices as u64 * std::mem::size_of::<EguiVertex>() as u64;
@@ -588,16 +574,21 @@ impl Renderer {
                 buffer.slice(partition_bytes..).reinterpret::<[Index]>(),
             )
         };
-
         {
             let mut vertex_write = vertices.write().unwrap();
             vertex_write
                 .iter_mut()
-                .zip(meshes.clone().flat_map(|m| &m.vertices).copied().map(|from| EguiVertex {
-                    position: from.pos.into(),
-                    tex_coords: from.uv.into(),
-                    color: from.color.to_array(),
-                }))
+                .zip(
+                    meshes
+                        .clone()
+                        .flat_map(|m| &m.vertices)
+                        .copied()
+                        .map(|from| EguiVertex {
+                            position: from.pos.into(),
+                            tex_coords: from.uv.into(),
+                            color: from.color.to_array(),
+                        }),
+                )
                 .for_each(|(into, from)| *into = from);
         }
         {
@@ -607,7 +598,6 @@ impl Renderer {
                 .zip(meshes.flat_map(|m| &m.indices).copied())
                 .for_each(|(into, from)| *into = from);
         }
-
         Some((vertices, indices))
     }
 
@@ -625,15 +615,12 @@ impl Renderer {
             ],
             output_in_linear_colorspace: self.output_in_linear_colorspace.into(),
         };
-
         let mesh_buffers = self.upload_meshes(clipped_meshes);
-
         let mut vertex_cursor = 0;
         let mut index_cursor = 0;
         let mut needs_full_rebind = true;
         let mut current_rect = None;
         let mut current_texture = None;
-
         for ClippedPrimitive {
             clip_rect,
             primitive,
@@ -652,7 +639,6 @@ impl Renderer {
                         let Some((vertices, indices)) = mesh_buffers.clone() else {
                             unreachable!()
                         };
-
                         builder
                             .bind_pipeline_graphics(self.pipeline.clone())
                             .unwrap()
@@ -683,9 +669,7 @@ impl Renderer {
                             continue;
                         }
                         current_texture = Some(mesh.texture_id);
-
                         let desc_set = self.texture_desc_sets.get(&mesh.texture_id).unwrap();
-
                         builder
                             .bind_descriptor_sets(
                                 PipelineBindPoint::Graphics,
@@ -699,12 +683,10 @@ impl Renderer {
                         current_rect = Some(*clip_rect);
                         let new_scissor =
                             self.get_rect_scissor(scale_factor, framebuffer_dimensions, *clip_rect);
-
                         builder
                             .set_scissor(0, [new_scissor].into_iter().collect())
                             .unwrap();
                     }
-
                     unsafe {
                         builder
                             .draw_indexed(
@@ -716,7 +698,6 @@ impl Renderer {
                             )
                             .unwrap();
                     }
-
                     index_cursor += mesh.indices.len() as u32;
                     vertex_cursor += mesh.vertices.len() as u32;
                 }
