@@ -1,5 +1,5 @@
 use crate::integration::Gui;
-use cgmath::{Matrix4, Point3, Rad, Vector3, perspective};
+use cgmath::{InnerSpace, Matrix4, Point3, Rad, Vector3, perspective};
 use std::sync::Arc;
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
@@ -90,6 +90,7 @@ pub struct ParticleRenderPipeline {
     subpass: Subpass,
     axes_buffer: Subbuffer<[AxesVertex]>,
     particle_buffer: Subbuffer<[ParticleVertex]>,
+    memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     camera_position: Point3<f32>,
     camera_target: Point3<f32>,
@@ -118,7 +119,6 @@ impl ParticleRenderPipeline {
                 ..Default::default()
             },
             [
-                // Red line: from (0,0,0) to (1,0,0)
                 AxesVertex {
                     position: [0.0, 0.0, 0.0],
                     color: [1.0, 0.0, 0.0, 1.0],
@@ -127,7 +127,6 @@ impl ParticleRenderPipeline {
                     position: [1.0, 0.0, 0.0],
                     color: [1.0, 0.0, 0.0, 1.0],
                 },
-                // Green line: from (0,0,0) to (0,1,0)
                 AxesVertex {
                     position: [0.0, 0.0, 0.0],
                     color: [0.0, 1.0, 0.0, 1.0],
@@ -136,7 +135,6 @@ impl ParticleRenderPipeline {
                     position: [0.0, 1.0, 0.0],
                     color: [0.0, 1.0, 0.0, 1.0],
                 },
-                // Blue line: from (0,0,0) to (0,0,1)
                 AxesVertex {
                     position: [0.0, 0.0, 0.0],
                     color: [0.0, 0.0, 1.0, 1.0],
@@ -148,18 +146,16 @@ impl ParticleRenderPipeline {
             ],
         )
         .unwrap();
-
         let particle_buffer = Self::create_particle_buffer(allocator);
-
         let command_buffer_allocator = StandardCommandBufferAllocator::new(
             queue.device().clone(),
             StandardCommandBufferAllocatorCreateInfo {
                 secondary_buffer_count: 32,
+
                 ..Default::default()
             },
         )
         .into();
-
         Self {
             queue,
             render_pass,
@@ -168,12 +164,65 @@ impl ParticleRenderPipeline {
             subpass,
             axes_buffer,
             particle_buffer,
+            memory_allocator: allocator.clone(),
             command_buffer_allocator,
             camera_position: Point3::new(1.6, 1.6, 3.0),
             camera_target: Point3::new(0.0, 0.0, 0.0),
             camera_up: Vector3::new(-1.0, 0.0, 0.0),
             aspect_ratio: 1.0,
         }
+    }
+
+    pub fn set_particles(&mut self, particles: &[crate::simulation::Particle]) {
+        let verts: Vec<ParticleVertex> = particles
+            .iter()
+            .map(|p| ParticleVertex {
+                position: p.position,
+                color: [1.0, 1.0, 1.0, 1.0],
+            })
+            .collect();
+        let new_buf = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::VERTEX_BUFFER | BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            verts,
+        )
+        .unwrap();
+        self.particle_buffer = new_buf;
+    }
+
+    pub fn rotate_camera(&mut self, delta_theta: f32, delta_phi: f32) {
+        let pos = Vector3::new(
+            self.camera_position.x,
+            self.camera_position.y,
+            self.camera_position.z,
+        );
+        let r = pos.magnitude();
+        if r <= std::f32::EPSILON {
+            return;
+        }
+        let mut theta = pos.z.atan2(pos.x);
+        let mut phi = (pos.y / r).asin();
+        theta -= delta_theta;
+        phi += delta_phi;
+        let eps = 0.001f32;
+        phi = phi.clamp(
+            -std::f32::consts::FRAC_PI_2 + eps,
+            std::f32::consts::FRAC_PI_2 - eps,
+        );
+        let cos_phi = phi.cos();
+        let x = r * cos_phi * theta.cos();
+        let y = r * phi.sin();
+        let z = r * cos_phi * theta.sin();
+        self.camera_position = Point3::new(x, y, z);
+        self.camera_up = Vector3::unit_y();
     }
 
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
@@ -204,7 +253,6 @@ impl ParticleRenderPipeline {
         render_pass: Arc<RenderPass>,
     ) -> (Arc<GraphicsPipeline>, Arc<GraphicsPipeline>, Subpass) {
         let subpass = Subpass::from(render_pass, 0).unwrap();
-
         let vs_axes = vs_axes::load(device.clone())
             .expect("failed to create shader module")
             .entry_point("main")
@@ -248,7 +296,6 @@ impl ParticleRenderPipeline {
             },
         )
         .unwrap();
-
         let vs_particles = vs_particles::load(device.clone())
             .expect("failed to create shader module")
             .entry_point("main")
@@ -294,7 +341,6 @@ impl ParticleRenderPipeline {
             },
         )
         .unwrap();
-
         (pipeline_axes, pipeline_particles, subpass)
     }
 
@@ -310,17 +356,16 @@ impl ParticleRenderPipeline {
             CommandBufferUsage::OneTimeSubmit,
         )
         .unwrap();
-
         let dimensions = image.image().extent();
         let framebuffer = Framebuffer::new(
             self.render_pass.clone(),
             FramebufferCreateInfo {
                 attachments: vec![image],
+
                 ..Default::default()
             },
         )
         .unwrap();
-
         builder
             .begin_render_pass(
                 RenderPassBeginInfo {
@@ -333,49 +378,47 @@ impl ParticleRenderPipeline {
                 },
             )
             .unwrap();
-
         let mut secondary_builder = AutoCommandBufferBuilder::secondary(
             self.command_buffer_allocator.clone(),
             self.queue.queue_family_index(),
             CommandBufferUsage::MultipleSubmit,
             CommandBufferInheritanceInfo {
                 render_pass: Some(self.subpass.clone().into()),
+
                 ..Default::default()
             },
         )
         .unwrap();
-
         self.aspect_ratio = dimensions[0] as f32 / dimensions[1] as f32;
         let view_proj = self.compute_view_proj();
         const SIZE_RATIO: f32 = 0.02;
         let size_scale = dimensions[1] as f32 * SIZE_RATIO;
         let push_constants = PushConstants {
             view_proj: view_proj.into(),
+
             size_scale: size_scale.into(),
         };
         let viewport = Viewport {
             offset: [0.0, 0.0],
+
             extent: [dimensions[0] as f32, dimensions[1] as f32],
+
             depth_range: 0.0..=1.0,
         };
-
         self.draw_axes(&mut secondary_builder, &viewport, &push_constants);
-
         self.draw_particles(&mut secondary_builder, &viewport, &push_constants);
-
         let cb = secondary_builder.build().unwrap();
         builder.execute_commands(cb).unwrap();
-
         builder
             .next_subpass(
                 Default::default(),
                 SubpassBeginInfo {
                     contents: SubpassContents::SecondaryCommandBuffers,
+
                     ..Default::default()
                 },
             )
             .unwrap();
-
         let cb = gui.draw_on_subpass_image([dimensions[0], dimensions[1]]);
         builder.execute_commands(cb).unwrap();
         builder.end_render_pass(Default::default()).unwrap();
@@ -435,7 +478,6 @@ impl ParticleRenderPipeline {
                 push_constants.clone(),
             )
             .unwrap();
-
         unsafe {
             builder
                 .draw(self.axes_buffer.len() as u32, 1, 0, 0)
@@ -483,9 +525,11 @@ impl ParticleRenderPipeline {
 }
 
 #[cfg(test)]
+
 mod tests {
     use super::*;
     use vulkano_util::context::{VulkanoConfig, VulkanoContext};
+
     #[test]
     fn test_pipeline_creation() {
         let context = VulkanoContext::new(VulkanoConfig::default());

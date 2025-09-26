@@ -778,7 +778,6 @@ layout(push_constant) uniform PushConstants {
     int output_in_linear_colorspace;
 } push_constants;
 
-// 0-1 sRGB  from  0-1 linear
 vec3 srgb_from_linear(vec3 linear) {
     bvec3 cutoff = lessThan(linear, vec3(0.0031308));
     vec3 lower = linear * vec3(12.92);
@@ -786,12 +785,10 @@ vec3 srgb_from_linear(vec3 linear) {
     return mix(higher, lower, vec3(cutoff));
 }
 
-// 0-1 sRGBA  from  0-1 linear
 vec4 srgba_from_linear(vec4 linear) {
     return vec4(srgb_from_linear(linear.rgb), linear.a);
 }
 
-// 0-1 linear  from  0-1 sRGB
 vec3 linear_from_srgb(vec3 srgb) {
     bvec3 cutoff = lessThan(srgb, vec3(0.04045));
     vec3 lower = srgb / vec3(12.92);
@@ -799,18 +796,14 @@ vec3 linear_from_srgb(vec3 srgb) {
     return mix(higher, lower, vec3(cutoff));
 }
 
-// 0-1 linear  from  0-1 sRGB
 vec4 linear_from_srgba(vec4 srgb) {
     return vec4(linear_from_srgb(srgb.rgb), srgb.a);
 }
 
 void main() {
-    // ALL calculations should be done in gamma space, this includes texture * color and blending
     vec4 texture_color = srgba_from_linear(texture(font_texture, v_tex_coords));
     vec4 color = v_color * texture_color;
 
-    // If output_in_linear_colorspace is true, we are rendering into an sRGB image, for which we'll convert to linear color space.
-    // **This will break blending** as it will be performed in linear color space instead of sRGB like egui expects.
     if (push_constants.output_in_linear_colorspace == 1) {
         color = linear_from_srgba(color);
     }

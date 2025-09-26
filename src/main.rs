@@ -27,7 +27,7 @@ mod ui_styles;
 mod utils;
 
 pub fn main() -> Result<(), EventLoopError> {
-    let event_loop = EventLoop::new().unwrap();
+    let event_loop = EventLoop::new()?;
     let mut app = App::default();
     event_loop.run_app(&mut app)
 }
@@ -45,6 +45,8 @@ pub struct App {
     gui: Option<Gui>,
     ui_state: UiState,
     simulation_state: SimulationState,
+    mouse_down: bool,
+    last_cursor_position: Option<(f64, f64)>,
 }
 
 impl Default for App {
@@ -58,6 +60,8 @@ impl Default for App {
             gui: None,
             ui_state: UiState::default(),
             simulation_state: SimulationState::default(),
+            mouse_down: false,
+            last_cursor_position: None,
         }
     }
 }
@@ -79,26 +83,18 @@ impl ApplicationHandler for App {
                 ci.image_format = vulkano::format::Format::B8G8R8A8_UNORM;
                 ci.min_image_count = ci.min_image_count.max(2);
             });
+        let primary_renderer = self.windows.get_primary_renderer().unwrap();
         let render_pipeline = ParticleRenderPipeline::new(
             self.context.graphics_queue().clone(),
-            self.windows
-                .get_primary_renderer_mut()
-                .unwrap()
-                .swapchain_format(),
+            primary_renderer.swapchain_format(),
             self.context.memory_allocator(),
         );
         self.gui = Some(Gui::new_with_subpass(
             event_loop,
-            self.windows.get_primary_renderer_mut().unwrap().surface(),
-            self.windows
-                .get_primary_renderer_mut()
-                .unwrap()
-                .graphics_queue(),
+            primary_renderer.surface(),
+            primary_renderer.graphics_queue(),
             render_pipeline.gui_pass(),
-            self.windows
-                .get_primary_renderer_mut()
-                .unwrap()
-                .swapchain_format(),
+            primary_renderer.swapchain_format(),
             GuiConfig::default(),
         ));
         self.render_pipeline = Some(render_pipeline);
@@ -130,6 +126,11 @@ impl ApplicationHandler for App {
                 });
                 match renderer.acquire(None, |_| {}) {
                     Ok(future) => {
+                        // update particle buffer from simulation state before rendering
+                        if let Some(pipeline) = self.render_pipeline.as_mut() {
+                            pipeline.set_particles(&self.simulation_state.particles);
+                        }
+
                         let after_future = self.render_pipeline.as_mut().unwrap().render(
                             future,
                             renderer.swapchain_image_view(),
@@ -146,7 +147,37 @@ impl ApplicationHandler for App {
             _ => (),
         }
         if window_id == renderer.window().id() {
-            let _pass_events_to_game = !gui.update(&event);
+            let pass_events_to_game = !gui.update(&event);
+            if pass_events_to_game {
+                use winit::event::{MouseButton, WindowEvent};
+                match &event {
+                    WindowEvent::MouseInput { state, button, .. } => match button {
+                        MouseButton::Left => {
+                            self.mouse_down = *state == winit::event::ElementState::Pressed;
+                            if !self.mouse_down {
+                                self.last_cursor_position = None;
+                            }
+                        }
+                        _ => {}
+                    },
+                    WindowEvent::CursorMoved { position, .. } => {
+                        if self.mouse_down {
+                            let (x, y) = (position.x, position.y);
+                            if let Some((lx, ly)) = self.last_cursor_position {
+                                let dx = x - lx;
+                                let dy = y - ly;
+                                // sensitivity tuned empirically
+                                let sens = -0.005f32;
+                                if let Some(pipeline) = self.render_pipeline.as_mut() {
+                                    pipeline.rotate_camera(dx as f32 * sens, dy as f32 * sens);
+                                }
+                            }
+                            self.last_cursor_position = Some((x, y));
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
