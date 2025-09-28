@@ -13,10 +13,11 @@ use vulkano_util::{
 use winit::{
     application::ApplicationHandler,
     error::EventLoopError,
-    event::WindowEvent,
+    event::{MouseButton, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
 };
 
+mod camera;
 mod integration;
 mod pipeline;
 mod renderer;
@@ -109,7 +110,7 @@ impl ApplicationHandler for App {
     ) {
         let renderer = self.windows.get_renderer_mut(window_id).unwrap();
         let gui = self.gui.as_mut().unwrap();
-        match event {
+        match &event {
             WindowEvent::Resized(_) => {
                 renderer.resize();
             }
@@ -126,7 +127,6 @@ impl ApplicationHandler for App {
                 });
                 match renderer.acquire(None, |_| {}) {
                     Ok(future) => {
-                        // update particle buffer from simulation state before rendering
                         if let Some(pipeline) = self.render_pipeline.as_mut() {
                             pipeline.set_particles(&self.simulation_state.particles);
                         }
@@ -147,9 +147,7 @@ impl ApplicationHandler for App {
             _ => (),
         }
         if window_id == renderer.window().id() {
-            let pass_events_to_game = !gui.update(&event);
-            if pass_events_to_game {
-                use winit::event::{MouseButton, WindowEvent};
+            if !gui.update(&event) {
                 match &event {
                     WindowEvent::MouseInput { state, button, .. } => match button {
                         MouseButton::Left => {
@@ -166,7 +164,6 @@ impl ApplicationHandler for App {
                             if let Some((lx, ly)) = self.last_cursor_position {
                                 let dx = x - lx;
                                 let dy = y - ly;
-                                // sensitivity tuned empirically
                                 let sens = -0.005f32;
                                 if let Some(pipeline) = self.render_pipeline.as_mut() {
                                     pipeline.rotate_camera(dx as f32 * sens, dy as f32 * sens);

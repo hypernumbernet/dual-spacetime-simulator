@@ -1,3 +1,4 @@
+use crate::camera::OrbitCamera;
 use crate::integration::Gui;
 use glam::{Mat4, Vec3};
 use std::sync::Arc;
@@ -92,9 +93,7 @@ pub struct ParticleRenderPipeline {
     particle_buffer: Subbuffer<[ParticleVertex]>,
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-    camera_position: Vec3,
-    camera_target: Vec3,
-    camera_up: Vec3,
+    camera: OrbitCamera,
     aspect_ratio: f32,
 }
 
@@ -107,45 +106,7 @@ impl ParticleRenderPipeline {
         let render_pass = Self::create_render_pass(queue.device().clone(), image_format);
         let (pipeline_axes, pipeline_particles, subpass) =
             Self::create_pipeline(queue.device().clone(), render_pass.clone());
-        let axes_buffer = Buffer::from_iter(
-            allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::VERTEX_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            [
-                AxesVertex {
-                    position: [0.0, 0.0, 0.0],
-                    color: [1.0, 0.0, 0.0, 1.0],
-                },
-                AxesVertex {
-                    position: [1.0, 0.0, 0.0],
-                    color: [1.0, 0.0, 0.0, 1.0],
-                },
-                AxesVertex {
-                    position: [0.0, 0.0, 0.0],
-                    color: [0.0, 1.0, 0.0, 1.0],
-                },
-                AxesVertex {
-                    position: [0.0, 1.0, 0.0],
-                    color: [0.0, 1.0, 0.0, 1.0],
-                },
-                AxesVertex {
-                    position: [0.0, 0.0, 0.0],
-                    color: [0.0, 0.0, 1.0, 1.0],
-                },
-                AxesVertex {
-                    position: [0.0, 0.0, 1.0],
-                    color: [0.0, 0.0, 1.0, 1.0],
-                },
-            ],
-        )
-        .unwrap();
+        let axes_buffer = Self::create_axes_buffer(allocator);
         let particle_buffer = Self::create_particle_buffer(allocator);
         let command_buffer_allocator = StandardCommandBufferAllocator::new(
             queue.device().clone(),
@@ -156,6 +117,9 @@ impl ParticleRenderPipeline {
             },
         )
         .into();
+        let initial_position = Vec3::new(1.6, -1.6, 3.0);
+        let initial_target = Vec3::new(0.0, 0.0, 0.0);
+        let camera = OrbitCamera::new(initial_position, initial_target);
         Self {
             queue,
             render_pass,
@@ -166,9 +130,7 @@ impl ParticleRenderPipeline {
             particle_buffer,
             memory_allocator: allocator.clone(),
             command_buffer_allocator,
-            camera_position: Vec3::new(1.6, 1.6, 3.0),
-            camera_target: Vec3::new(0.0, 0.0, 0.0),
-            camera_up: Vec3::new(-1.0, 0.0, 0.0),
+            camera,
             aspect_ratio: 1.0,
         }
     }
@@ -198,27 +160,8 @@ impl ParticleRenderPipeline {
         self.particle_buffer = new_buf;
     }
 
-    pub fn rotate_camera(&mut self, delta_theta: f32, delta_phi: f32) {
-        let pos = self.camera_position;
-        let r = pos.length();
-        if r <= std::f32::EPSILON {
-            return;
-        }
-        let mut theta = pos.z.atan2(pos.x);
-        let mut phi = (pos.y / r).asin();
-        theta -= delta_theta;
-        phi += delta_phi;
-        let eps = 0.001f32;
-        phi = phi.clamp(
-            -std::f32::consts::FRAC_PI_2 + eps,
-            std::f32::consts::FRAC_PI_2 - eps,
-        );
-        let cos_phi = phi.cos();
-        let x = r * cos_phi * theta.cos();
-        let y = r * phi.sin();
-        let z = r * cos_phi * theta.sin();
-        self.camera_position = Vec3::new(x, y, z);
-        self.camera_up = Vec3::Y;
+    pub fn rotate_camera(&mut self, delta_pitch: f32, delta_yaw: f32) {
+        self.camera.rotate(delta_pitch, delta_yaw);
     }
 
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
@@ -357,7 +300,6 @@ impl ParticleRenderPipeline {
             self.render_pass.clone(),
             FramebufferCreateInfo {
                 attachments: vec![image],
-
                 ..Default::default()
             },
         )
@@ -380,7 +322,6 @@ impl ParticleRenderPipeline {
             CommandBufferUsage::MultipleSubmit,
             CommandBufferInheritanceInfo {
                 render_pass: Some(self.subpass.clone().into()),
-
                 ..Default::default()
             },
         )
@@ -391,14 +332,11 @@ impl ParticleRenderPipeline {
         let size_scale = dimensions[1] as f32 * SIZE_RATIO;
         let push_constants = PushConstants {
             view_proj: view_proj.to_cols_array_2d(),
-
             size_scale: size_scale.into(),
         };
         let viewport = Viewport {
             offset: [0.0, 0.0],
-
             extent: [dimensions[0] as f32, dimensions[1] as f32],
-
             depth_range: 0.0..=1.0,
         };
         self.draw_axes(&mut secondary_builder, &viewport, &push_constants);
@@ -410,7 +348,6 @@ impl ParticleRenderPipeline {
                 Default::default(),
                 SubpassBeginInfo {
                     contents: SubpassContents::SecondaryCommandBuffers,
-
                     ..Default::default()
                 },
             )
@@ -423,6 +360,54 @@ impl ParticleRenderPipeline {
             .then_execute(self.queue.clone(), command_buffer)
             .unwrap();
         after_future.boxed()
+    }
+
+    fn create_axes_buffer(allocator: &Arc<StandardMemoryAllocator>) -> Subbuffer<[AxesVertex]> {
+        let mut vertices: Vec<AxesVertex> = Vec::new();
+        let range = 2.0;
+        let num_lines = 9;
+        let step = (2.0 * range) / ((num_lines - 1) as f32);
+        for i in 0..num_lines {
+            let pos = -range + i as f32 * step;
+            vertices.push(AxesVertex {
+                position: [-range, 0.0, pos],
+                color: [1.0, 0.0, 0.0, 1.0],
+            });
+            vertices.push(AxesVertex {
+                position: [range, 0.0, pos],
+                color: [1.0, 0.0, 0.0, 1.0],
+            });
+            vertices.push(AxesVertex {
+                position: [pos, 0.0, -range],
+                color: [0.0, 0.0, 1.0, 1.0],
+            });
+            vertices.push(AxesVertex {
+                position: [pos, 0.0, range],
+                color: [0.0, 0.0, 1.0, 1.0],
+            });
+        }
+        vertices.push(AxesVertex {
+            position: [0.0, 0.0, 0.0],
+            color: [0.0, 1.0, 0.0, 1.0],
+        });
+        vertices.push(AxesVertex {
+            position: [0.0, -1.0, 0.0],
+            color: [0.0, 1.0, 0.0, 1.0],
+        });
+        Buffer::from_iter(
+            allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::VERTEX_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vertices,
+        )
+        .unwrap()
     }
 
     fn create_particle_buffer(
@@ -500,7 +485,6 @@ impl ParticleRenderPipeline {
                 push_constants.clone(),
             )
             .unwrap();
-
         unsafe {
             builder
                 .draw(self.particle_buffer.len() as u32, 1, 0, 0)
@@ -509,19 +493,13 @@ impl ParticleRenderPipeline {
     }
 
     fn compute_view_proj(&self) -> Mat4 {
-        let view = Mat4::look_at_rh(self.camera_position, self.camera_target, self.camera_up);
-        let proj = Mat4::perspective_rh(
-            std::f32::consts::FRAC_PI_4,
-            self.aspect_ratio,
-            0.1,
-            100.0,
-        );
+        let view = Mat4::look_at_rh(self.camera.position, self.camera.target, self.camera.up);
+        let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, self.aspect_ratio, 0.1, 100.0);
         proj * view
     }
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
     use vulkano_util::context::{VulkanoConfig, VulkanoContext};

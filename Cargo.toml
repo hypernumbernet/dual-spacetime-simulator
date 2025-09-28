@@ -20,6 +20,7 @@ glam = "0.30"
 mockall = "0.13"
 
 [profile.release]
+opt-level = 3
 codegen-units = 1
 lto = true
 panic = "abort"
