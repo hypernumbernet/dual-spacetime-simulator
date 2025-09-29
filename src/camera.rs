@@ -1,54 +1,73 @@
 use glam::{Quat, Vec3};
 
+const EPSILON: f32 = 1e-6;
+
 pub struct OrbitCamera {
     pub position: Vec3,
     pub target: Vec3,
     pub up: Vec3,
-    right: Vec3,
-    rotation: Quat,
-    distance: f32,
 }
 
 impl OrbitCamera {
     pub fn new(position: Vec3, target: Vec3) -> Self {
-        let relative = target - position;
-        let distance = relative.length();
-        let forward = relative.normalize();
-        let initial_rotation = Quat::from_rotation_arc(Vec3::Z, forward);
-
+        let up = get_closest_perp_unit_to_y(position, target);
         Self {
             position,
             target,
-            up: Vec3::Y,
-            right: Vec3::X,
-            rotation: initial_rotation,
-            distance,
+            up,
         }
     }
 
-    pub fn rotate(&mut self, delta_pitch: f32, delta_yaw: f32) {
-        if self.distance <= std::f32::EPSILON {
+    pub fn rotate(&mut self, delta_yaw: f32, delta_pitch: f32) {
+        let relative = self.target - self.position;
+        let distance = relative.length();
+        if distance <= std::f32::EPSILON {
             return;
         }
+        let axis = self.up.cross(relative).normalize();
+        let rotation = Quat::from_axis_angle(axis, -delta_pitch);
+        self.up = rotation.mul_vec3(self.up);
+        let relative = rotation.mul_vec3(relative);
+        self.position = self.target - relative;
 
-        // Yaw: グローバルY軸周りの回転（全体回転）
-        let yaw_quat = Quat::from_axis_angle(Vec3::Y, delta_yaw);
+        let rotation = Quat::from_axis_angle(self.up, -delta_yaw);
+        let relative = rotation.mul_vec3(relative);
+        self.position = self.target - relative;
+    }
 
-        // Pitch: ローカルright軸周りの回転
-        let forward = self.rotation.mul_vec3(Vec3::Z);  // 現在のforward (サンドイッチ積で計算)
-        let right = self.up.cross(forward).normalize();
-        let pitch_quat = Quat::from_axis_angle(right, delta_pitch);
+    pub fn look_around(&mut self, dx: f32, dy: f32) {
+        let relative = self.target - self.position;
+        let distance = relative.length();
+        if distance <= std::f32::EPSILON {
+            return;
+        }
+        let rotation = Quat::from_axis_angle(self.up, dx);
+        let relative = rotation.mul_vec3(relative);
+        self.target = self.position + relative;
 
-        // 回転を合成（yawを左、pitchを右に）
-        self.rotation = yaw_quat * self.rotation * pitch_quat;
+        let axis = self.up.cross(relative).normalize();
+        let rotation = Quat::from_axis_angle(axis, dy);
+        let relative = rotation.mul_vec3(relative);
+        self.target = self.position + relative;
+    }
+}
 
-        // position更新: forwardをサンドイッチ積で回転させたベクターから計算
-        let initial_forward = Vec3::Z;  // 基準forward
-        let rotated_forward = self.rotation.mul_vec3(initial_forward);  // q * v * q^{-1}
-        self.position = self.target + rotated_forward * self.distance;
-
-        // up更新: 同様にサンドイッチ積
-        let initial_up = Vec3::Y;
-        self.up = self.rotation.mul_vec3(initial_up);
+fn get_closest_perp_unit_to_y(position: Vec3, target: Vec3) -> Vec3 {
+    let dir = (target - position).normalize_or_zero();
+    if dir.length_squared() == 0.0 {
+        return Vec3::Y;
+    }
+    let y = Vec3::Y;
+    let proj = dir * dir.dot(y);
+    let perp = y - proj;
+    let perp_len = perp.length();
+    if perp_len > EPSILON {
+        perp / perp_len
+    } else {
+        let mut v = Vec3::X.cross(dir);
+        if v.length_squared() < EPSILON {
+            v = Vec3::Z.cross(dir);
+        }
+        v.normalize()
     }
 }

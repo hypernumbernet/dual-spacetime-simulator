@@ -46,7 +46,8 @@ pub struct App {
     gui: Option<Gui>,
     ui_state: UiState,
     simulation_state: SimulationState,
-    mouse_down: bool,
+    mouse_left_down: bool,
+    mouse_right_down: bool,
     last_cursor_position: Option<(f64, f64)>,
 }
 
@@ -61,7 +62,8 @@ impl Default for App {
             gui: None,
             ui_state: UiState::default(),
             simulation_state: SimulationState::default(),
-            mouse_down: false,
+            mouse_left_down: false,
+            mouse_right_down: false,
             last_cursor_position: None,
         }
     }
@@ -110,6 +112,9 @@ impl ApplicationHandler for App {
     ) {
         let renderer = self.windows.get_renderer_mut(window_id).unwrap();
         let gui = self.gui.as_mut().unwrap();
+        let Some(pipeline) = self.render_pipeline.as_mut() else {
+            return;
+        };
         match &event {
             WindowEvent::Resized(_) => {
                 renderer.resize();
@@ -127,11 +132,8 @@ impl ApplicationHandler for App {
                 });
                 match renderer.acquire(None, |_| {}) {
                     Ok(future) => {
-                        if let Some(pipeline) = self.render_pipeline.as_mut() {
-                            pipeline.set_particles(&self.simulation_state.particles);
-                        }
-
-                        let after_future = self.render_pipeline.as_mut().unwrap().render(
+                        pipeline.set_particles(&self.simulation_state.particles);
+                        let after_future = pipeline.render(
                             future,
                             renderer.swapchain_image_view(),
                             gui,
@@ -151,23 +153,31 @@ impl ApplicationHandler for App {
                 match &event {
                     WindowEvent::MouseInput { state, button, .. } => match button {
                         MouseButton::Left => {
-                            self.mouse_down = *state == winit::event::ElementState::Pressed;
-                            if !self.mouse_down {
+                            self.mouse_left_down = *state == winit::event::ElementState::Pressed;
+                            if !self.mouse_left_down {
+                                self.last_cursor_position = None;
+                            }
+                        }
+                        MouseButton::Right => {
+                            self.mouse_right_down = *state == winit::event::ElementState::Pressed;
+                            if !self.mouse_right_down {
                                 self.last_cursor_position = None;
                             }
                         }
                         _ => {}
                     },
                     WindowEvent::CursorMoved { position, .. } => {
-                        if self.mouse_down {
+                        if self.mouse_left_down {
                             let (x, y) = (position.x, position.y);
                             if let Some((lx, ly)) = self.last_cursor_position {
-                                let dx = x - lx;
-                                let dy = y - ly;
-                                let sens = -0.005f32;
-                                if let Some(pipeline) = self.render_pipeline.as_mut() {
-                                    pipeline.rotate_camera(dx as f32 * sens, dy as f32 * sens);
-                                }
+                                pipeline.rotate_camera(x - lx, y - ly);
+                            }
+                            self.last_cursor_position = Some((x, y));
+                        }
+                        if self.mouse_right_down {
+                            let (x, y) = (position.x, position.y);
+                            if let Some((lx, ly)) = self.last_cursor_position {
+                                pipeline.look_around(x - lx, y - ly);
                             }
                             self.last_cursor_position = Some((x, y));
                         }

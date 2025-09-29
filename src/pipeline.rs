@@ -30,6 +30,9 @@ use vulkano::{
     sync::GpuFuture,
 };
 
+const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
+const MOUSE_RIGHT_DRAG_SENS: f32 = 0.001f32;
+
 #[repr(C)]
 #[derive(BufferContents, Vertex)]
 struct AxesVertex {
@@ -160,8 +163,12 @@ impl ParticleRenderPipeline {
         self.particle_buffer = new_buf;
     }
 
-    pub fn rotate_camera(&mut self, delta_pitch: f32, delta_yaw: f32) {
-        self.camera.rotate(delta_pitch, delta_yaw);
+    pub fn rotate_camera(&mut self, delta_yaw: f64, delta_pitch: f64) {
+        self.camera.rotate(delta_yaw as f32 * MOUSE_LEFT_DRAG_SENS, delta_pitch as f32 * MOUSE_LEFT_DRAG_SENS);
+    }
+
+    pub fn look_around(&mut self, dx: f64, dy: f64) {
+        self.camera.look_around(dx as f32 * MOUSE_RIGHT_DRAG_SENS, dy as f32 * MOUSE_RIGHT_DRAG_SENS);
     }
 
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
