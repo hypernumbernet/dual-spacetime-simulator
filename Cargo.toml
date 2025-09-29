@@ -14,7 +14,7 @@ bytemuck = "1.23"
 anyhow = "1.0"
 rand = "0.8"
 ahash = "0.8"
-glam = "0.30"
+nalgebra = "0.34"
 
 [dev-dependencies]
 mockall = "0.13"

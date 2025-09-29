@@ -164,9 +164,9 @@ impl ApplicationHandler for App {
                             if let Some((lx, ly)) = self.last_cursor_position {
                                 let dx = x - lx;
                                 let dy = y - ly;
-                                let sens = -0.005f32;
+                                let sens = -0.005;
                                 if let Some(pipeline) = self.render_pipeline.as_mut() {
-                                    pipeline.rotate_camera(dx as f32 * sens, dy as f32 * sens);
+                                    pipeline.rotate_camera(dx as f64 * sens, dy as f64 * sens);
                                 }
                             }
                             self.last_cursor_position = Some((x, y));

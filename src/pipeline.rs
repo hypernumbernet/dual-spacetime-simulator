@@ -1,6 +1,6 @@
 use crate::camera::OrbitCamera;
 use crate::integration::Gui;
-use glam::{Mat4, Vec3};
+use nalgebra::{Vector3, base::Scalar,RealField,UnitQuaternion,Quaternion, Matrix4,Point3};
 use std::sync::Arc;
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
@@ -94,7 +94,7 @@ pub struct ParticleRenderPipeline {
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     camera: OrbitCamera,
-    aspect_ratio: f32,
+    aspect_ratio: f64,
 }
 
 impl ParticleRenderPipeline {
@@ -117,9 +117,9 @@ impl ParticleRenderPipeline {
             },
         )
         .into();
-        let initial_position = Vec3::new(1.6, -1.6, 3.0);
-        let initial_target = Vec3::new(0.0, 0.0, 0.0);
-        let camera = OrbitCamera::new(initial_position, initial_target);
+        let initial_eye = Point3::new(1.6, -1.6, 3.0);
+        let initial_target = Point3::new(0.0, 0.0, 0.0);
+        let camera = OrbitCamera::new(initial_eye, initial_target);
         Self {
             queue,
             render_pass,
@@ -160,8 +160,8 @@ impl ParticleRenderPipeline {
         self.particle_buffer = new_buf;
     }
 
-    pub fn rotate_camera(&mut self, delta_pitch: f32, delta_yaw: f32) {
-        self.camera.rotate(delta_pitch, delta_yaw);
+    pub fn rotate_camera(&mut self, delta_yaw: f64, delta_pitch: f64) {
+        self.camera.rotate(delta_yaw, delta_pitch);
     }
 
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
@@ -326,12 +326,19 @@ impl ParticleRenderPipeline {
             },
         )
         .unwrap();
-        self.aspect_ratio = dimensions[0] as f32 / dimensions[1] as f32;
-        let view_proj = self.compute_view_proj();
+        self.aspect_ratio = dimensions[0] as f64 / dimensions[1] as f64;
+        let view_proj = self.camera.mvp_matrix(self.aspect_ratio, std::f64::consts::FRAC_PI_2, 0.1, 100.0);
+        let transform_f32: Matrix4<f32> = view_proj.cast();
+        let matrix_array: [[f32; 4]; 4] = [
+            [transform_f32.m11, transform_f32.m12, transform_f32.m13, transform_f32.m14],
+            [transform_f32.m21, transform_f32.m22, transform_f32.m23, transform_f32.m24],
+            [transform_f32.m31, transform_f32.m32, transform_f32.m33, transform_f32.m34],
+            [transform_f32.m41, transform_f32.m42, transform_f32.m43, transform_f32.m44],
+        ];
         const SIZE_RATIO: f32 = 0.02;
         let size_scale = dimensions[1] as f32 * SIZE_RATIO;
         let push_constants = PushConstants {
-            view_proj: view_proj.to_cols_array_2d(),
+            view_proj: matrix_array,
             size_scale: size_scale.into(),
         };
         let viewport = Viewport {
@@ -490,12 +497,6 @@ impl ParticleRenderPipeline {
                 .draw(self.particle_buffer.len() as u32, 1, 0, 0)
                 .unwrap();
         }
-    }
-
-    fn compute_view_proj(&self) -> Mat4 {
-        let view = Mat4::look_at_rh(self.camera.position, self.camera.target, self.camera.up);
-        let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, self.aspect_ratio, 0.1, 100.0);
-        proj * view
     }
 }
 
