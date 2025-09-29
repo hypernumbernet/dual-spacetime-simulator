@@ -50,6 +50,16 @@ impl OrbitCamera {
         let relative = rotation.mul_vec3(relative);
         self.target = self.position + relative;
     }
+
+    pub fn zoom(&mut self, zoom_factor: f32) {
+        let direction = (self.target - self.position).normalize_or_zero();
+        if direction.length_squared() == 0.0 {
+            return;
+        }
+        let distance = (self.target - self.position).length();
+        let new_distance = (distance - zoom_factor).max(0.1);
+        self.position = self.target - direction * new_distance;
+    }
 }
 
 fn get_closest_perp_unit_to_y(position: Vec3, target: Vec3) -> Vec3 {

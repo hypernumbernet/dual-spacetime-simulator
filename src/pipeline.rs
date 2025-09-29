@@ -171,6 +171,11 @@ impl ParticleRenderPipeline {
         self.camera.look_around(dx as f32 * MOUSE_RIGHT_DRAG_SENS, dy as f32 * MOUSE_RIGHT_DRAG_SENS);
     }
 
+    pub fn zoom_camera(&mut self, zoom_factor: f32) {
+        //dbg!("Zoom factor: {}", zoom_factor);
+        self.camera.zoom(zoom_factor);
+    }
+
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
         vulkano::ordered_passes_renderpass!(
             device,

@@ -12,8 +12,9 @@ use vulkano_util::{
 };
 use winit::{
     application::ApplicationHandler,
+    dpi::PhysicalPosition,
     error::EventLoopError,
-    event::{MouseButton, WindowEvent},
+    event::{MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
 };
 
@@ -106,7 +107,7 @@ impl ApplicationHandler for App {
 
     fn window_event(
         &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
@@ -133,11 +134,8 @@ impl ApplicationHandler for App {
                 match renderer.acquire(None, |_| {}) {
                     Ok(future) => {
                         pipeline.set_particles(&self.simulation_state.particles);
-                        let after_future = pipeline.render(
-                            future,
-                            renderer.swapchain_image_view(),
-                            gui,
-                        );
+                        let after_future =
+                            pipeline.render(future, renderer.swapchain_image_view(), gui);
                         renderer.present(after_future, true);
                     }
                     Err(vulkano::VulkanError::OutOfDate) => {
@@ -164,22 +162,37 @@ impl ApplicationHandler for App {
                                 self.last_cursor_position = None;
                             }
                         }
+                        MouseButton::Middle => {
+                            self.mouse_left_down = false;
+                            self.mouse_right_down = false;
+                            self.last_cursor_position = None;
+                        }
                         _ => {}
                     },
                     WindowEvent::CursorMoved { position, .. } => {
+                        let (x, y) = (position.x, position.y);
                         if self.mouse_left_down {
-                            let (x, y) = (position.x, position.y);
                             if let Some((lx, ly)) = self.last_cursor_position {
                                 pipeline.rotate_camera(x - lx, y - ly);
                             }
-                            self.last_cursor_position = Some((x, y));
                         }
                         if self.mouse_right_down {
-                            let (x, y) = (position.x, position.y);
                             if let Some((lx, ly)) = self.last_cursor_position {
                                 pipeline.look_around(x - lx, y - ly);
                             }
-                            self.last_cursor_position = Some((x, y));
+                        }
+                        self.last_cursor_position = Some((x, y));
+                    }
+                    WindowEvent::MouseWheel { delta, .. } => {
+                        match delta {
+                            MouseScrollDelta::LineDelta(_, y) => {
+                                let zoom_factor = y * 0.1;
+                                pipeline.zoom_camera(zoom_factor);
+                            }
+                            MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
+                                let zoom_factor = y * 0.1;
+                                pipeline.zoom_camera(zoom_factor as f32);
+                            }
                         }
                     }
                     _ => {}
@@ -188,7 +201,7 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         let renderer = self.windows.get_primary_renderer().unwrap();
         renderer.window().request_redraw();
     }
