@@ -49,6 +49,7 @@ pub struct App {
     simulation_state: SimulationState,
     mouse_left_down: bool,
     mouse_right_down: bool,
+    mouse_middle_down: bool,
     last_cursor_position: Option<(f64, f64)>,
 }
 
@@ -65,6 +66,7 @@ impl Default for App {
             simulation_state: SimulationState::default(),
             mouse_left_down: false,
             mouse_right_down: false,
+            mouse_middle_down: false,
             last_cursor_position: None,
         }
     }
@@ -163,38 +165,38 @@ impl ApplicationHandler for App {
                             }
                         }
                         MouseButton::Middle => {
-                            self.mouse_left_down = false;
-                            self.mouse_right_down = false;
-                            self.last_cursor_position = None;
+                            self.mouse_middle_down = *state == winit::event::ElementState::Pressed;
+                            if !self.mouse_middle_down {
+                                self.last_cursor_position = None;
+                            }
                         }
                         _ => {}
                     },
                     WindowEvent::CursorMoved { position, .. } => {
                         let (x, y) = (position.x, position.y);
-                        if self.mouse_left_down {
-                            if let Some((lx, ly)) = self.last_cursor_position {
-                                pipeline.rotate_camera(x - lx, y - ly);
+                        if let Some((lx, ly)) = self.last_cursor_position {
+                            if self.mouse_left_down {
+                                pipeline.revolve_camera(x - lx, y - ly);
                             }
-                        }
-                        if self.mouse_right_down {
-                            if let Some((lx, ly)) = self.last_cursor_position {
+                            if self.mouse_right_down {
                                 pipeline.look_around(x - lx, y - ly);
+                            }
+                            if self.mouse_middle_down {
+                                pipeline.rotate_camera(x - lx, y - ly);
                             }
                         }
                         self.last_cursor_position = Some((x, y));
                     }
-                    WindowEvent::MouseWheel { delta, .. } => {
-                        match delta {
-                            MouseScrollDelta::LineDelta(_, y) => {
-                                let zoom_factor = y * 0.1;
-                                pipeline.zoom_camera(zoom_factor);
-                            }
-                            MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                                let zoom_factor = y * 0.1;
-                                pipeline.zoom_camera(zoom_factor as f32);
-                            }
+                    WindowEvent::MouseWheel { delta, .. } => match delta {
+                        MouseScrollDelta::LineDelta(_, y) => {
+                            let zoom_factor = y * 0.1;
+                            pipeline.zoom_camera(zoom_factor);
                         }
-                    }
+                        MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
+                            let zoom_factor = y * 0.1;
+                            pipeline.zoom_camera(zoom_factor as f32);
+                        }
+                    },
                     _ => {}
                 }
             }

@@ -163,8 +163,8 @@ impl ParticleRenderPipeline {
         self.particle_buffer = new_buf;
     }
 
-    pub fn rotate_camera(&mut self, delta_yaw: f64, delta_pitch: f64) {
-        self.camera.rotate(delta_yaw as f32 * MOUSE_LEFT_DRAG_SENS, delta_pitch as f32 * MOUSE_LEFT_DRAG_SENS);
+    pub fn revolve_camera(&mut self, delta_yaw: f64, delta_pitch: f64) {
+        self.camera.revolve(delta_yaw as f32 * MOUSE_LEFT_DRAG_SENS, delta_pitch as f32 * MOUSE_LEFT_DRAG_SENS);
     }
 
     pub fn look_around(&mut self, dx: f64, dy: f64) {
@@ -172,8 +172,11 @@ impl ParticleRenderPipeline {
     }
 
     pub fn zoom_camera(&mut self, zoom_factor: f32) {
-        //dbg!("Zoom factor: {}", zoom_factor);
         self.camera.zoom(zoom_factor);
+    }
+
+    pub fn rotate_camera(&mut self, delta_roll: f64, delta_forward: f64) {
+        self.camera.rotate(delta_roll as f32 * MOUSE_LEFT_DRAG_SENS, delta_forward as f32 * MOUSE_LEFT_DRAG_SENS);
     }
 
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
