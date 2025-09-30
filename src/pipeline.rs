@@ -194,17 +194,19 @@ impl ParticleRenderPipeline {
         self.camera.zoom(zoom_factor);
     }
 
-    pub fn rotate_camera(&mut self, dx: f64, dy: f64, center_x: f64, center_y: f64, mouse_x: f64, mouse_y: f64) {
-        // 中心点からの相対位置を計算
-        let prev_angle = (center_y - (mouse_y - dy)).atan2(center_x - (mouse_x - dx));
-        let current_angle = (center_y - mouse_y).atan2(center_x - mouse_x);
-        
-        // 角度の差分を計算
+    pub fn rotate_camera(
+        &mut self,
+        x: f64,
+        lx: f64,
+        y: f64,
+        ly: f64,
+        center_x: f64,
+        center_y: f64,
+    ) {
+        let prev_angle = (ly - center_y).atan2(lx - center_x);
+        let current_angle = (y - center_y).atan2(x - center_x);
         let delta_roll = current_angle - prev_angle;
-        
-        self.camera.rotate(
-            delta_roll as f32 * MOUSE_LEFT_DRAG_SENS
-        );
+        self.camera.rotate(delta_roll as f32);
     }
 
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
