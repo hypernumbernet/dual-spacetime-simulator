@@ -61,7 +61,7 @@ impl OrbitCamera {
         self.position = self.target - direction * new_distance;
     }
 
-    pub fn rotate(&mut self, delta_roll: f32, delta_forward: f32) {
+    pub fn rotate(&mut self, delta_roll: f32) {
         let relative = self.target - self.position;
         let distance = relative.length();
         if distance <= std::f32::EPSILON {
@@ -69,7 +69,6 @@ impl OrbitCamera {
         }
         let rotation = Quat::from_axis_angle(relative.normalize(), delta_roll);
         self.up = rotation.mul_vec3(self.up);
-        
     }
 }
 

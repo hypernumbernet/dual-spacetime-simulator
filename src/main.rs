@@ -6,6 +6,7 @@ use crate::pipeline::ParticleRenderPipeline;
 use crate::simulation::SimulationState;
 use crate::types::UiState;
 use crate::ui::draw_ui;
+use std::time::{Duration, Instant};
 use vulkano_util::{
     context::{VulkanoConfig, VulkanoContext},
     window::{VulkanoWindows, WindowDescriptor},
@@ -51,6 +52,8 @@ pub struct App {
     mouse_right_down: bool,
     mouse_middle_down: bool,
     last_cursor_position: Option<(f64, f64)>,
+    last_left_click_time: Option<Instant>,
+    last_left_click_pos: Option<(f64, f64)>,
 }
 
 impl Default for App {
@@ -68,6 +71,8 @@ impl Default for App {
             mouse_right_down: false,
             mouse_middle_down: false,
             last_cursor_position: None,
+            last_left_click_time: None,
+            last_left_click_pos: None,
         }
     }
 }
@@ -153,13 +158,67 @@ impl ApplicationHandler for App {
                 match &event {
                     WindowEvent::MouseInput { state, button, .. } => match button {
                         MouseButton::Left => {
-                            self.mouse_left_down = *state == winit::event::ElementState::Pressed;
+                            let pressed = *state == winit::event::ElementState::Pressed;
+                            if pressed {
+                                let now = Instant::now();
+                                let click_pos = self.last_cursor_position.unwrap_or((0.0, 0.0));
+                                let is_double = if let Some(prev_time) = self.last_left_click_time {
+                                    let dt = now.duration_since(prev_time);
+                                    let max_dt = Duration::from_millis(400);
+                                    let mut close_enough = false;
+                                    if let Some((px, py)) = self.last_left_click_pos {
+                                        let dx = px - click_pos.0;
+                                        let dy = py - click_pos.1;
+                                        let dist2 = dx * dx + dy * dy;
+                                        close_enough = dist2 <= 25.0;
+                                    }
+                                    dt <= max_dt && close_enough
+                                } else {
+                                    false
+                                };
+                                if is_double {
+                                    pipeline.zoom_camera(1.0);
+                                    self.last_left_click_time = None;
+                                    self.last_left_click_pos = None;
+                                } else {
+                                    self.last_left_click_time = Some(now);
+                                    self.last_left_click_pos = Some(click_pos);
+                                }
+                            }
+                            self.mouse_left_down = pressed;
                             if !self.mouse_left_down {
                                 self.last_cursor_position = None;
                             }
                         }
                         MouseButton::Right => {
-                            self.mouse_right_down = *state == winit::event::ElementState::Pressed;
+                            let pressed = *state == winit::event::ElementState::Pressed;
+                            if pressed {
+                                let now = Instant::now();
+                                let click_pos = self.last_cursor_position.unwrap_or((0.0, 0.0));
+                                let is_double = if let Some(prev_time) = self.last_left_click_time {
+                                    let dt = now.duration_since(prev_time);
+                                    let max_dt = Duration::from_millis(400);
+                                    let mut close_enough = false;
+                                    if let Some((px, py)) = self.last_left_click_pos {
+                                        let dx = px - click_pos.0;
+                                        let dy = py - click_pos.1;
+                                        let dist2 = dx * dx + dy * dy;
+                                        close_enough = dist2 <= 25.0;
+                                    }
+                                    dt <= max_dt && close_enough
+                                } else {
+                                    false
+                                };
+                                if is_double {
+                                    pipeline.zoom_camera(-1.0);
+                                    self.last_left_click_time = None;
+                                    self.last_left_click_pos = None;
+                                } else {
+                                    self.last_left_click_time = Some(now);
+                                    self.last_left_click_pos = Some(click_pos);
+                                }
+                            }
+                            self.mouse_right_down = pressed;
                             if !self.mouse_right_down {
                                 self.last_cursor_position = None;
                             }
@@ -182,7 +241,10 @@ impl ApplicationHandler for App {
                                 pipeline.look_around(x - lx, y - ly);
                             }
                             if self.mouse_middle_down {
-                                pipeline.rotate_camera(x - lx, y - ly);
+                                let window_size = renderer.window().inner_size();
+                                let center_x = window_size.width as f64 / 2.0;
+                                let center_y = window_size.height as f64 / 2.0;
+                                pipeline.rotate_camera(x, lx, y, ly, center_x, center_y);
                             }
                         }
                         self.last_cursor_position = Some((x, y));

@@ -17,6 +17,7 @@ use vulkano::{
         DynamicState, GraphicsPipeline, Pipeline, PipelineLayout, PipelineShaderStageCreateInfo,
         graphics::{
             GraphicsPipelineCreateInfo,
+            color_blend::{AttachmentBlend, BlendFactor, BlendOp},
             color_blend::{ColorBlendAttachmentState, ColorBlendState},
             input_assembly::{InputAssemblyState, PrimitiveTopology},
             multisample::MultisampleState,
@@ -32,6 +33,7 @@ use vulkano::{
 
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
 const MOUSE_RIGHT_DRAG_SENS: f32 = 0.001f32;
+const SIZE_RATIO: f32 = 0.06;
 
 #[repr(C)]
 #[derive(BufferContents, Vertex)]
@@ -141,9 +143,20 @@ impl ParticleRenderPipeline {
     pub fn set_particles(&mut self, particles: &[crate::simulation::Particle]) {
         let verts: Vec<ParticleVertex> = particles
             .iter()
-            .map(|p| ParticleVertex {
-                position: p.position,
-                color: [1.0, 1.0, 1.0, 1.0],
+            .enumerate()
+            .map(|(i, p)| {
+                let color = match i % 5 {
+                    0 => [1.0, 0.3, 0.2, 1.0], // Reddish color
+                    1 => [0.2, 0.5, 1.0, 1.0], // Bluish color
+                    2 => [1.0, 0.8, 0.2, 1.0], // Yellowish color
+                    3 => [0.9, 0.4, 1.0, 1.0], // Purplish color
+                    4 => [0.6, 1.0, 0.8, 1.0], // Cyanish color
+                    _ => unreachable!(),
+                };
+                ParticleVertex {
+                    position: p.position,
+                    color,
+                }
             })
             .collect();
         let new_buf = Buffer::from_iter(
@@ -164,19 +177,34 @@ impl ParticleRenderPipeline {
     }
 
     pub fn revolve_camera(&mut self, delta_yaw: f64, delta_pitch: f64) {
-        self.camera.revolve(delta_yaw as f32 * MOUSE_LEFT_DRAG_SENS, delta_pitch as f32 * MOUSE_LEFT_DRAG_SENS);
+        self.camera.revolve(
+            delta_yaw as f32 * MOUSE_LEFT_DRAG_SENS,
+            delta_pitch as f32 * MOUSE_LEFT_DRAG_SENS,
+        );
     }
 
     pub fn look_around(&mut self, dx: f64, dy: f64) {
-        self.camera.look_around(dx as f32 * MOUSE_RIGHT_DRAG_SENS, dy as f32 * MOUSE_RIGHT_DRAG_SENS);
+        self.camera.look_around(
+            dx as f32 * MOUSE_RIGHT_DRAG_SENS,
+            dy as f32 * MOUSE_RIGHT_DRAG_SENS,
+        );
     }
 
     pub fn zoom_camera(&mut self, zoom_factor: f32) {
         self.camera.zoom(zoom_factor);
     }
 
-    pub fn rotate_camera(&mut self, delta_roll: f64, delta_forward: f64) {
-        self.camera.rotate(delta_roll as f32 * MOUSE_LEFT_DRAG_SENS, delta_forward as f32 * MOUSE_LEFT_DRAG_SENS);
+    pub fn rotate_camera(&mut self, dx: f64, dy: f64, center_x: f64, center_y: f64, mouse_x: f64, mouse_y: f64) {
+        // 中心点からの相対位置を計算
+        let prev_angle = (center_y - (mouse_y - dy)).atan2(center_x - (mouse_x - dx));
+        let current_angle = (center_y - mouse_y).atan2(center_x - mouse_x);
+        
+        // 角度の差分を計算
+        let delta_roll = current_angle - prev_angle;
+        
+        self.camera.rotate(
+            delta_roll as f32 * MOUSE_LEFT_DRAG_SENS
+        );
     }
 
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
@@ -272,6 +300,17 @@ impl ParticleRenderPipeline {
                 .unwrap(),
         )
         .unwrap();
+        let cbas = ColorBlendAttachmentState {
+            blend: Some(AttachmentBlend {
+                src_color_blend_factor: BlendFactor::One,
+                dst_color_blend_factor: BlendFactor::One,
+                color_blend_op: BlendOp::Add,
+                src_alpha_blend_factor: BlendFactor::One,
+                dst_alpha_blend_factor: BlendFactor::One,
+                alpha_blend_op: BlendOp::Add,
+            }),
+            ..Default::default()
+        };
         let pipeline_particles = GraphicsPipeline::new(
             device.clone(),
             None,
@@ -287,7 +326,7 @@ impl ParticleRenderPipeline {
                 multisample_state: Some(MultisampleState::default()),
                 color_blend_state: Some(ColorBlendState::with_attachment_states(
                     subpass.num_color_attachments(),
-                    ColorBlendAttachmentState::default(),
+                    cbas,
                 )),
                 dynamic_state: [DynamicState::Viewport].into_iter().collect(),
                 subpass: Some(subpass.clone().into()),
@@ -343,7 +382,6 @@ impl ParticleRenderPipeline {
         .unwrap();
         self.aspect_ratio = dimensions[0] as f32 / dimensions[1] as f32;
         let view_proj = self.compute_view_proj();
-        const SIZE_RATIO: f32 = 0.02;
         let size_scale = dimensions[1] as f32 * SIZE_RATIO;
         let push_constants = PushConstants {
             view_proj: view_proj.to_cols_array_2d(),

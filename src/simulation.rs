@@ -1,4 +1,3 @@
-use crate::types::UiState;
 use rand::Rng;
 
 #[derive(Clone)]
@@ -33,6 +32,6 @@ impl Default for SimulationState {
     }
 }
 
-pub fn update_simulation(_simulation_state: &mut SimulationState, _ui_state: &UiState) {
+//pub fn update_simulation(_simulation_state: &mut SimulationState, _ui_state: &UiState) {
     // Placeholder: Implement particle simulation logic here
-}
+//}
