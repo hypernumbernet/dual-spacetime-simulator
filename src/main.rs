@@ -15,7 +15,7 @@ use winit::{
     application::ApplicationHandler,
     dpi::PhysicalPosition,
     error::EventLoopError,
-    event::{MouseButton, MouseScrollDelta, WindowEvent},
+    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
 };
 
@@ -157,77 +157,12 @@ impl ApplicationHandler for App {
             if !gui.update(&event) {
                 match &event {
                     WindowEvent::MouseInput { state, button, .. } => match button {
-                        MouseButton::Left => {
-                            let pressed = *state == winit::event::ElementState::Pressed;
-                            if pressed {
-                                let now = Instant::now();
-                                let click_pos = self.last_cursor_position.unwrap_or((0.0, 0.0));
-                                let is_double = if let Some(prev_time) = self.last_left_click_time {
-                                    let dt = now.duration_since(prev_time);
-                                    let max_dt = Duration::from_millis(400);
-                                    let mut close_enough = false;
-                                    if let Some((px, py)) = self.last_left_click_pos {
-                                        let dx = px - click_pos.0;
-                                        let dy = py - click_pos.1;
-                                        let dist2 = dx * dx + dy * dy;
-                                        close_enough = dist2 <= 25.0;
-                                    }
-                                    dt <= max_dt && close_enough
-                                } else {
-                                    false
-                                };
-                                if is_double {
-                                    pipeline.zoom_camera(1.0);
-                                    self.last_left_click_time = None;
-                                    self.last_left_click_pos = None;
-                                } else {
-                                    self.last_left_click_time = Some(now);
-                                    self.last_left_click_pos = Some(click_pos);
-                                }
-                            }
-                            self.mouse_left_down = pressed;
-                            if !self.mouse_left_down {
-                                self.last_cursor_position = None;
-                            }
-                        }
+                        MouseButton::Left => self.left_button(state, button),
                         MouseButton::Right => {
-                            let pressed = *state == winit::event::ElementState::Pressed;
-                            if pressed {
-                                let now = Instant::now();
-                                let click_pos = self.last_cursor_position.unwrap_or((0.0, 0.0));
-                                let is_double = if let Some(prev_time) = self.last_left_click_time {
-                                    let dt = now.duration_since(prev_time);
-                                    let max_dt = Duration::from_millis(400);
-                                    let mut close_enough = false;
-                                    if let Some((px, py)) = self.last_left_click_pos {
-                                        let dx = px - click_pos.0;
-                                        let dy = py - click_pos.1;
-                                        let dist2 = dx * dx + dy * dy;
-                                        close_enough = dist2 <= 25.0;
-                                    }
-                                    dt <= max_dt && close_enough
-                                } else {
-                                    false
-                                };
-                                if is_double {
-                                    pipeline.zoom_camera(-1.0);
-                                    self.last_left_click_time = None;
-                                    self.last_left_click_pos = None;
-                                } else {
-                                    self.last_left_click_time = Some(now);
-                                    self.last_left_click_pos = Some(click_pos);
-                                }
-                            }
-                            self.mouse_right_down = pressed;
-                            if !self.mouse_right_down {
-                                self.last_cursor_position = None;
-                            }
+                            self.mouse_right_down = *state == ElementState::Pressed;
                         }
                         MouseButton::Middle => {
-                            self.mouse_middle_down = *state == winit::event::ElementState::Pressed;
-                            if !self.mouse_middle_down {
-                                self.last_cursor_position = None;
-                            }
+                            self.mouse_middle_down = *state == ElementState::Pressed;
                         }
                         _ => {}
                     },
@@ -268,5 +203,55 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         let renderer = self.windows.get_primary_renderer().unwrap();
         renderer.window().request_redraw();
+    }
+}
+
+impl App {
+    fn left_button(&mut self, state: &ElementState, _button: &MouseButton) {
+        let pressed = *state == ElementState::Pressed;
+        self.mouse_left_down = pressed;
+        if pressed {
+            let now = Instant::now();
+            let max_dt = Duration::from_millis(400);
+            let Some(click_pos) = self.last_cursor_position else {
+                return;
+            };
+            let Some(last_click_time) = self.last_left_click_time else {
+                self.last_left_click_time = Some(now);
+                self.last_left_click_pos = Some(click_pos);
+                return;
+            };
+            let dt = now.duration_since(last_click_time);
+            let is_double = if dt <= max_dt {
+                let mut close_enough = false;
+                if let Some((px, py)) = self.last_left_click_pos {
+                    let dx = px - click_pos.0;
+                    let dy = py - click_pos.1;
+                    let dist2 = dx * dx + dy * dy;
+                    close_enough = dist2 <= 25.0;
+                }
+                close_enough
+            } else {
+                false
+            };
+            if is_double {
+                if let Some(pipeline) = self.render_pipeline.as_mut() {
+                    pipeline.zoom_camera(1.0);
+                }
+                self.last_left_click_time = None;
+                self.last_left_click_pos = None;
+            } else {
+                self.last_left_click_time = Some(now);
+                self.last_left_click_pos = Some(click_pos);
+            }
+        }
+    }
+
+    fn right_button(&mut self) {
+        self.mouse_right_down = true;
+    }
+
+    fn middle_button(&mut self) {
+        self.mouse_middle_down = true;
     }
 }
