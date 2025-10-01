@@ -54,9 +54,7 @@ pub struct App {
     last_cursor_position: Option<(f64, f64)>,
     last_left_click_time: Option<Instant>,
     last_left_click_pos: Option<(f64, f64)>,
-    /// Last time we advanced the simulation (used to trigger once-per-second ticks)
     last_advance: std::time::Instant,
-    /// Tracks previous running state to detect transitions and reset the timer
     prev_is_running: bool,
 }
 
@@ -274,36 +272,29 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         let renderer = self.windows.get_primary_renderer().unwrap();
         renderer.window().request_redraw();
-
-        // Handle once-per-second simulation ticks when the UI is running.
-        // We detect transitions from paused -> running to reset the timer so
-        // the simulation doesn't immediately jump by a large elapsed duration
-        // when the user resumes.
+        const TARGET_FPS: u32 = 60;
+        const DT: f64 = 1.0 / TARGET_FPS as f64;
         if self.ui_state.is_running && !self.prev_is_running {
-            // just started running
             self.last_advance = Instant::now();
         }
-
         if self.ui_state.is_running {
             let now = Instant::now();
-            let elapsed = now.duration_since(self.last_advance);
-            if elapsed >= Duration::from_secs(1) {
-                let secs = elapsed.as_secs();
-                if secs > 0 {
-                    // advance simulation by whole seconds elapsed
-                    self.simulation_state.advance_time(secs);
-                    // update UI indicators
-                    self.ui_state.simulation_time += secs as f64;
-                    self.ui_state.time_per_frame = secs as u64;
-                    // advance the reference time forward so we don't re-apply the same
-                    // elapsed interval. Use now so partial seconds are accounted for
-                    // in the next check.
-                    self.last_advance = now;
+            let mut acc = now.duration_since(self.last_advance).as_secs_f64();
+            if acc >= DT {
+                let mut steps = (acc / DT).floor() as usize;
+                let max_steps = 10_000usize;
+                if steps > max_steps {
+                    steps = max_steps;
                 }
+                for _ in 0..steps {
+                    self.simulation_state.advance_time(DT);
+                    self.ui_state.simulation_time += DT;
+                    self.ui_state.time_per_frame = DT;
+                    acc -= DT;
+                }
+                self.last_advance = now - Duration::from_secs_f64(acc);
             }
         }
-
-        // remember running state for next tick
         self.prev_is_running = self.ui_state.is_running;
     }
 }

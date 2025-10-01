@@ -3,7 +3,7 @@ use rand::Rng;
 #[derive(Clone)]
 pub struct SimulationState {
     pub particles: Vec<Particle>,
-    pub time: u64, // in seconds
+    pub time: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -26,16 +26,21 @@ impl SimulationState {
                     rng.gen_range(-0.01..0.01),
                     rng.gen_range(-0.01..0.01),
                     rng.gen_range(-0.01..0.01),
-                ],})
+                ],
+            })
             .collect();
-        Self { particles, time: 0}
+        Self {
+            particles,
+            time: 0.0,
+        }
     }
-    
-    pub fn advance_time(&mut self, delta_seconds: u64) {
+
+    pub fn advance_time(&mut self, delta_seconds: f64) {
         self.time += delta_seconds;
+        let dt_f32 = delta_seconds as f32;
         for particle in &mut self.particles {
             for i in 0..3 {
-                particle.position[i] += particle.speed[i] * delta_seconds as f32;
+                particle.position[i] += particle.speed[i] * dt_f32;
             }
         }
     }
@@ -46,7 +51,3 @@ impl Default for SimulationState {
         Self::new(0)
     }
 }
-
-//pub fn update_simulation(_simulation_state: &mut SimulationState, _ui_state: &UiState) {
-    // Placeholder: Implement particle simulation logic here
-//}

@@ -9,7 +9,7 @@ pub struct UiState {
     pub fps: u32,
     pub frame: u32,
     pub simulation_time: f64,
-    pub time_per_frame: u64,
+    pub time_per_frame: f64,
     pub is_running: bool,
 }
 
@@ -25,7 +25,7 @@ impl Default for UiState {
             fps: 0,
             frame: 1,
             simulation_time: 0.0,
-            time_per_frame: 0,
+            time_per_frame: 1.0 / 60.0,
             is_running: false,
         }
     }
