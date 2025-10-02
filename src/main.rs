@@ -54,6 +54,8 @@ pub struct App {
     last_cursor_position: Option<(f64, f64)>,
     last_left_click_time: Option<Instant>,
     last_left_click_pos: Option<(f64, f64)>,
+    last_advance: std::time::Instant,
+    prev_is_running: bool,
 }
 
 impl Default for App {
@@ -73,6 +75,8 @@ impl Default for App {
             last_cursor_position: None,
             last_left_click_time: None,
             last_left_click_pos: None,
+            last_advance: Instant::now(),
+            prev_is_running: false,
         }
     }
 }
@@ -203,6 +207,30 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         let renderer = self.windows.get_primary_renderer().unwrap();
         renderer.window().request_redraw();
+        const TARGET_FPS: u32 = 60;
+        const DT: f64 = 1.0 / TARGET_FPS as f64;
+        if self.ui_state.is_running && !self.prev_is_running {
+            self.last_advance = Instant::now();
+        }
+        if self.ui_state.is_running {
+            let now = Instant::now();
+            let mut acc = now.duration_since(self.last_advance).as_secs_f64();
+            if acc >= DT {
+                let mut steps = (acc / DT).floor() as usize;
+                let max_steps = 10_000usize;
+                if steps > max_steps {
+                    steps = max_steps;
+                }
+                for _ in 0..steps {
+                    self.simulation_state.advance_time(DT);
+                    self.ui_state.simulation_time += DT;
+                    self.ui_state.time_per_frame = DT;
+                    acc -= DT;
+                }
+                self.last_advance = now - Duration::from_secs_f64(acc);
+            }
+        }
+        self.prev_is_running = self.ui_state.is_running;
     }
 }
 
