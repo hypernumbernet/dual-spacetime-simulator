@@ -72,11 +72,6 @@ impl OrbitCamera {
     }
 
     pub fn y_top(&mut self) {
-        let relative = self.target - self.position;
-        if relative.length_squared() == 0.0 {
-            self.up = Vec3::Y;
-            return;
-        }
         self.up = get_closest_perp_unit_to_y(self.position, self.target);
     }
 
@@ -119,7 +114,7 @@ impl OrbitCamera {
 
 fn get_closest_perp_unit_to_y(position: Vec3, target: Vec3) -> Vec3 {
     let dir = (target - position).normalize_or_zero();
-    if dir.length_squared() == 0.0 {
+    if dir == Vec3::ZERO {
         return Vec3::Y;
     }
     let y = Vec3::Y;
