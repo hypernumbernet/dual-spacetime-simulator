@@ -209,6 +209,10 @@ impl ParticleRenderPipeline {
         self.camera.rotate(delta_roll as f32);
     }
 
+    pub fn y_top(&mut self) {
+        self.camera.y_top();
+    }
+
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
         vulkano::ordered_passes_renderpass!(
             device,

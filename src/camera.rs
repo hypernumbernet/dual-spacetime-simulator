@@ -70,6 +70,15 @@ impl OrbitCamera {
         let rotation = Quat::from_axis_angle(relative.normalize(), delta_roll);
         self.up = rotation.mul_vec3(self.up);
     }
+
+    pub fn y_top(&mut self) {
+        let relative = self.target - self.position;
+        if relative.length_squared() == 0.0 {
+            self.up = Vec3::Y;
+            return;
+        }
+        self.up = get_closest_perp_unit_to_y(self.position, self.target);
+    }
 }
 
 fn get_closest_perp_unit_to_y(position: Vec3, target: Vec3) -> Vec3 {

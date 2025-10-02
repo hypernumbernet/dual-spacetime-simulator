@@ -29,6 +29,9 @@ mod ui;
 mod ui_styles;
 mod utils;
 
+const DOUBLE_CLICK_MILLIS: u64 = 400;
+const DOUBLE_CLICK_DIST: f64 = 25.0;
+
 pub fn main() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new()?;
     let mut app = App::default();
@@ -240,7 +243,7 @@ impl App {
         self.mouse_left_down = pressed;
         if pressed {
             let now = Instant::now();
-            let max_dt = Duration::from_millis(400);
+            let max_dt = Duration::from_millis(DOUBLE_CLICK_MILLIS);
             let Some(click_pos) = self.last_cursor_position else {
                 return;
             };
@@ -256,7 +259,7 @@ impl App {
                     let dx = px - click_pos.0;
                     let dy = py - click_pos.1;
                     let dist2 = dx * dx + dy * dy;
-                    close_enough = dist2 <= 25.0;
+                    close_enough = dist2 <= DOUBLE_CLICK_DIST;
                 }
                 close_enough
             } else {
@@ -264,7 +267,7 @@ impl App {
             };
             if is_double {
                 if let Some(pipeline) = self.render_pipeline.as_mut() {
-                    pipeline.zoom_camera(1.0);
+                    pipeline.y_top();
                 }
                 self.last_left_click_time = None;
                 self.last_left_click_pos = None;
