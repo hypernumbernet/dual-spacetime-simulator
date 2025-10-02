@@ -213,6 +213,10 @@ impl ParticleRenderPipeline {
         self.camera.y_top();
     }
 
+    pub fn center_target_on_origin(&mut self) {
+        self.camera.center_target_on_origin();
+    }
+
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
         vulkano::ordered_passes_renderpass!(
             device,

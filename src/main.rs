@@ -57,6 +57,8 @@ pub struct App {
     last_cursor_position: Option<(f64, f64)>,
     last_left_click_time: Option<Instant>,
     last_left_click_pos: Option<(f64, f64)>,
+    last_right_click_time: Option<Instant>,
+    last_right_click_pos: Option<(f64, f64)>,
     last_advance: std::time::Instant,
     prev_is_running: bool,
 }
@@ -78,6 +80,8 @@ impl Default for App {
             last_cursor_position: None,
             last_left_click_time: None,
             last_left_click_pos: None,
+            last_right_click_time: None,
+            last_right_click_pos: None,
             last_advance: Instant::now(),
             prev_is_running: false,
         }
@@ -165,9 +169,7 @@ impl ApplicationHandler for App {
                 match &event {
                     WindowEvent::MouseInput { state, button, .. } => match button {
                         MouseButton::Left => self.left_button(state, button),
-                        MouseButton::Right => {
-                            self.mouse_right_down = *state == ElementState::Pressed;
-                        }
+                        MouseButton::Right => self.right_button(state, button),
                         MouseButton::Middle => {
                             self.mouse_middle_down = *state == ElementState::Pressed;
                         }
@@ -278,8 +280,44 @@ impl App {
         }
     }
 
-    fn right_button(&mut self) {
-        self.mouse_right_down = true;
+    fn right_button(&mut self, state: &ElementState, _button: &MouseButton) {
+        let pressed = *state == ElementState::Pressed;
+        self.mouse_right_down = pressed;
+        if pressed {
+            let now = Instant::now();
+            let max_dt = Duration::from_millis(DOUBLE_CLICK_MILLIS);
+            let Some(click_pos) = self.last_cursor_position else {
+                return;
+            };
+            let Some(last_click_time) = self.last_right_click_time else {
+                self.last_right_click_time = Some(now);
+                self.last_right_click_pos = Some(click_pos);
+                return;
+            };
+            let dt = now.duration_since(last_click_time);
+            let is_double = if dt <= max_dt {
+                let mut close_enough = false;
+                if let Some((px, py)) = self.last_right_click_pos {
+                    let dx = px - click_pos.0;
+                    let dy = py - click_pos.1;
+                    let dist2 = dx * dx + dy * dy;
+                    close_enough = dist2 <= DOUBLE_CLICK_DIST;
+                }
+                close_enough
+            } else {
+                false
+            };
+            if is_double {
+                if let Some(pipeline) = self.render_pipeline.as_mut() {
+                    pipeline.center_target_on_origin();
+                }
+                self.last_right_click_time = None;
+                self.last_right_click_pos = None;
+            } else {
+                self.last_right_click_time = Some(now);
+                self.last_right_click_pos = Some(click_pos);
+            }
+        }
     }
 
     fn middle_button(&mut self) {
