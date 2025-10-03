@@ -9,6 +9,7 @@ pub struct OrbitCamera {
     pub target: Vec3,
     pub up: Vec3,
     animating_y_top: u32,
+    animating_to_origin: u32,
     start_time: Option<Instant>,
 }
 
@@ -20,6 +21,7 @@ impl OrbitCamera {
             target,
             up,
             animating_y_top: 0,
+            animating_to_origin: 0,
             start_time: None,
         }
     }
@@ -80,11 +82,25 @@ impl OrbitCamera {
         self.start_time = Some(Instant::now());
     }
 
+    pub fn center_target_on_origin(&mut self) {
+        self.animating_to_origin = 100;
+        self.start_time = Some(Instant::now());
+    }
+
     pub fn update_animation(&mut self) {
         if let Some(start) = self.start_time {
             let dt = start.elapsed().as_secs_f32();
             if dt >= ANIMATION_DURATION {
-                if self.animating_y_top > 0 {
+                if self.animating_to_origin > 0 {
+                    if let Some(end) = get_up_center_origin(self.position, self.target, self.up) {
+                        self.up = self.up.slerp(end.0, 0.15).normalize();
+                        self.target = self.target * 0.85 + Vec3::ZERO * 0.15;
+                        self.animating_to_origin -= 1;
+                        self.start_time = Some(Instant::now());
+                    } else {
+                        self.animating_to_origin = 0;
+                    }
+                } else if self.animating_y_top > 0 {
                     let end = get_closest_perp_unit_to_y(self.position, self.target);
                     if self.up.abs_diff_eq(end, 0.01) {
                         self.animating_y_top = 0;
@@ -99,39 +115,6 @@ impl OrbitCamera {
                 }
             }
         }
-    }
-
-    pub fn center_target_on_origin(&mut self) {
-        let relative = self.target - self.position;
-        if relative.length_squared() <= EPSILON {
-            return;
-        }
-        let new_relative = Vec3::ZERO - self.position;
-        if new_relative.length_squared() <= EPSILON {
-            return;
-        }
-        let rel_n = relative.normalize();
-        let new_n = new_relative.normalize();
-        let dot = (rel_n.dot(new_n)).clamp(-1.0, 1.0);
-        if dot > 1.0 - EPSILON {
-            return;
-        }
-        let mut axis = rel_n.cross(new_n);
-        if axis.length_squared() < EPSILON {
-            if dot < 0.0 {
-                axis = rel_n.cross(Vec3::X);
-                if axis.length_squared() < EPSILON {
-                    axis = rel_n.cross(Vec3::Z);
-                }
-            } else {
-                return;
-            }
-        }
-        let axis = axis.normalize();
-        let angle = dot.acos();
-        let rotation = Quat::from_axis_angle(axis, angle);
-        self.up = rotation.mul_vec3(self.up);
-        self.target = Vec3::ZERO;
     }
 }
 
@@ -153,4 +136,36 @@ fn get_closest_perp_unit_to_y(position: Vec3, target: Vec3) -> Vec3 {
         }
         v.normalize()
     }
+}
+
+fn get_up_center_origin(position: Vec3, target: Vec3, up: Vec3) -> Option<(Vec3, Vec3)> {
+    let relative = target - position;
+    if relative.length_squared() <= EPSILON {
+        return None;
+    }
+    let new_relative = Vec3::ZERO - position;
+    if new_relative.length_squared() <= EPSILON {
+        return None;
+    }
+    let rel_n = relative.normalize();
+    let new_n = new_relative.normalize();
+    let dot = (rel_n.dot(new_n)).clamp(-1.0, 1.0);
+    if dot > 1.0 - EPSILON {
+        return None;
+    }
+    let mut axis = rel_n.cross(new_n);
+    if axis.length_squared() < EPSILON {
+        if dot < 0.0 {
+            axis = rel_n.cross(Vec3::X);
+            if axis.length_squared() < EPSILON {
+                axis = rel_n.cross(Vec3::Z);
+            }
+        } else {
+            return None;
+        }
+    }
+    let axis = axis.normalize();
+    let angle = dot.acos();
+    let rotation = Quat::from_axis_angle(axis, angle);
+    Some((rotation.mul_vec3(up), new_relative))
 }
