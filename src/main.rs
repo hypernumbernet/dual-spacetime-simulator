@@ -168,11 +168,9 @@ impl ApplicationHandler for App {
             if !gui.update(&event) {
                 match &event {
                     WindowEvent::MouseInput { state, button, .. } => match button {
-                        MouseButton::Left => self.left_button(state, button),
-                        MouseButton::Right => self.right_button(state, button),
-                        MouseButton::Middle => {
-                            self.mouse_middle_down = *state == ElementState::Pressed;
-                        }
+                        MouseButton::Left => self.left_button(state),
+                        MouseButton::Right => self.right_button(state),
+                        MouseButton::Middle => self.middle_button(state),
                         _ => {}
                     },
                     WindowEvent::CursorMoved { position, .. } => {
@@ -240,7 +238,7 @@ impl ApplicationHandler for App {
 }
 
 impl App {
-    fn left_button(&mut self, state: &ElementState, _button: &MouseButton) {
+    fn left_button(&mut self, state: &ElementState) {
         let pressed = *state == ElementState::Pressed;
         self.mouse_left_down = pressed;
         if pressed {
@@ -280,7 +278,7 @@ impl App {
         }
     }
 
-    fn right_button(&mut self, state: &ElementState, _button: &MouseButton) {
+    fn right_button(&mut self, state: &ElementState) {
         let pressed = *state == ElementState::Pressed;
         self.mouse_right_down = pressed;
         if pressed {
@@ -320,7 +318,8 @@ impl App {
         }
     }
 
-    fn middle_button(&mut self) {
-        self.mouse_middle_down = true;
+    fn middle_button(&mut self, state: &ElementState) {
+        let pressed = *state == ElementState::Pressed;
+        self.mouse_middle_down = pressed;
     }
 }

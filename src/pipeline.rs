@@ -34,6 +34,8 @@ use vulkano::{
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
 const MOUSE_RIGHT_DRAG_SENS: f32 = 0.001f32;
 const SIZE_RATIO: f32 = 0.06;
+const INITIAL_POSITION: Vec3 = Vec3::new(1.6, -1.6, 3.0);
+const INITIAL_TARGET: Vec3 = Vec3::new(0.0, 0.0, 0.0);
 
 #[repr(C)]
 #[derive(BufferContents, Vertex)]
@@ -122,9 +124,7 @@ impl ParticleRenderPipeline {
             },
         )
         .into();
-        let initial_position = Vec3::new(1.6, -1.6, 3.0);
-        let initial_target = Vec3::new(0.0, 0.0, 0.0);
-        let camera = OrbitCamera::new(initial_position, initial_target);
+        let camera = OrbitCamera::new(INITIAL_POSITION, INITIAL_TARGET);
         Self {
             queue,
             render_pass,

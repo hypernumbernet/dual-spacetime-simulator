@@ -20,8 +20,7 @@ impl OrbitCamera {
 
     pub fn revolve(&mut self, delta_yaw: f32, delta_pitch: f32) {
         let relative = self.target - self.position;
-        let distance = relative.length();
-        if distance <= std::f32::EPSILON {
+        if relative.length_squared() <= std::f32::EPSILON {
             return;
         }
         let axis = self.up.cross(relative).normalize();
@@ -37,8 +36,7 @@ impl OrbitCamera {
 
     pub fn look_around(&mut self, dx: f32, dy: f32) {
         let relative = self.target - self.position;
-        let distance = relative.length();
-        if distance <= std::f32::EPSILON {
+        if relative.length_squared() <= std::f32::EPSILON {
             return;
         }
         let rotation = Quat::from_axis_angle(self.up, dx);
@@ -49,11 +47,12 @@ impl OrbitCamera {
         let rotation = Quat::from_axis_angle(axis, dy);
         let relative = rotation.mul_vec3(relative);
         self.target = self.position + relative;
+        self.up = rotation.mul_vec3(self.up);
     }
 
     pub fn zoom(&mut self, zoom_factor: f32) {
         let direction = (self.target - self.position).normalize_or_zero();
-        if direction.length_squared() == 0.0 {
+        if direction == Vec3::ZERO {
             return;
         }
         let distance = (self.target - self.position).length();
@@ -63,8 +62,7 @@ impl OrbitCamera {
 
     pub fn rotate(&mut self, delta_roll: f32) {
         let relative = self.target - self.position;
-        let distance = relative.length();
-        if distance <= std::f32::EPSILON {
+        if relative.length_squared() <= std::f32::EPSILON {
             return;
         }
         let rotation = Quat::from_axis_angle(relative.normalize(), delta_roll);
@@ -77,19 +75,17 @@ impl OrbitCamera {
 
     pub fn center_target_on_origin(&mut self) {
         let relative = self.target - self.position;
-        let new_relative = Vec3::ZERO - self.position;
-        if new_relative.length_squared() == 0.0 {
+        if relative.length_squared() <= std::f32::EPSILON {
             return;
         }
-        if relative.length_squared() == 0.0 {
-            self.target = Vec3::ZERO;
+        let new_relative = Vec3::ZERO - self.position;
+        if new_relative.length_squared() <= std::f32::EPSILON {
             return;
         }
         let rel_n = relative.normalize();
         let new_n = new_relative.normalize();
         let dot = (rel_n.dot(new_n)).clamp(-1.0, 1.0);
         if dot > 1.0 - EPSILON {
-            self.target = Vec3::ZERO;
             return;
         }
         let mut axis = rel_n.cross(new_n);
@@ -100,7 +96,6 @@ impl OrbitCamera {
                     axis = rel_n.cross(Vec3::Z);
                 }
             } else {
-                self.target = Vec3::ZERO;
                 return;
             }
         }
