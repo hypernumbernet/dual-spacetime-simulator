@@ -217,6 +217,10 @@ impl ParticleRenderPipeline {
         self.camera.center_target_on_origin();
     }
 
+    pub fn update_animation(&mut self) {
+        self.camera.update_animation();
+    }
+
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
         vulkano::ordered_passes_renderpass!(
             device,

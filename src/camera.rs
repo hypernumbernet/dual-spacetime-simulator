@@ -1,11 +1,15 @@
 use glam::{Quat, Vec3};
+use std::f32::EPSILON;
+use std::time::Instant;
 
-const EPSILON: f32 = 1e-6;
+const ANIMATION_DURATION: f32 = 0.008;
 
 pub struct OrbitCamera {
     pub position: Vec3,
     pub target: Vec3,
     pub up: Vec3,
+    animating_y_top: u32,
+    start_time: Option<Instant>,
 }
 
 impl OrbitCamera {
@@ -15,12 +19,14 @@ impl OrbitCamera {
             position,
             target,
             up,
+            animating_y_top: 0,
+            start_time: None,
         }
     }
 
     pub fn revolve(&mut self, delta_yaw: f32, delta_pitch: f32) {
         let relative = self.target - self.position;
-        if relative.length_squared() <= std::f32::EPSILON {
+        if relative.length_squared() <= EPSILON {
             return;
         }
         let axis = self.up.cross(relative).normalize();
@@ -36,7 +42,7 @@ impl OrbitCamera {
 
     pub fn look_around(&mut self, dx: f32, dy: f32) {
         let relative = self.target - self.position;
-        if relative.length_squared() <= std::f32::EPSILON {
+        if relative.length_squared() <= EPSILON {
             return;
         }
         let rotation = Quat::from_axis_angle(self.up, dx);
@@ -62,7 +68,7 @@ impl OrbitCamera {
 
     pub fn rotate(&mut self, delta_roll: f32) {
         let relative = self.target - self.position;
-        if relative.length_squared() <= std::f32::EPSILON {
+        if relative.length_squared() <= EPSILON {
             return;
         }
         let rotation = Quat::from_axis_angle(relative.normalize(), delta_roll);
@@ -70,16 +76,38 @@ impl OrbitCamera {
     }
 
     pub fn y_top(&mut self) {
-        self.up = get_closest_perp_unit_to_y(self.position, self.target);
+        self.animating_y_top = 100;
+        self.start_time = Some(Instant::now());
+    }
+
+    pub fn update_animation(&mut self) {
+        if let Some(start) = self.start_time {
+            let dt = start.elapsed().as_secs_f32();
+            if dt >= ANIMATION_DURATION {
+                if self.animating_y_top > 0 {
+                    let end = get_closest_perp_unit_to_y(self.position, self.target);
+                    if self.up.abs_diff_eq(end, 0.01) {
+                        self.animating_y_top = 0;
+                        self.up = self.up.slerp(end, 1.0).normalize();
+                        return;
+                    }
+                    self.up = self.up.slerp(end, 0.15).normalize();
+                    self.animating_y_top -= 1;
+                    self.start_time = Some(Instant::now());
+                } else {
+                    self.start_time = None;
+                }
+            }
+        }
     }
 
     pub fn center_target_on_origin(&mut self) {
         let relative = self.target - self.position;
-        if relative.length_squared() <= std::f32::EPSILON {
+        if relative.length_squared() <= EPSILON {
             return;
         }
         let new_relative = Vec3::ZERO - self.position;
-        if new_relative.length_squared() <= std::f32::EPSILON {
+        if new_relative.length_squared() <= EPSILON {
             return;
         }
         let rel_n = relative.normalize();

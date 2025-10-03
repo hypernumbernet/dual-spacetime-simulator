@@ -233,6 +233,9 @@ impl ApplicationHandler for App {
                 self.last_advance = now - Duration::from_secs_f64(acc);
             }
         }
+        if let Some(pipeline) = self.render_pipeline.as_mut() {
+            pipeline.update_animation();
+        }
         self.prev_is_running = self.ui_state.is_running;
     }
 }
