@@ -11,7 +11,8 @@ pub struct UiState {
     pub simulation_time: f64,
     pub time_per_frame: f64,
     pub is_running: bool,
-    pub max_fps: Option<u32>,
+    pub max_fps: u32,
+    pub unlimited_fps: bool,
 }
 
 impl Default for UiState {
@@ -28,7 +29,8 @@ impl Default for UiState {
             simulation_time: 0.0,
             time_per_frame: 1.0 / 60.0,
             is_running: false,
-            max_fps: Some(60),
+            max_fps: 60,
+            unlimited_fps: false,
         }
     }
 }

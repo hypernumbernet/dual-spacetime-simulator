@@ -6,6 +6,7 @@ use crate::pipeline::ParticleRenderPipeline;
 use crate::simulation::SimulationState;
 use crate::types::UiState;
 use crate::ui::draw_ui;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use vulkano_util::{
     context::{VulkanoConfig, VulkanoContext},
@@ -50,7 +51,8 @@ pub struct App {
     render_pipeline: Option<ParticleRenderPipeline>,
     gui: Option<Gui>,
     ui_state: UiState,
-    simulation_state: SimulationState,
+    simulation_state: Arc<RwLock<SimulationState>>,
+    thread_pool: rayon::ThreadPool,
     mouse_left_down: bool,
     mouse_right_down: bool,
     mouse_middle_down: bool,
@@ -60,20 +62,24 @@ pub struct App {
     last_right_click_time: Option<Instant>,
     last_right_click_pos: Option<(f64, f64)>,
     last_advance: std::time::Instant,
-    prev_is_running: bool,
 }
 
 impl Default for App {
     fn default() -> Self {
         let context = VulkanoContext::new(VulkanoConfig::default());
         let windows = VulkanoWindows::default();
+        let thread_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_cpus::get())
+            .build()
+            .expect("Failed to build Rayon thread pool");
         Self {
             context,
             windows,
             render_pipeline: None,
             gui: None,
             ui_state: UiState::default(),
-            simulation_state: SimulationState::default(),
+            simulation_state: Arc::new(RwLock::new(SimulationState::default())),
+            thread_pool,
             mouse_left_down: false,
             mouse_right_down: false,
             mouse_middle_down: false,
@@ -83,7 +89,6 @@ impl Default for App {
             last_right_click_time: None,
             last_right_click_pos: None,
             last_advance: Instant::now(),
-            prev_is_running: false,
         }
     }
 }
@@ -120,7 +125,7 @@ impl ApplicationHandler for App {
             GuiConfig::default(),
         ));
         self.render_pipeline = Some(render_pipeline);
-        self.simulation_state = SimulationState::new(self.ui_state.particle_count);
+        *self.simulation_state.write().unwrap() = SimulationState::new(self.ui_state.particle_count);
     }
 
     fn window_event(
@@ -151,7 +156,8 @@ impl ApplicationHandler for App {
                 });
                 match renderer.acquire(None, |_| {}) {
                     Ok(future) => {
-                        pipeline.set_particles(&self.simulation_state.particles);
+                        let sim = self.simulation_state.read().unwrap();
+                        pipeline.set_particles(&sim.particles);
                         let after_future =
                             pipeline.render(future, renderer.swapchain_image_view(), gui);
                         renderer.present(after_future, true);
@@ -210,35 +216,33 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         let renderer = self.windows.get_primary_renderer().unwrap();
         renderer.window().request_redraw();
-        let target_fps = self.ui_state.max_fps.unwrap_or(1000);
-        if self.ui_state.is_running && !self.prev_is_running {
-            self.last_advance = Instant::now();
-        }
-        if self.ui_state.is_running {
-            let now = Instant::now();
-            let mut acc = now.duration_since(self.last_advance).as_secs_f64();
-            let steps_per_sec = target_fps as f64;
-            let mut steps = (acc * steps_per_sec).floor() as usize;
-            let max_steps = 10_000usize;
-            if steps > max_steps {
-                steps = max_steps;
-            }
-            for _ in 0..steps {
-                self.simulation_state.advance_time(1.0);
-                self.ui_state.simulation_time += 1.0;
-                acc -= 1.0 / steps_per_sec;
-            }
-            self.ui_state.time_per_frame = 1.0;
-            self.last_advance = now - Duration::from_secs_f64(acc);
-        }
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
         }
-        self.prev_is_running = self.ui_state.is_running;
+        self.simulation_action();
     }
 }
 
 impl App {
+    fn simulation_action(&mut self) {
+        if !self.ui_state.is_running {
+            return;
+        }
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_advance).as_secs_f64();
+        let target_fps = self.ui_state.max_fps as f64;
+        if !self.ui_state.unlimited_fps && dt < 1.0 / target_fps {
+            return;
+        }
+        let shared_sim = self.simulation_state.clone();
+        self.thread_pool.spawn(move || {
+            let mut sim = shared_sim.write().unwrap();
+            sim.advance_time(1.0);
+            std::thread::sleep(Duration::from_millis(100));
+        });
+        self.last_advance = now;
+    }
+
     fn left_button(&mut self, state: &ElementState) {
         let pressed = *state == ElementState::Pressed;
         self.mouse_left_down = pressed;

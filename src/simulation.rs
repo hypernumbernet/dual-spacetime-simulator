@@ -11,7 +11,7 @@ pub struct SimulationState {
 #[derive(Clone, Copy)]
 pub struct Particle {
     pub position: [f32; 3],
-    pub speed: [f32; 3],
+    pub velocity: [f32; 3],
 }
 
 impl SimulationState {
@@ -24,7 +24,7 @@ impl SimulationState {
                     rng.gen_range(-1.0..1.0),
                     rng.gen_range(-1.0..1.0),
                 ],
-                speed: [
+                velocity: [
                     rng.gen_range(-0.01..0.01),
                     rng.gen_range(-0.01..0.01),
                     rng.gen_range(-0.01..0.01),
@@ -50,7 +50,7 @@ impl SimulationState {
             pool.install(|| {
                 self.particles.par_iter_mut().for_each(|particle| {
                     for i in 0..3 {
-                        particle.position[i] += particle.speed[i] * dt_f32;
+                        particle.position[i] += particle.velocity[i] * dt_f32;
                     }
                 });
             });

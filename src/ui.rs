@@ -4,7 +4,7 @@ use egui::{Button, DragValue, Label, Slider, vec2};
 
 pub fn draw_ui(ui_state: &mut UiState, ctx: &egui::Context) {
     egui::Window::new("Control Panel")
-        .resizable(true)
+        .resizable(false)
         .collapsible(true)
         .default_width(ui_state.input_panel_width)
         .show(ctx, |ui| {
@@ -48,15 +48,9 @@ pub fn draw_ui(ui_state: &mut UiState, ctx: &egui::Context) {
             );
             ui.add(Label::new("Max FPS:"));
             ui.horizontal(|ui| {
-                let mut is_unlimited = ui_state.max_fps.is_none();
-                ui.checkbox(&mut is_unlimited, "∞");
-                if is_unlimited {
-                    ui_state.max_fps = None;
-                } else if ui_state.max_fps.is_none() {
-                    ui_state.max_fps = Some(60);
-                }
-                if let Some(ref mut max_fps) = ui_state.max_fps {
-                    ui.add(Slider::new(max_fps, 1..=120));
+                ui.checkbox(&mut ui_state.unlimited_fps, "∞");
+                if !ui_state.unlimited_fps {
+                    ui.add(Slider::new(&mut ui_state.max_fps, 1..=120));
                 }
             });
         });
