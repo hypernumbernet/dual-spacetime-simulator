@@ -5,7 +5,7 @@ use rayon::prelude::*;
 pub struct SimulationState {
     pub particles: Vec<Particle>,
     pub time: f64,
-    pub thread_pool: rayon::ThreadPool,
+    pub thread_pool: Option<rayon::ThreadPool>,
 }
 
 #[derive(Clone, Copy)]
@@ -39,25 +39,31 @@ impl SimulationState {
         Self {
             particles,
             time: 0.0,
-            thread_pool: thread_pool,
+            thread_pool: Some(thread_pool),
         }
     }
 
     pub fn advance_time(&mut self, delta_seconds: f64) {
         self.time += delta_seconds;
         let dt_f32 = delta_seconds as f32;
-        self.thread_pool.install(|| {
-            self.particles.par_iter_mut().for_each(|particle| {
-                for i in 0..3 {
-                    particle.position[i] += particle.speed[i] * dt_f32;
-                }
+        if let Some(pool) = &self.thread_pool {
+            pool.install(|| {
+                self.particles.par_iter_mut().for_each(|particle| {
+                    for i in 0..3 {
+                        particle.position[i] += particle.speed[i] * dt_f32;
+                    }
+                });
             });
-        });
+        }
     }
 }
 
 impl Default for SimulationState {
     fn default() -> Self {
-        Self::new(0)
+        Self {
+            particles: vec![],
+            time: 0.0,
+            thread_pool: None,
+        }
     }
 }
