@@ -1,12 +1,14 @@
 # プロジェクトの全体設計概要
 
-このプロジェクトは、Rust言語を使用して物理粒子シミュレーションアプリケーションを作成します。Vulkanoを活用したグラフィックスレンダリングとeguiによるUIを統合し、3D空間での粒子シミュレーションを実現します。設計の原則として、モジュール性と構造化を重視し、処理を関数単位に分割して可読性を高めます。テストコードは、主要な関数（例: 粒子更新ロジックやレンダリング関数）に対してユニットテストを追加し、無理のない範囲でカバーします。
+このプロジェクトは、Rust言語を使用して物理粒子シミュレーションアプリケーションを作成します。Vulkanoを活用したグラフィックスレンダリングとeguiによるUIを統合し、3D空間での粒子シミュレーションを実現します。設計の原則として、モジュール性と構造化を重視し、処理を関数単位に分割して可読性を高めます。テストコードは、主要な関数に対してユニットテストを追加し、無理のない範囲でカバーします。
 
 ## 1. 依存関係と外部ライブラリ
 - **主要ライブラリ**:
   - `vulkano`: Vulkanベースのグラフィックスコンテキストとウィンドウ管理。
-  - `winit`: イベントループとウィンドウイベント処理。
   - `egui`: UIコンポーネント（サイドパネル、入力フィールドなど）。
+  - `winit`: イベントループとウィンドウイベント処理。
+  - `rayon`: 並列処理によるシミュレーション最適化。
+  - その他: `vulkano-shaders`, `vulkano-util`, `bytemuck`, `anyhow`, `rand`, `ahash`, `glam`, `num_cpus` など。
 
 Cargo.tomlでこれらを依存として定義します。
 
@@ -14,53 +16,60 @@ Cargo.tomlでこれらを依存として定義します。
 アプリケーションは、winitの`ApplicationHandler`トレイトを実装した`App`構造体を中心に構築します。状態を保持し、イベント処理を分散します。
 
 - **主要構造体**:
-  - `App`: アプリケーションの全体状態を管理。
+  - `App`: アプリケーションの全体状態を管理（`src/types.rs`で定義）。
     - フィールド:
       - `context: VulkanoContext`: Vulkanコンテキスト。
       - `windows: VulkanoWindows`: ウィンドウとレンダラーの管理。
       - `gui: Option<Gui>`: eguiの統合オブジェクト。
-      - `simulation_state: SimulationState`: 粒子シミュレーションの状態（将来的に追加。初期は空の構造体）。
+      - `simulation_state: SimulationState`: 粒子シミュレーションの状態。
       - `ui_state: UiState`: UI入力値の状態（例: 粒子数、速度、重力などのパラメータ）。
 
 - **補助構造体**:
-  - `SimulationState`: 粒子データ（位置、速度など）と物理計算の状態を保持。将来的にベクトル配列で粒子を表現。
-  - `UiState`: 入力ペインの状態（例: `particle_count: u32`, `gravity: f32` などのフィールド）。
+  - `SimulationState`: 粒子データ（位置、速度など）と物理計算の状態を保持。
+  - `UiState`: 入力ペインの状態。
 
 - **モジュール分け**:
-  - `main.rs`: エントリーポイントと`App`の定義。
-  - `ui.rs`: UI関連の関数（入力ペインの描画、状態更新）。
-  - `render.rs`: 3Dレンダリング関連の関数（Vulkanoパイプラインのセットアップ、粒子描画）。
-  - `simulation.rs`: 粒子シミュレーションのロジック（更新関数、物理計算）。
-  - `tests.rs`: テストコード（例: シミュレーション更新関数のテスト）。
+  - `src/main.rs`: エントリーポイントと`App`の定義。
+  - `src/types.rs`: 共有データ構造の定義。
+  - `src/ui.rs`: UI関連の関数（入力ペインの描画、状態更新）。
+  - `src/ui_styles.rs`: UIスタイル関連。
+  - `src/simulation.rs`: 粒子シミュレーションのロジック。
+  - `src/camera.rs`: カメラロジック。
+  - `src/integration.rs`: GUI統合。
+  - `src/pipeline.rs`: レンダリングパイプラインの構築。
+  - `src/renderer.rs`: レンダリング処理。
+  - `src/utils.rs`: ユーティリティ関数。
+  - `src/shaders/`: GLSLシェーダーコード。
+  - `tests/render_tests.rs`: テストコード。
 
 ## 3. 画面枠組みの設計（UIレイアウト）
 ウィンドウを1つとし、eguiでレイアウトを構成。右側に値入力ペイン（サイドパネル）、残りをメイン画面（3D描写エリア）とする。
 
 - **全体レイアウト**:
     - 右側: `egui::SidePanel::right("input_panel")` で固定幅の入力ペイン。
-      - 内容: スライダー、テキスト入力、ボタンでパラメータを設定（例: "粒子数: [スライダー]", "重力: [入力フィールド]"）。
+      - 内容: スライダー、テキスト入力、ボタンでパラメータを設定。
       - 状態更新: UI入力で`UiState`を更新し、シミュレーションに反映。
     - 中央（残り領域）: 3D描写エリア。
-      - 内容: Vulkanoで3Dシーンを描画。将来的に粒子をポイントやメッシュでレンダリング。
-      - 初期実装: 空の3Dビュー（背景色やシンプルなグリッド）で枠組みを確認。
+      - 内容: Vulkanoで3Dシーンを描画。粒子をレンダリング。
+      - 初期実装: 空の3Dビュー。
 
 - **UIの更新フロー**:
-  - `gui.immediate_ui` または `gui.begin_frame` でUIを描画。
-  - 入力ペインの変更を検知し、`update_ui_state` 関数で`UiState`を更新。
-  - メイン画面は、レンダリング関数を呼び出してVulkanoコマンドバッファに描画コマンドを追加。
+  - `gui.immediate_ui` でUIを描画。
+  - 入力ペインの変更を検知し、`UiState`を更新。
+  - メイン画面は、レンダリング関数を呼び出してVulkanoコマンドバッファに描画。
 
 ## 4. レンダリングとイベント処理の流れ
 - **初期化 (`resumed` メソッド)**:
-  - ウィンドウ作成: `windows.create_window` でウィンドウを生成。スワップチェーン形式をUNORMに設定。
+  - ウィンドウ作成: `windows.create_window` でウィンドウを生成。
   - GUI初期化: `Gui::new` でegui統合を設定。
   - 状態初期化: `SimulationState`と`UiState`をデフォルト値で作成。
-  - パイプラインセットアップ: `setup_render_pipeline` 関数でVulkanoのグラフィックスパイプラインを作成（頂点シェーダー、フラグメントシェーダー）。
+  - パイプラインセットアップ: `pipeline.rs`でVulkanoのグラフィックスパイプラインを作成。
 
 - **イベント処理 (`window_event` メソッド)**:
   - `WindowEvent::RedrawRequested`: UI描画とレンダリングを実行。
     - UI更新: `draw_ui` 関数で入力ペインとメイン画面のUIを構築。
-    - シミュレーション更新: `update_simulation` 関数で粒子状態を更新（初期は空）。
-    - レンダリング: `render_scene` 関数でVulkanoコマンドバッファを構築し、スワップチェーンに描画。
+    - シミュレーション更新: `update_simulation` 関数で粒子状態を更新。
+    - レンダリング: `renderer.rs`の関数でVulkanoコマンドバッファを構築し、スワップチェーンに描画。
   - その他イベント: リサイズ、閉じるなどの標準処理。
 
 - **レンダリングの詳細**:
@@ -68,12 +77,12 @@ Cargo.tomlでこれらを依存として定義します。
 
 ## 5. テスト戦略
 - 無理のない範囲: ユニットテストで関数を検証。
-  - `simulation.rs`: 粒子更新関数のテスト（例: 重力適用後の速度変化）。
-  - `ui.rs`: UI状態更新のテスト（モックUIで入力シミュレート）。
-  - インテグレーションテスト: 全体フローをテスト（イベントループのモック）。
+  - `simulation.rs`: 粒子更新関数のテスト。
+  - `ui.rs`: UI状態更新のテスト。
+  - インテグレーションテスト: `tests/render_tests.rs` で全体フローをテスト。
 
 ## 6. 次フェーズの計画
-- 基本枠組み完成後: 粒子シミュレーションの追加（位置/速度更新、衝突検知）。
+- 基本枠組み完成後: 粒子シミュレーションの追加。
 - 拡張: カメラコントロール、複数粒子タイプ、性能最適化。
 
 ## 7. 開発環境
@@ -82,10 +91,10 @@ Cargo.tomlでこれらを依存として定義します。
 
 - **OS**: Windows 11 (バージョン 23H2 以降を推奨。Vulkanドライバの安定性を確保するため、最新のGPUドライバをインストールしてください。NVIDIA/AMD/Intel GPUに対応)。
 - **IDE/エディタ**: Visual Studio Code (VSCode)。Rust拡張機能（`rust-analyzer`）をインストールし、シンタックスハイライト、デバッグ、コード補完を活用。eguiやVulkanoのサンプルコードを参照する際に便利です。
-- **バージョン管理**: GitHub。リポジトリとして使用し、ブランチ管理（例: `master`、`develop`、`feature`）で開発を進めます。CI/CDとしてGitHub Actionsを設定し、Rustのビルドとテストを自動化（例: `cargo check`、`cargo test`の実行）。
+- **バージョン管理**: GitHub。リポジトリとして使用し、ブランチ管理で開発を進めます。CI/CDとしてGitHub Actionsを設定し、Rustのビルドとテストを自動化。
 
 ### セットアップ手順
-1. **Rustツールチェーンのインストール**: `rustup`を使用してRust 1.89をインストール（`rustup update stable`）。
+1. **Rustツールチェーンのインストール**: `rustup`を使用してRust 2024をインストール（`rustup update stable`）。
 2. **VSCodeの設定**: Extensionsから`rust-analyzer`と`CodeLLDB`を追加。tasks.jsonで`cargo build`や`cargo run`のタスクを定義。
 3. **GitHubリポジトリのクローン**: `git clone https://github.com/hypernumbernet/dual-spacetime-simulator.git`でリポジトリを取得。`.gitignore`に`target/`ディレクトリを追加。
 4. **Vulkan環境**: Vulkan SDK 1.3.296以降をインストール（LunarGからダウンロード）。`vkconfig`ツールでレイトレーシングや拡張を有効化。
