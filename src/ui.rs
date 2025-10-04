@@ -46,5 +46,18 @@ pub fn draw_ui(ui_state: &mut UiState, ctx: &egui::Context) {
                     .speed(0.1)
                     .prefix("Gravity: "),
             );
+            ui.add(Label::new("Max FPS:"));
+            ui.horizontal(|ui| {
+                let mut is_unlimited = ui_state.max_fps.is_none();
+                ui.checkbox(&mut is_unlimited, "∞");
+                if is_unlimited {
+                    ui_state.max_fps = None;
+                } else if ui_state.max_fps.is_none() {
+                    ui_state.max_fps = Some(60);
+                }
+                if let Some(ref mut max_fps) = ui_state.max_fps {
+                    ui.add(Slider::new(max_fps, 1..=120));
+                }
+            });
         });
 }

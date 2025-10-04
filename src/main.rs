@@ -210,28 +210,26 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         let renderer = self.windows.get_primary_renderer().unwrap();
         renderer.window().request_redraw();
-        const TARGET_FPS: u32 = 60;
-        const DT: f64 = 1.0 / TARGET_FPS as f64;
+        let target_fps = self.ui_state.max_fps.unwrap_or(1000);
         if self.ui_state.is_running && !self.prev_is_running {
             self.last_advance = Instant::now();
         }
         if self.ui_state.is_running {
             let now = Instant::now();
             let mut acc = now.duration_since(self.last_advance).as_secs_f64();
-            if acc >= DT {
-                let mut steps = (acc / DT).floor() as usize;
-                let max_steps = 10_000usize;
-                if steps > max_steps {
-                    steps = max_steps;
-                }
-                for _ in 0..steps {
-                    self.simulation_state.advance_time(DT);
-                    self.ui_state.simulation_time += DT;
-                    self.ui_state.time_per_frame = DT;
-                    acc -= DT;
-                }
-                self.last_advance = now - Duration::from_secs_f64(acc);
+            let steps_per_sec = target_fps as f64;
+            let mut steps = (acc * steps_per_sec).floor() as usize;
+            let max_steps = 10_000usize;
+            if steps > max_steps {
+                steps = max_steps;
             }
+            for _ in 0..steps {
+                self.simulation_state.advance_time(1.0);
+                self.ui_state.simulation_time += 1.0;
+                acc -= 1.0 / steps_per_sec;
+            }
+            self.ui_state.time_per_frame = 1.0;
+            self.last_advance = now - Duration::from_secs_f64(acc);
         }
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
