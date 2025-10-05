@@ -35,7 +35,32 @@ const DOUBLE_CLICK_DIST: f64 = 25.0;
 
 pub fn main() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new()?;
+    let (tx, rx) = std::sync::mpsc::channel::<u32>();
     let mut app = App::default();
+    app.receiver = rx;
+    let ui_state_clone = Arc::clone(&app.ui_state);
+    let last_advance = Instant::now();
+    std::thread::spawn(move || {
+        loop {
+            let ui_state = ui_state_clone.read().unwrap();
+            let is_running = ui_state.is_running;
+            let max_fps = ui_state.max_fps;
+            let unlimited_fps = ui_state.unlimited_fps;
+            drop(ui_state);
+            if !is_running {
+                std::thread::sleep(Duration::from_millis(16));
+                continue;
+            }
+            let now = Instant::now();
+            let dt = now.duration_since(last_advance).as_secs_f64();
+            let target_fps = max_fps as f64;
+            if !unlimited_fps && dt < 1.0 / target_fps {
+                continue;
+            }
+            tx.send(123).unwrap();
+            std::thread::sleep(Duration::from_millis(1000));
+        }
+    });
     event_loop.run_app(&mut app)
 }
 
@@ -50,9 +75,10 @@ pub struct App {
     windows: VulkanoWindows,
     render_pipeline: Option<ParticleRenderPipeline>,
     gui: Option<Gui>,
-    ui_state: UiState,
-    simulation_state: Arc<RwLock<SimulationState>>,
-    thread_pool: rayon::ThreadPool,
+    ui_state: Arc<RwLock<UiState>>,
+    simulation_state: SimulationState,
+    receiver: std::sync::mpsc::Receiver<u32>,
+    //thread_pool: rayon::ThreadPool,
     mouse_left_down: bool,
     mouse_right_down: bool,
     mouse_middle_down: bool,
@@ -68,18 +94,19 @@ impl Default for App {
     fn default() -> Self {
         let context = VulkanoContext::new(VulkanoConfig::default());
         let windows = VulkanoWindows::default();
-        let thread_pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(num_cpus::get())
-            .build()
-            .expect("Failed to build Rayon thread pool");
+        // let thread_pool = rayon::ThreadPoolBuilder::new()
+        //     .num_threads(num_cpus::get())
+        //     .build()
+        //     .expect("Failed to build Rayon thread pool");
         Self {
             context,
             windows,
             render_pipeline: None,
             gui: None,
-            ui_state: UiState::default(),
-            simulation_state: Arc::new(RwLock::new(SimulationState::default())),
-            thread_pool,
+            ui_state: Arc::new(RwLock::new(UiState::default())),
+            simulation_state: SimulationState::default(),
+            receiver: std::sync::mpsc::channel().1,
+            //thread_pool,
             mouse_left_down: false,
             mouse_right_down: false,
             mouse_middle_down: false,
@@ -95,9 +122,10 @@ impl Default for App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let ui_state = self.ui_state.read().unwrap();
         let resize_constraints = vulkano_util::window::WindowResizeConstraints {
-            min_width: self.ui_state.min_window_width,
-            min_height: self.ui_state.min_window_height,
+            min_width: ui_state.min_window_width,
+            min_height: ui_state.min_window_height,
             ..Default::default()
         };
         let descriptor = WindowDescriptor {
@@ -125,7 +153,9 @@ impl ApplicationHandler for App {
             GuiConfig::default(),
         ));
         self.render_pipeline = Some(render_pipeline);
-        *self.simulation_state.write().unwrap() = SimulationState::new(self.ui_state.particle_count);
+        self.simulation_state = SimulationState::new(ui_state.particle_count);
+        drop(ui_state); // ロックを解放
+        // ...existing code...
     }
 
     fn window_event(
@@ -152,12 +182,11 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 gui.immediate_ui(|gui| {
                     let ctx = gui.context();
-                    draw_ui(&mut self.ui_state, &ctx);
+                    draw_ui(&self.ui_state, &ctx);
                 });
                 match renderer.acquire(None, |_| {}) {
                     Ok(future) => {
-                        let sim = self.simulation_state.read().unwrap();
-                        pipeline.set_particles(&sim.particles);
+                        pipeline.set_particles(&self.simulation_state.particles);
                         let after_future =
                             pipeline.render(future, renderer.swapchain_image_view(), gui);
                         renderer.present(after_future, true);
@@ -219,27 +248,27 @@ impl ApplicationHandler for App {
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
         }
-        self.simulation_action();
+        //self.simulation_action();
+        while let Ok(msg) = self.receiver.try_recv() {
+            println!("Received: {}", msg);
+        }
     }
 }
 
 impl App {
-    fn simulation_action(&mut self) {
-        if !self.ui_state.is_running {
+    pub fn simulation_action(&mut self) {
+        let ui_state = self.ui_state.read().unwrap();
+        if !ui_state.is_running {
             return;
         }
         let now = Instant::now();
         let dt = now.duration_since(self.last_advance).as_secs_f64();
-        let target_fps = self.ui_state.max_fps as f64;
-        if !self.ui_state.unlimited_fps && dt < 1.0 / target_fps {
+        let target_fps = ui_state.max_fps as f64;
+        if !ui_state.unlimited_fps && dt < 1.0 / target_fps {
             return;
         }
-        let shared_sim = self.simulation_state.clone();
-        self.thread_pool.spawn(move || {
-            let mut sim = shared_sim.write().unwrap();
-            sim.advance_time(1.0);
-            std::thread::sleep(Duration::from_millis(100));
-        });
+        self.simulation_state.advance_time(1.0);
+        // std::thread::sleep(Duration::from_millis(100));
         self.last_advance = now;
     }
 
