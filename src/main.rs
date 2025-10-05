@@ -35,20 +35,27 @@ const DOUBLE_CLICK_DIST: f64 = 25.0;
 
 pub fn main() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new()?;
-    let (tx, rx) = std::sync::mpsc::channel::<u32>();
     let mut app = App::default();
+    let (_tx, rx) = std::sync::mpsc::channel::<u32>();
     app.receiver = rx;
     let ui_state_clone = Arc::clone(&app.ui_state);
-    let last_advance = Instant::now();
+    let simulation_state_clone = Arc::clone(&app.simulation_state);
+    let need_redraw = Arc::clone(&app.need_redraw);
+    let mut last_advance = Instant::now();
     std::thread::spawn(move || {
+        let simulation_state = simulation_state_clone;
         loop {
+            if *need_redraw.read().unwrap() {
+                std::thread::sleep(Duration::from_millis(16));
+                continue;
+            }
             let ui_state = ui_state_clone.read().unwrap();
             let is_running = ui_state.is_running;
             let max_fps = ui_state.max_fps;
             let unlimited_fps = ui_state.unlimited_fps;
             drop(ui_state);
             if !is_running {
-                std::thread::sleep(Duration::from_millis(16));
+                //std::thread::sleep(Duration::from_millis(16));
                 continue;
             }
             let now = Instant::now();
@@ -57,8 +64,16 @@ pub fn main() -> Result<(), EventLoopError> {
             if !unlimited_fps && dt < 1.0 / target_fps {
                 continue;
             }
-            tx.send(123).unwrap();
-            std::thread::sleep(Duration::from_millis(1000));
+            {
+                let mut sim = simulation_state.write().unwrap();
+                sim.advance_time(1.0);
+                //std::thread::sleep(Duration::from_millis(100));
+            }
+            need_redraw.write().unwrap().clone_from(&true);
+            //ui_state_clone.write().unwrap().is_running = false;
+            //tx.send(1).unwrap();
+            last_advance = Instant::now();
+            //std::thread::sleep(Duration::from_millis(1000));
         }
     });
     event_loop.run_app(&mut app)
@@ -76,8 +91,10 @@ pub struct App {
     render_pipeline: Option<ParticleRenderPipeline>,
     gui: Option<Gui>,
     ui_state: Arc<RwLock<UiState>>,
-    simulation_state: SimulationState,
+    simulation_state: Arc<RwLock<SimulationState>>,
+    positions: Vec<[f32; 3]>,
     receiver: std::sync::mpsc::Receiver<u32>,
+    need_redraw: Arc<RwLock<bool>>,
     //thread_pool: rayon::ThreadPool,
     mouse_left_down: bool,
     mouse_right_down: bool,
@@ -87,7 +104,7 @@ pub struct App {
     last_left_click_pos: Option<(f64, f64)>,
     last_right_click_time: Option<Instant>,
     last_right_click_pos: Option<(f64, f64)>,
-    last_advance: std::time::Instant,
+    //last_advance: std::time::Instant,
 }
 
 impl Default for App {
@@ -104,8 +121,10 @@ impl Default for App {
             render_pipeline: None,
             gui: None,
             ui_state: Arc::new(RwLock::new(UiState::default())),
-            simulation_state: SimulationState::default(),
+            simulation_state: Arc::new(RwLock::new(SimulationState::default())),
+            positions: Vec::new(),
             receiver: std::sync::mpsc::channel().1,
+            need_redraw: Arc::new(RwLock::new(false)),
             //thread_pool,
             mouse_left_down: false,
             mouse_right_down: false,
@@ -115,7 +134,7 @@ impl Default for App {
             last_left_click_pos: None,
             last_right_click_time: None,
             last_right_click_pos: None,
-            last_advance: Instant::now(),
+            //last_advance: Instant::now(),
         }
     }
 }
@@ -144,17 +163,19 @@ impl ApplicationHandler for App {
             primary_renderer.swapchain_format(),
             self.context.memory_allocator(),
         );
+        self.render_pipeline = Some(render_pipeline);
         self.gui = Some(Gui::new_with_subpass(
             event_loop,
             primary_renderer.surface(),
             primary_renderer.graphics_queue(),
-            render_pipeline.gui_pass(),
+            self.render_pipeline.as_ref().unwrap().gui_pass(),
             primary_renderer.swapchain_format(),
             GuiConfig::default(),
         ));
-        self.render_pipeline = Some(render_pipeline);
-        self.simulation_state = SimulationState::new(ui_state.particle_count);
-        drop(ui_state); // ロックを解放
+        let sim = SimulationState::new(ui_state.particle_count);
+        *self.simulation_state.write().unwrap() = sim;
+        self.positions = self.simulation_state.read().unwrap().particles.iter().map(|p| p.position).collect();
+        drop(ui_state);
         // ...existing code...
     }
 
@@ -186,7 +207,7 @@ impl ApplicationHandler for App {
                 });
                 match renderer.acquire(None, |_| {}) {
                     Ok(future) => {
-                        pipeline.set_particles(&self.simulation_state.particles);
+                        pipeline.set_particles(&self.positions);
                         let after_future =
                             pipeline.render(future, renderer.swapchain_image_view(), gui);
                         renderer.present(after_future, true);
@@ -248,29 +269,31 @@ impl ApplicationHandler for App {
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
         }
-        //self.simulation_action();
-        while let Ok(msg) = self.receiver.try_recv() {
-            println!("Received: {}", msg);
-        }
+        //if let Ok(_) = self.receiver.try_recv() {
+            if let Ok(sim) = self.simulation_state.try_read() {
+                self.positions = sim.particles.iter().map(|p| p.position).collect();
+                //self.ui_state.write().unwrap().is_running = true;
+                self.need_redraw.write().unwrap().clone_from(&false);
+            }
+        //}
     }
 }
 
 impl App {
-    pub fn simulation_action(&mut self) {
-        let ui_state = self.ui_state.read().unwrap();
-        if !ui_state.is_running {
-            return;
-        }
-        let now = Instant::now();
-        let dt = now.duration_since(self.last_advance).as_secs_f64();
-        let target_fps = ui_state.max_fps as f64;
-        if !ui_state.unlimited_fps && dt < 1.0 / target_fps {
-            return;
-        }
-        self.simulation_state.advance_time(1.0);
-        // std::thread::sleep(Duration::from_millis(100));
-        self.last_advance = now;
-    }
+    // pub fn simulation_action(&mut self) {
+    //     let ui_state = self.ui_state.read().unwrap();
+    //     if !ui_state.is_running {
+    //         return;
+    //     }
+    //     let now = Instant::now();
+    //     let dt = now.duration_since(self.last_advance).as_secs_f64();
+    //     let target_fps = ui_state.max_fps as f64;
+    //     if !ui_state.unlimited_fps && dt < 1.0 / target_fps {
+    //         return;
+    //     }
+    //     self.simulation_state.advance_time(1.0);
+    //     self.last_advance = now;
+    // }
 
     fn left_button(&mut self, state: &ElementState) {
         let pressed = *state == ElementState::Pressed;

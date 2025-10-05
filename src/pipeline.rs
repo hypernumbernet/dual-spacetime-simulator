@@ -140,8 +140,8 @@ impl ParticleRenderPipeline {
         }
     }
 
-    pub fn set_particles(&mut self, particles: &[crate::simulation::Particle]) {
-        let verts: Vec<ParticleVertex> = particles
+    pub fn set_particles(&mut self, positions: &[[f32; 3]]) {
+        let verts: Vec<ParticleVertex> = positions
             .iter()
             .enumerate()
             .map(|(i, p)| {
@@ -154,7 +154,7 @@ impl ParticleRenderPipeline {
                     _ => unreachable!(),
                 };
                 ParticleVertex {
-                    position: p.position,
+                    position: *p,
                     color,
                 }
             })
