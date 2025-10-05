@@ -55,7 +55,7 @@ pub fn main() -> Result<(), EventLoopError> {
             let unlimited_fps = ui_state.unlimited_fps;
             drop(ui_state);
             if !is_running {
-                //std::thread::sleep(Duration::from_millis(16));
+                std::thread::sleep(Duration::from_millis(16));
                 continue;
             }
             let now = Instant::now();
@@ -67,13 +67,9 @@ pub fn main() -> Result<(), EventLoopError> {
             {
                 let mut sim = simulation_state.write().unwrap();
                 sim.advance_time(1.0);
-                //std::thread::sleep(Duration::from_millis(100));
             }
             need_redraw.write().unwrap().clone_from(&true);
-            //ui_state_clone.write().unwrap().is_running = false;
-            //tx.send(1).unwrap();
             last_advance = Instant::now();
-            //std::thread::sleep(Duration::from_millis(1000));
         }
     });
     event_loop.run_app(&mut app)
@@ -95,7 +91,6 @@ pub struct App {
     positions: Vec<[f32; 3]>,
     receiver: std::sync::mpsc::Receiver<u32>,
     need_redraw: Arc<RwLock<bool>>,
-    //thread_pool: rayon::ThreadPool,
     mouse_left_down: bool,
     mouse_right_down: bool,
     mouse_middle_down: bool,
@@ -104,17 +99,12 @@ pub struct App {
     last_left_click_pos: Option<(f64, f64)>,
     last_right_click_time: Option<Instant>,
     last_right_click_pos: Option<(f64, f64)>,
-    //last_advance: std::time::Instant,
 }
 
 impl Default for App {
     fn default() -> Self {
         let context = VulkanoContext::new(VulkanoConfig::default());
         let windows = VulkanoWindows::default();
-        // let thread_pool = rayon::ThreadPoolBuilder::new()
-        //     .num_threads(num_cpus::get())
-        //     .build()
-        //     .expect("Failed to build Rayon thread pool");
         Self {
             context,
             windows,
@@ -125,7 +115,6 @@ impl Default for App {
             positions: Vec::new(),
             receiver: std::sync::mpsc::channel().1,
             need_redraw: Arc::new(RwLock::new(false)),
-            //thread_pool,
             mouse_left_down: false,
             mouse_right_down: false,
             mouse_middle_down: false,
@@ -134,7 +123,6 @@ impl Default for App {
             last_left_click_pos: None,
             last_right_click_time: None,
             last_right_click_pos: None,
-            //last_advance: Instant::now(),
         }
     }
 }
@@ -176,7 +164,6 @@ impl ApplicationHandler for App {
         *self.simulation_state.write().unwrap() = sim;
         self.positions = self.simulation_state.read().unwrap().particles.iter().map(|p| p.position).collect();
         drop(ui_state);
-        // ...existing code...
     }
 
     fn window_event(
@@ -269,32 +256,14 @@ impl ApplicationHandler for App {
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
         }
-        //if let Ok(_) = self.receiver.try_recv() {
-            if let Ok(sim) = self.simulation_state.try_read() {
-                self.positions = sim.particles.iter().map(|p| p.position).collect();
-                //self.ui_state.write().unwrap().is_running = true;
-                self.need_redraw.write().unwrap().clone_from(&false);
-            }
-        //}
+        if let Ok(sim) = self.simulation_state.try_read() {
+            self.positions = sim.particles.iter().map(|p| p.position).collect();
+            self.need_redraw.write().unwrap().clone_from(&false);
+        }
     }
 }
 
 impl App {
-    // pub fn simulation_action(&mut self) {
-    //     let ui_state = self.ui_state.read().unwrap();
-    //     if !ui_state.is_running {
-    //         return;
-    //     }
-    //     let now = Instant::now();
-    //     let dt = now.duration_since(self.last_advance).as_secs_f64();
-    //     let target_fps = ui_state.max_fps as f64;
-    //     if !ui_state.unlimited_fps && dt < 1.0 / target_fps {
-    //         return;
-    //     }
-    //     self.simulation_state.advance_time(1.0);
-    //     self.last_advance = now;
-    // }
-
     fn left_button(&mut self, state: &ElementState) {
         let pressed = *state == ElementState::Pressed;
         self.mouse_left_down = pressed;
