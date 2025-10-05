@@ -192,7 +192,7 @@ impl ApplicationHandler for App {
                     let ctx = gui.context();
                     draw_ui(&self.ui_state, &ctx);
                 });
-                match renderer.acquire(None, |_| {}) {
+                match renderer.acquire(Some(Duration::from_millis(5000)), |_| {}) {
                     Ok(future) => {
                         pipeline.set_particles(&self.positions);
                         let after_future =
