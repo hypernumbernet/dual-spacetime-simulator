@@ -49,32 +49,37 @@ impl SimulationState {
         let dt = delta_seconds as f32;
         let positions: Vec<[f32; 3]> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f32> = self.particles.iter().map(|p| p.mass).collect();
-        self.particles
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(i, particle)| {
-                let mut acceleration = [0.0, 0.0, 0.0];
-                for (j, (&pos, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
-                    if i == j {
-                        continue;
-                    }
-                    let dx = pos[0] - particle.position[0];
-                    let dy = pos[1] - particle.position[1];
-                    let dz = pos[2] - particle.position[2];
-                    let r_squared = dx * dx + dy * dy + dz * dz;
-                    if r_squared > 0.0 {
-                        let r = r_squared.sqrt();
-                        let force_magnitude = G * mass_j / r_squared;
-                        let accel_magnitude = force_magnitude / particle.mass;
-                        acceleration[0] += accel_magnitude * dx / r;
-                        acceleration[1] += accel_magnitude * dy / r;
-                        acceleration[2] += accel_magnitude * dz / r;
-                    }
-                }
-                for k in 0..3 {
-                    particle.velocity[k] += acceleration[k] * dt;
-                }
+        if let Some(pool) = &self.thread_pool {
+            pool.install(|| {
+                self.particles
+                    .par_iter_mut()
+                    .enumerate()
+                    .for_each(|(i, particle)| {
+                        let mut acceleration = [0.0, 0.0, 0.0];
+                        for (j, (&pos, &mass_j)) in positions.iter().zip(masses.iter()).enumerate()
+                        {
+                            if i == j {
+                                continue;
+                            }
+                            let dx = pos[0] - particle.position[0];
+                            let dy = pos[1] - particle.position[1];
+                            let dz = pos[2] - particle.position[2];
+                            let r_squared = dx * dx + dy * dy + dz * dz;
+                            if r_squared > 0.0 {
+                                let r = r_squared.sqrt();
+                                let force_magnitude = G * mass_j / r_squared;
+                                let accel_magnitude = force_magnitude / particle.mass;
+                                acceleration[0] += accel_magnitude * dx / r;
+                                acceleration[1] += accel_magnitude * dy / r;
+                                acceleration[2] += accel_magnitude * dz / r;
+                            }
+                        }
+                        for k in 0..3 {
+                            particle.velocity[k] += acceleration[k] * dt;
+                        }
+                    });
             });
+        }
     }
 
     pub fn advance_time(&mut self, delta_seconds: f64) {
