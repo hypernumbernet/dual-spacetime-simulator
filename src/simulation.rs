@@ -12,6 +12,7 @@ pub struct SimulationState {
 pub struct Particle {
     pub position: [f32; 3],
     pub velocity: [f32; 3],
+    pub mass: f32,
 }
 
 impl SimulationState {
@@ -29,9 +30,9 @@ impl SimulationState {
                     rng.gen_range(-0.01..0.01),
                     rng.gen_range(-0.01..0.01),
                 ],
+                mass: rng.gen_range(0.5..2.0),
             })
             .collect();
-        dbg!(num_cpus::get());
         let thread_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(num_cpus::get())
             .build()
@@ -47,12 +48,13 @@ impl SimulationState {
         const G: f32 = 0.000001;
         let dt = delta_seconds as f32;
         let positions: Vec<[f32; 3]> = self.particles.iter().map(|p| p.position).collect();
+        let masses: Vec<f32> = self.particles.iter().map(|p| p.mass).collect();
         self.particles
             .par_iter_mut()
             .enumerate()
             .for_each(|(i, particle)| {
                 let mut acceleration = [0.0, 0.0, 0.0];
-                for (j, &pos) in positions.iter().enumerate() {
+                for (j, (&pos, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
                     if i == j {
                         continue;
                     }
@@ -62,10 +64,11 @@ impl SimulationState {
                     let r_squared = dx * dx + dy * dy + dz * dz;
                     if r_squared > 0.0 {
                         let r = r_squared.sqrt();
-                        let force_magnitude = G / r_squared;
-                        acceleration[0] += force_magnitude * dx / r;
-                        acceleration[1] += force_magnitude * dy / r;
-                        acceleration[2] += force_magnitude * dz / r;
+                        let force_magnitude = G * mass_j / r_squared;
+                        let accel_magnitude = force_magnitude / particle.mass;
+                        acceleration[0] += accel_magnitude * dx / r;
+                        acceleration[1] += accel_magnitude * dy / r;
+                        acceleration[2] += accel_magnitude * dz / r;
                     }
                 }
                 for k in 0..3 {

@@ -36,8 +36,6 @@ const DOUBLE_CLICK_DIST: f64 = 25.0;
 pub fn main() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new()?;
     let mut app = App::default();
-    let (_tx, rx) = std::sync::mpsc::channel::<u32>();
-    app.receiver = rx;
     let ui_state_clone = Arc::clone(&app.ui_state);
     let simulation_state_clone = Arc::clone(&app.simulation_state);
     let need_redraw = Arc::clone(&app.need_redraw);
@@ -89,7 +87,6 @@ pub struct App {
     ui_state: Arc<RwLock<UiState>>,
     simulation_state: Arc<RwLock<SimulationState>>,
     positions: Vec<[f32; 3]>,
-    receiver: std::sync::mpsc::Receiver<u32>,
     need_redraw: Arc<RwLock<bool>>,
     mouse_left_down: bool,
     mouse_right_down: bool,
@@ -113,7 +110,6 @@ impl Default for App {
             ui_state: Arc::new(RwLock::new(UiState::default())),
             simulation_state: Arc::new(RwLock::new(SimulationState::default())),
             positions: Vec::new(),
-            receiver: std::sync::mpsc::channel().1,
             need_redraw: Arc::new(RwLock::new(false)),
             mouse_left_down: false,
             mouse_right_down: false,
