@@ -64,12 +64,12 @@ pub fn main() -> Result<(), EventLoopError> {
             if !unlimited_fps && dt < 1.0 / target_fps {
                 continue;
             }
-            {
-                let mut sim = simulation_state.write().unwrap();
-                sim.advance_time(1.0);
-            }
+            let mut sim = simulation_state.write().unwrap();
+            sim.advance_time(1.0);
             need_redraw.write().unwrap().clone_from(&true);
-            last_advance = Instant::now();
+            sim.update_velocities_with_gravity(1.0);
+            drop(sim);
+            last_advance = now;
         }
     });
     event_loop.run_app(&mut app)
@@ -162,7 +162,14 @@ impl ApplicationHandler for App {
         ));
         let sim = SimulationState::new(ui_state.particle_count);
         *self.simulation_state.write().unwrap() = sim;
-        self.positions = self.simulation_state.read().unwrap().particles.iter().map(|p| p.position).collect();
+        self.positions = self
+            .simulation_state
+            .read()
+            .unwrap()
+            .particles
+            .iter()
+            .map(|p| p.position)
+            .collect();
         drop(ui_state);
     }
 

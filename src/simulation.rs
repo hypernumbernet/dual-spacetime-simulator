@@ -43,6 +43,37 @@ impl SimulationState {
         }
     }
 
+    pub fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
+        const G: f32 = 0.000001;
+        let dt = delta_seconds as f32;
+        let positions: Vec<[f32; 3]> = self.particles.iter().map(|p| p.position).collect();
+        self.particles
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(i, particle)| {
+                let mut acceleration = [0.0, 0.0, 0.0];
+                for (j, &pos) in positions.iter().enumerate() {
+                    if i == j {
+                        continue;
+                    }
+                    let dx = pos[0] - particle.position[0];
+                    let dy = pos[1] - particle.position[1];
+                    let dz = pos[2] - particle.position[2];
+                    let r_squared = dx * dx + dy * dy + dz * dz;
+                    if r_squared > 0.0 {
+                        let r = r_squared.sqrt();
+                        let force_magnitude = G / r_squared;
+                        acceleration[0] += force_magnitude * dx / r;
+                        acceleration[1] += force_magnitude * dy / r;
+                        acceleration[2] += force_magnitude * dz / r;
+                    }
+                }
+                for k in 0..3 {
+                    particle.velocity[k] += acceleration[k] * dt;
+                }
+            });
+    }
+
     pub fn advance_time(&mut self, delta_seconds: f64) {
         self.time += delta_seconds;
         let dt_f32 = delta_seconds as f32;
