@@ -3,6 +3,15 @@ use crate::ui_styles::*;
 use egui::{Button, DragValue, Label, Slider, vec2};
 use std::sync::{Arc, RwLock};
 
+fn format_simulation_time(simulation_time: f64) -> String {
+    let days = (simulation_time / 86400.0).floor() as i64;
+    let remaining_seconds = simulation_time % 86400.0;
+    let hours = (remaining_seconds / 3600.0).floor() as i64;
+    let minutes = ((remaining_seconds % 3600.0) / 60.0).floor() as i64;
+    let seconds = (remaining_seconds % 60.0).floor() as i64;
+    format!("{} {:02}:{:02}:{:02}", days, hours, minutes, seconds)
+}
+
 pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
     let mut ui_state_guard = ui_state.write().unwrap();
     egui::Window::new("Control Panel")
@@ -20,8 +29,8 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 label_indicator(ui, &ui_state_guard.frame.to_string());
             });
             ui.horizontal(|ui| {
-                label_normal(ui, "Time (day)");
-                label_indicator(ui, &ui_state_guard.simulation_time.to_string());
+                label_normal(ui, "Time");
+                label_indicator(ui, &format_simulation_time(ui_state_guard.simulation_time));
             });
             ui.separator();
             let button_width = ui.available_width();

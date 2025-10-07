@@ -66,7 +66,7 @@ pub fn label_indicator(ui: &mut Ui, text: &str) {
         text_color: Some(Color32::WHITE),
         border_color: Some(Color32::LIGHT_BLUE),
         border_width: 1.0,
-        width: 100.0,
+        width: 120.0,
         padding: Some(Margin::same(2)),
         ..Default::default()
     };

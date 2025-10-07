@@ -72,6 +72,7 @@ async fn main() -> Result<(), EventLoopError> {
             last_advance = now;
             let mut ui_state = ui_state_clone.write().unwrap();
             ui_state.frame += 1;
+            ui_state.simulation_time += time_per_frame;
         }
     });
     let ui_state_clone = Arc::clone(&app.ui_state);
