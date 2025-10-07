@@ -27,7 +27,7 @@ impl Default for UiState {
             fps: 0,
             frame: 1,
             simulation_time: 0.0,
-            time_per_frame: 1.0 / 60.0,
+            time_per_frame: 1.0,
             is_running: false,
             max_fps: 60,
             unlimited_fps: false,

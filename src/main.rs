@@ -51,6 +51,7 @@ pub fn main() -> Result<(), EventLoopError> {
             let is_running = ui_state.is_running;
             let max_fps = ui_state.max_fps;
             let unlimited_fps = ui_state.unlimited_fps;
+            let time_per_frame = ui_state.time_per_frame;
             drop(ui_state);
             if !is_running {
                 std::thread::sleep(Duration::from_millis(16));
@@ -63,9 +64,9 @@ pub fn main() -> Result<(), EventLoopError> {
                 continue;
             }
             let mut sim = simulation_state.write().unwrap();
-            sim.advance_time(1.0);
+            sim.advance_time(time_per_frame);
             need_redraw.write().unwrap().clone_from(&true);
-            sim.update_velocities_with_gravity(1.0);
+            sim.update_velocities_with_gravity(time_per_frame);
             drop(sim);
             last_advance = now;
         }

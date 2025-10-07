@@ -45,7 +45,7 @@ impl SimulationState {
     }
 
     pub fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
-        const G: f32 = 0.000001;
+        const G: f32 = 0.0000001;
         let dt = delta_seconds as f32;
         let positions: Vec<[f32; 3]> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f32> = self.particles.iter().map(|p| p.mass).collect();

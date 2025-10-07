@@ -10,6 +10,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
         .collapsible(true)
         .default_width(ui_state_guard.input_panel_width)
         .show(ctx, |ui| {
+            ui.style_mut().spacing.slider_width = 140.0;
             ui.horizontal(|ui| {
                 label_normal(ui, "FPS");
                 label_indicator(ui, &ui_state_guard.fps.to_string());
@@ -20,12 +21,12 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             });
             ui.horizontal(|ui| {
                 label_normal(ui, "Time (day)");
-                label_indicator_short(ui, &ui_state_guard.simulation_time.to_string());
+                label_indicator(ui, &ui_state_guard.simulation_time.to_string());
             });
-            ui.horizontal(|ui| {
-                label_normal(ui, "Time/Frame(s)");
-                label_indicator_short(ui, &ui_state_guard.time_per_frame.to_string());
-            });
+            // ui.horizontal(|ui| {
+            //     label_normal(ui, "Time/Frame(s)");
+            //     label_indicator_short(ui, &ui_state_guard.time_per_frame.to_string());
+            // });
             ui.separator();
             let button_width = ui.available_width();
             let button_height = ui.spacing().interact_size.y * 1.5;
@@ -49,12 +50,15 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     .speed(0.1)
                     .prefix("Gravity: "),
             );
-            ui.add(Label::new("Max FPS:"));
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut ui_state_guard.unlimited_fps, "∞");
-                if !ui_state_guard.unlimited_fps {
-                    ui.add(Slider::new(&mut ui_state_guard.max_fps, 1..=120));
-                }
-            });
+            ui.add(
+                DragValue::new(&mut ui_state_guard.time_per_frame)
+                    .speed(0.1)
+                    .prefix("Time/Frame(s): "),
+            );
+            label_normal(ui, "Max FPS:");
+            ui.checkbox(&mut ui_state_guard.unlimited_fps, "∞");
+            if !ui_state_guard.unlimited_fps {
+                ui.add(Slider::new(&mut ui_state_guard.max_fps, 1..=120));
+            }
         });
 }
