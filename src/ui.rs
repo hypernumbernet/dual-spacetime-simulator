@@ -53,7 +53,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             ui.add(
                 DragValue::new(&mut ui_state_guard.time_per_frame)
                     .speed(0.1)
-                    .prefix("Time/Frame(s): "),
+                    .prefix("Time(sec)/Frame: "),
             );
             label_normal(ui, "Max FPS:");
             ui.checkbox(&mut ui_state_guard.unlimited_fps, "∞");

@@ -65,10 +65,12 @@ pub fn main() -> Result<(), EventLoopError> {
             }
             let mut sim = simulation_state.write().unwrap();
             sim.advance_time(time_per_frame);
-            need_redraw.write().unwrap().clone_from(&true);
             sim.update_velocities_with_gravity(time_per_frame);
             drop(sim);
+            need_redraw.write().unwrap().clone_from(&true);
             last_advance = now;
+            let mut ui_state = ui_state_clone.write().unwrap();
+            ui_state.frame += 1;
         }
     });
     event_loop.run_app(&mut app)
