@@ -33,7 +33,8 @@ mod utils;
 const DOUBLE_CLICK_MILLIS: u64 = 400;
 const DOUBLE_CLICK_DIST: f64 = 25.0;
 
-pub fn main() -> Result<(), EventLoopError> {
+#[tokio::main]
+async fn main() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new()?;
     let mut app = App::default();
     let ui_state_clone = Arc::clone(&app.ui_state);
@@ -71,6 +72,17 @@ pub fn main() -> Result<(), EventLoopError> {
             last_advance = now;
             let mut ui_state = ui_state_clone.write().unwrap();
             ui_state.frame += 1;
+        }
+    });
+    let ui_state_clone = Arc::clone(&app.ui_state);
+    tokio::spawn(async move {
+        let mut interval_timer = tokio::time::interval(Duration::from_secs(1));
+        let mut prev_frame: u64 = 1;
+        loop {
+            interval_timer.tick().await;
+            let mut ui_state = ui_state_clone.write().unwrap();
+            ui_state.fps = ui_state.frame - prev_frame;
+            prev_frame = ui_state.frame;
         }
     });
     event_loop.run_app(&mut app)

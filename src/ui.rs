@@ -23,10 +23,6 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 label_normal(ui, "Time (day)");
                 label_indicator(ui, &ui_state_guard.simulation_time.to_string());
             });
-            // ui.horizontal(|ui| {
-            //     label_normal(ui, "Time/Frame(s)");
-            //     label_indicator_short(ui, &ui_state_guard.time_per_frame.to_string());
-            // });
             ui.separator();
             let button_width = ui.available_width();
             let button_height = ui.spacing().interact_size.y * 1.5;
