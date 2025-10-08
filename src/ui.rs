@@ -1,4 +1,4 @@
-use crate::ui_state::UiState;
+use crate::ui_state::*;
 use crate::ui_styles::*;
 use egui::{Button, DragValue, Label, Slider, vec2};
 use std::sync::{Arc, RwLock};
@@ -18,9 +18,23 @@ fn format_simulation_time(simulation_time: f64) -> String {
 }
 
 fn format_scale(scale: f64) -> String {
-    let scale_inv = 5000.0 / scale;
-    let pow10 = scale_inv.powi(10) * 1e14;
-    format!("{:.3e}", pow10)
+    let scale_inv = DEFAULT_SCALE_UI / scale;
+    let pow10 = scale_inv.powi(10) * 1e10;
+    if pow10 >= AU * 1e6 {
+        format!("{:.3e} au", pow10 / AU)
+    } else if pow10 >= AU {
+        format!("{:.3} au", pow10 / AU)
+    } else if pow10 >= 1e9 {
+        format!("{:.3e} km", pow10 / 1e3)
+    } else if pow10 >= 1e3 {
+        format!("{:.3} km", pow10 / 1e3)
+    } else if pow10 < 1e-9 {
+        format!("{:.6} nm", pow10 * 1e9)
+    } else if pow10 < 1e-3 {
+        format!("{:.6} mm", pow10 * 1e3)
+    } else {
+        format!("{:.3} m", pow10)
+    }
 }
 
 pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
@@ -74,12 +88,11 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     .prefix("Time(sec)/Frame: "),
             );
             ui.separator();
-            ui.style_mut().spacing.slider_width = ui.available_width();
             ui.horizontal(|ui| {
                 label_normal(ui, "Scale (m):");
                 label_indicator(ui, format_scale(ui_state_guard.scale).as_str());
             });
-            ui.add(Slider::new(&mut ui_state_guard.scale, 1.0..=10000.0).show_value(false));
+            slider_pure(ui, &mut ui_state_guard.scale, 1000.0..=DEFAULT_SCALE_UI * 2.0);
             ui.separator();
             ui.style_mut().spacing.slider_width = 140.0;
             label_normal(ui, "Max FPS:");

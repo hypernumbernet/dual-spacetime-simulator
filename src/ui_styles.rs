@@ -85,3 +85,9 @@ pub fn label_normal(ui: &mut Ui, text: &str) {
     };
     draw_label_with_style(ui, text, &style);
 }
+
+pub fn slider_pure(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64>) {
+    ui.add_space(4.0);
+    ui.style_mut().spacing.slider_width = ui.available_width();
+    ui.add(egui::Slider::new(value, range).show_value(false));
+}

@@ -1,3 +1,6 @@
+pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
+pub const DEFAULT_SCALE_UI: f64 = 5000.0;
+
 pub struct UiState {
     pub input_panel_width: f32,
     pub min_window_width: f32,
@@ -29,7 +32,7 @@ impl Default for UiState {
             frame: 1,
             simulation_time: 0.0,
             time_per_frame: 1.0,
-            scale: 5000.0,
+            scale: DEFAULT_SCALE_UI,
             is_running: false,
             max_fps: 60,
             unlimited_fps: false,
