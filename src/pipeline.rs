@@ -1,5 +1,6 @@
 use crate::camera::OrbitCamera;
 use crate::integration::Gui;
+use crate::ui_state::*;
 use glam::{Mat4, Vec3};
 use std::sync::Arc;
 use vulkano::{
@@ -57,6 +58,12 @@ struct ParticleVertex {
 
 #[repr(C)]
 #[derive(Clone, Copy, BufferContents)]
+struct AxesPushConstants {
+    view_proj: [[f32; 4]; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, BufferContents)]
 struct PushConstants {
     view_proj: [[f32; 4]; 4],
     size_scale: f32,
@@ -101,7 +108,7 @@ pub struct ParticleRenderPipeline {
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     camera: OrbitCamera,
-    aspect_ratio: f32,
+    // aspect_ratio: f32,
 }
 
 impl ParticleRenderPipeline {
@@ -136,7 +143,7 @@ impl ParticleRenderPipeline {
             memory_allocator: allocator.clone(),
             command_buffer_allocator,
             camera,
-            aspect_ratio: 1.0,
+            // aspect_ratio: 1.0,
         }
     }
 
@@ -356,6 +363,7 @@ impl ParticleRenderPipeline {
         before_future: Box<dyn GpuFuture>,
         image: Arc<ImageView>,
         gui: &mut Gui,
+        scale: f64,
     ) -> Box<dyn GpuFuture> {
         let mut builder = AutoCommandBufferBuilder::primary(
             self.command_buffer_allocator.clone(),
@@ -394,19 +402,24 @@ impl ParticleRenderPipeline {
             },
         )
         .unwrap();
-        self.aspect_ratio = dimensions[0] as f32 / dimensions[1] as f32;
-        let view_proj = self.compute_view_proj();
-        let size_scale = dimensions[1] as f32 * SIZE_RATIO;
-        let push_constants = PushConstants {
-            view_proj: view_proj.to_cols_array_2d(),
-            size_scale: size_scale.into(),
-        };
         let viewport = Viewport {
             offset: [0.0, 0.0],
             extent: [dimensions[0] as f32, dimensions[1] as f32],
             depth_range: 0.0..=1.0,
         };
+        let aspect_ratio = dimensions[0] as f32 / dimensions[1] as f32;
+        let view_proj = self.compute_mvp_axes(aspect_ratio);
+        let push_constants = AxesPushConstants {
+            view_proj: view_proj.to_cols_array_2d(),
+        };
         self.draw_axes(&mut secondary_builder, &viewport, &push_constants);
+        let scale_factor = (scale / DEFAULT_SCALE_UI).powi(4) as f32;
+        let view_proj = self.compute_mvp_particle(aspect_ratio, scale_factor);
+        let size_scale = dimensions[1] as f32 * SIZE_RATIO * scale_factor;
+        let push_constants = PushConstants {
+            view_proj: view_proj.to_cols_array_2d(),
+            size_scale: size_scale.into(),
+        };
         self.draw_particles(&mut secondary_builder, &viewport, &push_constants);
         let cb = secondary_builder.build().unwrap();
         builder.execute_commands(cb).unwrap();
@@ -511,7 +524,7 @@ impl ParticleRenderPipeline {
         &self,
         builder: &mut AutoCommandBufferBuilder<SecondaryAutoCommandBuffer>,
         viewport: &Viewport,
-        push_constants: &PushConstants,
+        push_constants: &AxesPushConstants,
     ) {
         builder
             .bind_pipeline_graphics(self.pipeline_axes.clone())
@@ -559,10 +572,17 @@ impl ParticleRenderPipeline {
         }
     }
 
-    fn compute_view_proj(&self) -> Mat4 {
+    fn compute_mvp_axes(&self, aspect_ratio: f32) -> Mat4 {
         let view = Mat4::look_at_rh(self.camera.position, self.camera.target, self.camera.up);
-        let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, self.aspect_ratio, 0.1, 100.0);
+        let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect_ratio, 0.1, 100.0);
         proj * view
+    }
+
+    fn compute_mvp_particle(&self, aspect_ratio: f32, scale_factor: f32) -> Mat4 {
+        let view = Mat4::look_at_rh(self.camera.position, self.camera.target, self.camera.up);
+        let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect_ratio, 0.1, 100.0);
+        let model = Mat4::from_scale(Vec3::splat(scale_factor));
+        proj * view * model
     }
 }
 

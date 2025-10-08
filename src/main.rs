@@ -229,8 +229,15 @@ impl ApplicationHandler for App {
                 match renderer.acquire(Some(Duration::from_millis(5000)), |_| {}) {
                     Ok(future) => {
                         pipeline.set_particles(&self.positions);
-                        let after_future =
-                            pipeline.render(future, renderer.swapchain_image_view(), gui);
+                        let ui_state = self.ui_state.read().unwrap();
+                        let scale = ui_state.scale;
+                        drop(ui_state);
+                        let after_future = pipeline.render(
+                            future,
+                            renderer.swapchain_image_view(),
+                            gui,
+                            scale,
+                        );
                         renderer.present(after_future, true);
                     }
                     Err(vulkano::VulkanError::OutOfDate) => {
