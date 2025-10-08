@@ -4,12 +4,23 @@ use egui::{Button, DragValue, Label, Slider, vec2};
 use std::sync::{Arc, RwLock};
 
 fn format_simulation_time(simulation_time: f64) -> String {
-    let days = (simulation_time / 86400.0).floor() as i64;
-    let remaining_seconds = simulation_time % 86400.0;
+    let sign = if simulation_time < 0.0 { "-" } else { "" };
+    let total_seconds = simulation_time.abs();
+    let days = (total_seconds / 86400.0).floor() as i64;
+    let remaining_seconds = total_seconds % 86400.0;
     let hours = (remaining_seconds / 3600.0).floor() as i64;
     let minutes = ((remaining_seconds % 3600.0) / 60.0).floor() as i64;
     let seconds = (remaining_seconds % 60.0).floor() as i64;
-    format!("{} {:02}:{:02}:{:02}", days, hours, minutes, seconds)
+    format!(
+        "{}{} {:02}:{:02}:{:02}",
+        sign, days, hours, minutes, seconds
+    )
+}
+
+fn format_scale(scale: f64) -> String {
+    let scale_inv = 5000.0 / scale;
+    let pow10 = scale_inv.powi(10) * 1e14;
+    format!("{:.3e}", pow10)
 }
 
 pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
@@ -42,7 +53,9 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             {
                 ui_state_guard.is_running = !ui_state_guard.is_running;
             }
-            if ui.add_sized(button_size, Button::new("Reset")).clicked() {}
+            if ui.add_sized(button_size, Button::new("Reset")).clicked() {
+                ui_state_guard.is_reset_requested = true;
+            }
             ui.separator();
             ui.add(Label::new("Particle Count:"));
             let max_particle_count = ui_state_guard.max_particle_count;
@@ -60,6 +73,15 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     .speed(0.1)
                     .prefix("Time(sec)/Frame: "),
             );
+            ui.separator();
+            ui.style_mut().spacing.slider_width = ui.available_width();
+            ui.horizontal(|ui| {
+                label_normal(ui, "Scale (m):");
+                label_indicator(ui, format_scale(ui_state_guard.scale).as_str());
+            });
+            ui.add(Slider::new(&mut ui_state_guard.scale, 1.0..=10000.0).show_value(false));
+            ui.separator();
+            ui.style_mut().spacing.slider_width = 140.0;
             label_normal(ui, "Max FPS:");
             ui.checkbox(&mut ui_state_guard.unlimited_fps, "∞");
             if !ui_state_guard.unlimited_fps {

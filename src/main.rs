@@ -33,14 +33,15 @@ mod utils;
 const DOUBLE_CLICK_MILLIS: u64 = 400;
 const DOUBLE_CLICK_DIST: f64 = 25.0;
 
-#[tokio::main]
-async fn main() -> Result<(), EventLoopError> {
+fn main() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new()?;
     let mut app = App::default();
     let ui_state_clone = Arc::clone(&app.ui_state);
     let simulation_state_clone = Arc::clone(&app.simulation_state);
     let need_redraw = Arc::clone(&app.need_redraw);
     let mut last_advance = Instant::now();
+    let mut last_fps = Instant::now();
+    let mut prev_frame: i64 = 1;
     std::thread::spawn(move || {
         let simulation_state = simulation_state_clone;
         loop {
@@ -53,12 +54,37 @@ async fn main() -> Result<(), EventLoopError> {
             let max_fps = ui_state.max_fps;
             let unlimited_fps = ui_state.unlimited_fps;
             let time_per_frame = ui_state.time_per_frame;
+            let is_reset_requested = ui_state.is_reset_requested;
+            let particle_count = ui_state.particle_count;
             drop(ui_state);
+            if is_reset_requested {
+                let mut sim = simulation_state.write().unwrap();
+                sim.reset(particle_count);
+                drop(sim);
+                let mut ui_state = ui_state_clone.write().unwrap();
+                ui_state.frame = 1;
+                ui_state.simulation_time = 0.0;
+                ui_state.is_reset_requested = false;
+                need_redraw.write().unwrap().clone_from(&true);
+                continue;
+            }
+            let now = Instant::now();
+            let dt = now.duration_since(last_fps).as_secs_f64();
+            if dt >= 1.0 {
+                let mut ui_state = ui_state_clone.write().unwrap();
+                ui_state.fps = if ui_state.frame - prev_frame > 0 {
+                    ui_state.frame - prev_frame
+                } else {
+                    0
+                };
+                prev_frame = ui_state.frame;
+                drop(ui_state);
+                last_fps = now;
+            }
             if !is_running {
                 std::thread::sleep(Duration::from_millis(16));
                 continue;
             }
-            let now = Instant::now();
             let dt = now.duration_since(last_advance).as_secs_f64();
             let target_fps = max_fps as f64;
             if !unlimited_fps && dt < 1.0 / target_fps {
@@ -73,17 +99,6 @@ async fn main() -> Result<(), EventLoopError> {
             let mut ui_state = ui_state_clone.write().unwrap();
             ui_state.frame += 1;
             ui_state.simulation_time += time_per_frame;
-        }
-    });
-    let ui_state_clone = Arc::clone(&app.ui_state);
-    tokio::spawn(async move {
-        let mut interval_timer = tokio::time::interval(Duration::from_secs(1));
-        let mut prev_frame: u64 = 1;
-        loop {
-            interval_timer.tick().await;
-            let mut ui_state = ui_state_clone.write().unwrap();
-            ui_state.fps = ui_state.frame - prev_frame;
-            prev_frame = ui_state.frame;
         }
     });
     event_loop.run_app(&mut app)

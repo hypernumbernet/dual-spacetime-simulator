@@ -44,8 +44,28 @@ impl SimulationState {
         }
     }
 
+    pub fn reset(&mut self, particle_count: u32) {
+        let mut rng = rand::thread_rng();
+        self.particles = (0..particle_count)
+            .map(|_| Particle {
+                position: [
+                    rng.gen_range(-1.0..1.0),
+                    rng.gen_range(-1.0..1.0),
+                    rng.gen_range(-1.0..1.0),
+                ],
+                velocity: [
+                    rng.gen_range(-0.01..0.01),
+                    rng.gen_range(-0.01..0.01),
+                    rng.gen_range(-0.01..0.01),
+                ],
+                mass: rng.gen_range(0.5..2.0),
+            })
+            .collect();
+        self.time = 0.0;
+    }
+
     pub fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
-        const G: f32 = 0.0000001;
+        const G: f32 = 0.000001;
         let dt = delta_seconds as f32;
         let positions: Vec<[f32; 3]> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f32> = self.particles.iter().map(|p| p.mass).collect();

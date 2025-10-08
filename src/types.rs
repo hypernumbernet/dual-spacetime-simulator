@@ -1,4 +1,4 @@
-#[derive(Clone)]
+
 pub struct UiState {
     pub input_panel_width: f32,
     pub min_window_width: f32,
@@ -6,13 +6,15 @@ pub struct UiState {
     pub particle_count: u32,
     pub max_particle_count: u32,
     pub gravity: f32,
-    pub fps: u64,
-    pub frame: u64,
+    pub fps: i64,
+    pub frame: i64,
     pub simulation_time: f64,
     pub time_per_frame: f64,
+    pub scale: f64,
     pub is_running: bool,
     pub max_fps: u32,
     pub unlimited_fps: bool,
+    pub is_reset_requested: bool,
 }
 
 impl Default for UiState {
@@ -28,9 +30,11 @@ impl Default for UiState {
             frame: 1,
             simulation_time: 0.0,
             time_per_frame: 1.0,
+            scale: 5000.0,
             is_running: false,
             max_fps: 60,
             unlimited_fps: false,
+            is_reset_requested: false,
         }
     }
 }
