@@ -1,4 +1,3 @@
-
 pub struct UiState {
     pub input_panel_width: f32,
     pub min_window_width: f32,

@@ -1,4 +1,4 @@
-use crate::types::UiState;
+use crate::ui_state::UiState;
 use crate::ui_styles::*;
 use egui::{Button, DragValue, Label, Slider, vec2};
 use std::sync::{Arc, RwLock};

@@ -1,11 +1,21 @@
 //Hide the console window on Windows in release mode
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod camera;
+mod integration;
+mod pipeline;
+mod renderer;
+mod simulation;
+mod ui;
+mod ui_state;
+mod ui_styles;
+mod utils;
+
 use crate::integration::{Gui, GuiConfig};
 use crate::pipeline::ParticleRenderPipeline;
 use crate::simulation::SimulationState;
-use crate::types::UiState;
 use crate::ui::draw_ui;
+use crate::ui_state::UiState;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use vulkano_util::{
@@ -19,16 +29,6 @@ use winit::{
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
 };
-
-mod camera;
-mod integration;
-mod pipeline;
-mod renderer;
-mod simulation;
-mod types;
-mod ui;
-mod ui_styles;
-mod utils;
 
 const DOUBLE_CLICK_MILLIS: u64 = 400;
 const DOUBLE_CLICK_DIST: f64 = 25.0;
