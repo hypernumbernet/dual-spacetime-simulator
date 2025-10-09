@@ -2,6 +2,7 @@ use crate::ui_state::*;
 use crate::ui_styles::*;
 use egui::{Button, DragValue, Label, Slider, vec2};
 use std::sync::{Arc, RwLock};
+use crate::simulation::AU;
 
 fn format_simulation_time(simulation_time: f64) -> String {
     let sign = if simulation_time < 0.0 { "-" } else { "" };
@@ -77,11 +78,6 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 &mut ui_state_guard.particle_count,
                 2..=max_particle_count as u32,
             ));
-            ui.add(
-                DragValue::new(&mut ui_state_guard.gravity)
-                    .speed(0.1)
-                    .prefix("Gravity: "),
-            );
             ui.add(
                 DragValue::new(&mut ui_state_guard.time_per_frame)
                     .speed(0.1)

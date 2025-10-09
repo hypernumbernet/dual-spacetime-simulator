@@ -2,73 +2,70 @@ use num_cpus;
 use rand::Rng;
 use rayon::prelude::*;
 
+pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
+pub const _LIGHT_SPEED: f64 = 299_792_458.0; // Speed of light in meters per second
+pub const G: f64 = 6.6743e-11; // Gravitational constant in m^3 kg^-1 s^-2
+
 pub struct SimulationState {
     pub particles: Vec<Particle>,
     pub time: f64,
     pub thread_pool: Option<rayon::ThreadPool>,
+    correct_m: f64, // Scale-corrected length
+    correct_kg: f64, // Scale-corrected mass
 }
 
 #[derive(Clone, Copy)]
 pub struct Particle {
-    pub position: [f32; 3],
-    pub velocity: [f32; 3],
-    pub mass: f32,
+    pub position: [f64; 3],
+    pub velocity: [f64; 3],
+    pub mass: f64,
+}
+
+fn init_particles(particle_count: u32) -> Vec<Particle> {
+    let mut rng = rand::thread_rng();
+    (0..particle_count)
+        .map(|_| Particle {
+            position: [
+                rng.gen_range(-1.0..1.0),
+                rng.gen_range(-1.0..1.0),
+                rng.gen_range(-1.0..1.0),
+            ],
+            velocity: [
+                rng.gen_range(-0.01..0.01),
+                rng.gen_range(-0.01..0.01),
+                rng.gen_range(-0.01..0.01),
+            ],
+            mass: rng.gen_range(1e36..1e38),
+        })
+        .collect()
 }
 
 impl SimulationState {
-    pub fn new(particle_count: u32) -> Self {
-        let mut rng = rand::thread_rng();
-        let particles = (0..particle_count)
-            .map(|_| Particle {
-                position: [
-                    rng.gen_range(-1.0..1.0),
-                    rng.gen_range(-1.0..1.0),
-                    rng.gen_range(-1.0..1.0),
-                ],
-                velocity: [
-                    rng.gen_range(-0.01..0.01),
-                    rng.gen_range(-0.01..0.01),
-                    rng.gen_range(-0.01..0.01),
-                ],
-                mass: rng.gen_range(0.5..2.0),
-            })
-            .collect();
+    pub fn new(particle_count: u32, scale: f64) -> Self {
+        let particles = init_particles(particle_count);
         let thread_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(num_cpus::get())
             .build()
             .unwrap();
+        let correct_m = 1.0 / scale;
+        let correct_kg = scale * scale * scale;
         Self {
             particles,
             time: 0.0,
             thread_pool: Some(thread_pool),
+            correct_m,
+            correct_kg,
         }
     }
 
     pub fn reset(&mut self, particle_count: u32) {
-        let mut rng = rand::thread_rng();
-        self.particles = (0..particle_count)
-            .map(|_| Particle {
-                position: [
-                    rng.gen_range(-1.0..1.0),
-                    rng.gen_range(-1.0..1.0),
-                    rng.gen_range(-1.0..1.0),
-                ],
-                velocity: [
-                    rng.gen_range(-0.01..0.01),
-                    rng.gen_range(-0.01..0.01),
-                    rng.gen_range(-0.01..0.01),
-                ],
-                mass: rng.gen_range(0.5..2.0),
-            })
-            .collect();
+        self.particles = init_particles(particle_count);
         self.time = 0.0;
     }
 
     pub fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
-        const G: f32 = 0.000001;
-        let dt = delta_seconds as f32;
-        let positions: Vec<[f32; 3]> = self.particles.iter().map(|p| p.position).collect();
-        let masses: Vec<f32> = self.particles.iter().map(|p| p.mass).collect();
+        let positions: Vec<[f64; 3]> = self.particles.iter().map(|p| p.position).collect();
+        let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
         if let Some(pool) = &self.thread_pool {
             pool.install(|| {
                 self.particles
@@ -95,7 +92,7 @@ impl SimulationState {
                             }
                         }
                         for k in 0..3 {
-                            particle.velocity[k] += acceleration[k] * dt;
+                            particle.velocity[k] += acceleration[k] * delta_seconds;
                         }
                     });
             });
@@ -104,12 +101,11 @@ impl SimulationState {
 
     pub fn advance_time(&mut self, delta_seconds: f64) {
         self.time += delta_seconds;
-        let dt_f32 = delta_seconds as f32;
         if let Some(pool) = &self.thread_pool {
             pool.install(|| {
                 self.particles.par_iter_mut().for_each(|particle| {
                     for i in 0..3 {
-                        particle.position[i] += particle.velocity[i] * dt_f32;
+                        particle.position[i] += particle.velocity[i] * delta_seconds;
                     }
                 });
             });
@@ -123,6 +119,8 @@ impl Default for SimulationState {
             particles: vec![],
             time: 0.0,
             thread_pool: None,
+            correct_m: 1.0,
+            correct_kg: 1.0,
         }
     }
 }

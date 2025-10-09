@@ -1,4 +1,3 @@
-pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 
 pub struct UiState {
@@ -7,7 +6,6 @@ pub struct UiState {
     pub min_window_height: f32,
     pub particle_count: u32,
     pub max_particle_count: u32,
-    pub gravity: f32,
     pub fps: i64,
     pub frame: i64,
     pub simulation_time: f64,
@@ -27,7 +25,6 @@ impl Default for UiState {
             min_window_height: 300.0,
             particle_count: 1000,
             max_particle_count: 20000,
-            gravity: 9.81,
             fps: 0,
             frame: 1,
             simulation_time: 0.0,

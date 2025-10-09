@@ -187,17 +187,19 @@ impl ApplicationHandler for App {
             primary_renderer.swapchain_format(),
             GuiConfig::default(),
         ));
-        let sim = SimulationState::new(ui_state.particle_count);
-        *self.simulation_state.write().unwrap() = sim;
-        self.positions = self
-            .simulation_state
-            .read()
-            .unwrap()
+        let sim = SimulationState::new(ui_state.particle_count, ui_state.scale);
+        self.positions = sim
             .particles
             .iter()
-            .map(|p| p.position)
+            .map(|p| {
+                [
+                    p.position[0] as f32,
+                    p.position[1] as f32,
+                    p.position[2] as f32,
+                ]
+            })
             .collect();
-        drop(ui_state);
+        *self.simulation_state.write().unwrap() = sim;
     }
 
     fn window_event(
@@ -232,12 +234,8 @@ impl ApplicationHandler for App {
                         let ui_state = self.ui_state.read().unwrap();
                         let scale = ui_state.scale;
                         drop(ui_state);
-                        let after_future = pipeline.render(
-                            future,
-                            renderer.swapchain_image_view(),
-                            gui,
-                            scale,
-                        );
+                        let after_future =
+                            pipeline.render(future, renderer.swapchain_image_view(), gui, scale);
                         renderer.present(after_future, true);
                     }
                     Err(vulkano::VulkanError::OutOfDate) => {
@@ -298,7 +296,17 @@ impl ApplicationHandler for App {
             pipeline.update_animation();
         }
         if let Ok(sim) = self.simulation_state.try_read() {
-            self.positions = sim.particles.iter().map(|p| p.position).collect();
+            self.positions = sim
+                .particles
+                .iter()
+                .map(|p| {
+                    [
+                        p.position[0] as f32,
+                        p.position[1] as f32,
+                        p.position[2] as f32,
+                    ]
+                })
+                .collect();
             self.need_redraw.write().unwrap().clone_from(&false);
         }
     }
