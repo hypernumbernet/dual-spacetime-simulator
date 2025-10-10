@@ -18,9 +18,9 @@ fn format_simulation_time(simulation_time: f64) -> String {
     )
 }
 
-fn format_scale(scale: f64) -> String {
-    let scale_inv = DEFAULT_SCALE_UI / scale;
-    let pow10 = scale_inv.powi(4) * 1e10;
+fn format_scale(scale_guage: f64, scale: f64) -> String {
+    let scale_inv = DEFAULT_SCALE_UI / scale_guage;
+    let pow10 = scale_inv.powi(4) * scale;
     if pow10 >= AU * 1e6 {
         format!("{:.3e} au", pow10 / AU)
     } else if pow10 >= AU {
@@ -86,9 +86,9 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             ui.separator();
             ui.horizontal(|ui| {
                 label_normal(ui, "Scale (m):");
-                label_indicator(ui, format_scale(ui_state_guard.scale).as_str());
+                label_indicator(ui, format_scale(ui_state_guard.scale_gauge, ui_state_guard.scale).as_str());
             });
-            slider_pure(ui, &mut ui_state_guard.scale, DEFAULT_SCALE_UI * 0.4..=DEFAULT_SCALE_UI * 3.0);
+            slider_pure(ui, &mut ui_state_guard.scale_gauge, DEFAULT_SCALE_UI * 0.4..=DEFAULT_SCALE_UI * 3.0);
             ui.separator();
             ui.style_mut().spacing.slider_width = 140.0;
             label_normal(ui, "Max FPS:");

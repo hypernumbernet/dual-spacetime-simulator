@@ -10,8 +10,8 @@ pub struct SimulationState {
     pub particles: Vec<Particle>,
     pub time: f64,
     pub thread_pool: Option<rayon::ThreadPool>,
-    correct_m: f64, // Scale-corrected length
-    correct_kg: f64, // Scale-corrected mass
+    pub scale: f64, // Scale factor (meters per simulation unit)
+    pub dt: f64, // Duration per frame in seconds
 }
 
 #[derive(Clone, Copy)]
@@ -21,45 +21,51 @@ pub struct Particle {
     pub mass: f64,
 }
 
-fn init_particles(particle_count: u32) -> Vec<Particle> {
+fn init_particles(particle_count: u32) -> (Vec<Particle>, f64, f64) {
+    let scale = 1e10;
+    let correct_m = 1.0 / scale; // Scale-corrected length
+    let correct_kg = correct_m * correct_m * correct_m; // Scale-corrected mass
+    let speed_max = 1e-6;
     let mut rng = rand::thread_rng();
-    (0..particle_count)
-        .map(|_| Particle {
-            position: [
-                rng.gen_range(-1.0..1.0),
-                rng.gen_range(-1.0..1.0),
-                rng.gen_range(-1.0..1.0),
-            ],
-            velocity: [
-                rng.gen_range(-0.01..0.01),
-                rng.gen_range(-0.01..0.01),
-                rng.gen_range(-0.01..0.01),
-            ],
-            mass: rng.gen_range(1e36..1e38),
-        })
-        .collect()
+    (
+        (0..particle_count)
+            .map(|_| Particle {
+                position: [
+                    rng.gen_range(-1.0..1.0),
+                    rng.gen_range(-1.0..1.0),
+                    rng.gen_range(-1.0..1.0),
+                ],
+                velocity: [
+                    rng.gen_range(-speed_max..speed_max),
+                    rng.gen_range(-speed_max..speed_max),
+                    rng.gen_range(-speed_max..speed_max),
+                ],
+                mass: rng.gen_range(1e31 * correct_kg..1e33 * correct_kg),
+            })
+            .collect(),
+        scale,
+        10.5,
+    )
 }
 
 impl SimulationState {
-    pub fn new(particle_count: u32, scale: f64) -> Self {
-        let particles = init_particles(particle_count);
+    pub fn new(particle_count: u32) -> Self {
         let thread_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(num_cpus::get())
             .build()
             .unwrap();
-        let correct_m = 1.0 / scale;
-        let correct_kg = scale * scale * scale;
+        let (particles, scale, dt) = init_particles(particle_count);
         Self {
             particles,
             time: 0.0,
             thread_pool: Some(thread_pool),
-            correct_m,
-            correct_kg,
+            scale,
+            dt
         }
     }
 
     pub fn reset(&mut self, particle_count: u32) {
-        self.particles = init_particles(particle_count);
+        (self.particles, self.scale, self.dt) = init_particles(particle_count);
         self.time = 0.0;
     }
 
@@ -119,8 +125,8 @@ impl Default for SimulationState {
             particles: vec![],
             time: 0.0,
             thread_pool: None,
-            correct_m: 1.0,
-            correct_kg: 1.0,
+            scale: 1.0,
+            dt: 1.0,
         }
     }
 }

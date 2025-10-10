@@ -65,6 +65,7 @@ fn main() -> Result<(), EventLoopError> {
                 ui_state.frame = 1;
                 ui_state.simulation_time = 0.0;
                 ui_state.is_reset_requested = false;
+                drop(ui_state);
                 need_redraw.write().unwrap().clone_from(&true);
                 continue;
             }
@@ -156,7 +157,7 @@ impl Default for App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let ui_state = self.ui_state.read().unwrap();
+        let mut ui_state = self.ui_state.write().unwrap();
         let resize_constraints = vulkano_util::window::WindowResizeConstraints {
             min_width: ui_state.min_window_width,
             min_height: ui_state.min_window_height,
@@ -187,18 +188,9 @@ impl ApplicationHandler for App {
             primary_renderer.swapchain_format(),
             GuiConfig::default(),
         ));
-        let sim = SimulationState::new(ui_state.particle_count, ui_state.scale);
-        self.positions = sim
-            .particles
-            .iter()
-            .map(|p| {
-                [
-                    p.position[0] as f32,
-                    p.position[1] as f32,
-                    p.position[2] as f32,
-                ]
-            })
-            .collect();
+        let sim = SimulationState::new(ui_state.particle_count);
+        ui_state.scale = sim.scale;
+        ui_state.time_per_frame = sim.dt;
         *self.simulation_state.write().unwrap() = sim;
     }
 
@@ -232,7 +224,7 @@ impl ApplicationHandler for App {
                     Ok(future) => {
                         pipeline.set_particles(&self.positions);
                         let ui_state = self.ui_state.read().unwrap();
-                        let scale = ui_state.scale;
+                        let scale = ui_state.scale_gauge;
                         drop(ui_state);
                         let after_future =
                             pipeline.render(future, renderer.swapchain_image_view(), gui, scale);
