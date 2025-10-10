@@ -92,9 +92,6 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             ui.separator();
             ui.style_mut().spacing.slider_width = 140.0;
             label_normal(ui, "Max FPS:");
-            ui.checkbox(&mut ui_state_guard.unlimited_fps, "∞");
-            if !ui_state_guard.unlimited_fps {
-                ui.add(Slider::new(&mut ui_state_guard.max_fps, 1..=120));
-            }
+            ui.add(Slider::new(&mut ui_state_guard.max_fps, 1..=120));
         });
 }

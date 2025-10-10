@@ -52,7 +52,6 @@ fn main() -> Result<(), EventLoopError> {
             let ui_state = ui_state_clone.read().unwrap();
             let is_running = ui_state.is_running;
             let max_fps = ui_state.max_fps;
-            let unlimited_fps = ui_state.unlimited_fps;
             let time_per_frame = ui_state.time_per_frame;
             let is_reset_requested = ui_state.is_reset_requested;
             let particle_count = ui_state.particle_count;
@@ -88,7 +87,7 @@ fn main() -> Result<(), EventLoopError> {
             }
             let dt = now.duration_since(last_advance).as_secs_f64();
             let target_fps = max_fps as f64;
-            if !unlimited_fps && dt < 1.0 / target_fps {
+            if dt < 1.0 / target_fps {
                 continue;
             }
             let mut sim = simulation_state.write().unwrap();

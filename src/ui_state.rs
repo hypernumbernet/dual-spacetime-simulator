@@ -14,7 +14,6 @@ pub struct UiState {
     pub scale_gauge: f64,
     pub is_running: bool,
     pub max_fps: u32,
-    pub unlimited_fps: bool,
     pub is_reset_requested: bool,
 }
 
@@ -34,7 +33,6 @@ impl Default for UiState {
             scale_gauge: DEFAULT_SCALE_UI,
             is_running: false,
             max_fps: 60,
-            unlimited_fps: false,
             is_reset_requested: false,
         }
     }
