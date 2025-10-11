@@ -1,8 +1,8 @@
+use crate::simulation::AU;
 use crate::ui_state::*;
 use crate::ui_styles::*;
 use egui::{Button, DragValue, Label, Slider, vec2};
 use std::sync::{Arc, RwLock};
-use crate::simulation::AU;
 
 fn format_simulation_time(simulation_time: f64) -> String {
     let sign = if simulation_time < 0.0 { "-" } else { "" };
@@ -45,7 +45,6 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
         .collapsible(true)
         .default_width(ui_state_guard.input_panel_width)
         .show(ctx, |ui| {
-            ui.style_mut().spacing.slider_width = 140.0;
             ui.horizontal(|ui| {
                 label_normal(ui, "FPS");
                 label_indicator(ui, &ui_state_guard.fps.to_string());
@@ -72,6 +71,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 ui_state_guard.is_reset_requested = true;
             }
             ui.separator();
+            ui.style_mut().spacing.slider_width = 150.0;
             ui.add(Label::new("Particle Count:"));
             let max_particle_count = ui_state_guard.max_particle_count;
             ui.add(Slider::new(
@@ -86,12 +86,21 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             ui.separator();
             ui.horizontal(|ui| {
                 label_normal(ui, "Scale (m):");
-                label_indicator(ui, format_scale(ui_state_guard.scale_gauge, ui_state_guard.scale).as_str());
+                label_indicator(
+                    ui,
+                    format_scale(ui_state_guard.scale_gauge, ui_state_guard.scale).as_str(),
+                );
             });
-            slider_pure(ui, &mut ui_state_guard.scale_gauge, DEFAULT_SCALE_UI * 0.4..=DEFAULT_SCALE_UI * 3.0);
+            slider_pure(
+                ui,
+                &mut ui_state_guard.scale_gauge,
+                DEFAULT_SCALE_UI * 0.4..=DEFAULT_SCALE_UI * 3.0,
+            );
             ui.separator();
-            ui.style_mut().spacing.slider_width = 140.0;
+            ui.style_mut().spacing.slider_width = 160.0;
             label_normal(ui, "Max FPS:");
-            ui.add(Slider::new(&mut ui_state_guard.max_fps, 1..=120));
+            ui.add(Slider::new(&mut ui_state_guard.max_fps, 1..=1000));
+            label_normal(ui, "Skip drawing:");
+            ui.add(Slider::new(&mut ui_state_guard.skip, 0..=1000));
         });
 }

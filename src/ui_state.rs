@@ -15,6 +15,7 @@ pub struct UiState {
     pub is_running: bool,
     pub max_fps: u32,
     pub is_reset_requested: bool,
+    pub skip: u32,
 }
 
 impl Default for UiState {
@@ -34,6 +35,7 @@ impl Default for UiState {
             is_running: false,
             max_fps: 60,
             is_reset_requested: false,
+            skip: 0,
         }
     }
 }

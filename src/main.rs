@@ -39,6 +39,7 @@ fn main() -> Result<(), EventLoopError> {
     let ui_state_clone = Arc::clone(&app.ui_state);
     let simulation_state_clone = Arc::clone(&app.simulation_state);
     let need_redraw = Arc::clone(&app.need_redraw);
+    let skip_redraw = Arc::clone(&app.skip_redraw);
     let mut last_advance = Instant::now();
     let mut last_fps = Instant::now();
     let mut prev_frame: i64 = 1;
@@ -55,6 +56,7 @@ fn main() -> Result<(), EventLoopError> {
             let time_per_frame = ui_state.time_per_frame;
             let is_reset_requested = ui_state.is_reset_requested;
             let particle_count = ui_state.particle_count;
+            let skip = ui_state.skip;
             drop(ui_state);
             if is_reset_requested {
                 let mut sim = simulation_state.write().unwrap();
@@ -66,6 +68,7 @@ fn main() -> Result<(), EventLoopError> {
                 ui_state.is_reset_requested = false;
                 drop(ui_state);
                 need_redraw.write().unwrap().clone_from(&true);
+                skip_redraw.write().unwrap().clone_from(&skip);
                 continue;
             }
             let now = Instant::now();
@@ -94,7 +97,14 @@ fn main() -> Result<(), EventLoopError> {
             sim.advance_time(time_per_frame);
             sim.update_velocities_with_gravity(time_per_frame);
             drop(sim);
-            need_redraw.write().unwrap().clone_from(&true);
+            if *skip_redraw.read().unwrap() < 1 {
+                let mut sr = skip_redraw.write().unwrap();
+                *sr = skip;
+                need_redraw.write().unwrap().clone_from(&true);
+            } else {
+                let mut sr = skip_redraw.write().unwrap();
+                *sr -= 1;
+            }
             last_advance = now;
             let mut ui_state = ui_state_clone.write().unwrap();
             ui_state.frame += 1;
@@ -119,6 +129,7 @@ pub struct App {
     simulation_state: Arc<RwLock<SimulationState>>,
     positions: Vec<[f32; 3]>,
     need_redraw: Arc<RwLock<bool>>,
+    skip_redraw: Arc<RwLock<u32>>,
     mouse_left_down: bool,
     mouse_right_down: bool,
     mouse_middle_down: bool,
@@ -141,7 +152,8 @@ impl Default for App {
             ui_state: Arc::new(RwLock::new(UiState::default())),
             simulation_state: Arc::new(RwLock::new(SimulationState::default())),
             positions: Vec::new(),
-            need_redraw: Arc::new(RwLock::new(false)),
+            need_redraw: Arc::new(RwLock::new(true)),
+            skip_redraw: Arc::new(RwLock::new(0)),
             mouse_left_down: false,
             mouse_right_down: false,
             mouse_middle_down: false,
@@ -191,6 +203,7 @@ impl ApplicationHandler for App {
         ui_state.scale = sim.scale;
         ui_state.time_per_frame = sim.dt;
         *self.simulation_state.write().unwrap() = sim;
+        self.skip_redraw.write().unwrap().clone_from(&ui_state.skip);
     }
 
     fn window_event(
@@ -221,7 +234,6 @@ impl ApplicationHandler for App {
                 });
                 match renderer.acquire(Some(Duration::from_millis(5000)), |_| {}) {
                     Ok(future) => {
-                        pipeline.set_particles(&self.positions);
                         let ui_state = self.ui_state.read().unwrap();
                         let scale = ui_state.scale_gauge;
                         drop(ui_state);
@@ -286,6 +298,9 @@ impl ApplicationHandler for App {
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
         }
+        if *self.need_redraw.read().unwrap() == false {
+            return;
+        }
         if let Ok(sim) = self.simulation_state.try_read() {
             self.positions = sim
                 .particles
@@ -299,6 +314,9 @@ impl ApplicationHandler for App {
                 })
                 .collect();
             self.need_redraw.write().unwrap().clone_from(&false);
+            if let Some(pipeline) = self.render_pipeline.as_mut() {
+                pipeline.set_particles(&self.positions);
+            }
         }
     }
 }
