@@ -43,6 +43,10 @@ fn main() -> Result<(), EventLoopError> {
     let mut last_advance = Instant::now();
     let mut last_fps = Instant::now();
     let mut prev_frame: i64 = 1;
+    let thread_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(num_cpus::get())
+        .build()
+        .unwrap();
     std::thread::spawn(move || {
         let simulation_state = simulation_state_clone;
         loop {
@@ -93,10 +97,11 @@ fn main() -> Result<(), EventLoopError> {
             if dt < 1.0 / target_fps {
                 continue;
             }
-            let mut sim = simulation_state.write().unwrap();
-            sim.advance_time(time_per_frame);
-            sim.update_velocities_with_gravity(time_per_frame);
-            drop(sim);
+            thread_pool.install(|| {
+                let mut sim = simulation_state.write().unwrap();
+                sim.advance_time(time_per_frame);
+                sim.update_velocities_with_gravity(time_per_frame);
+            });
             if *skip_redraw.read().unwrap() < 1 {
                 let mut sr = skip_redraw.write().unwrap();
                 *sr = skip;

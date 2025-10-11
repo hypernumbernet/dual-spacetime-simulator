@@ -1,5 +1,4 @@
 use glam::DVec3;
-use num_cpus;
 use rand::Rng;
 use rayon::prelude::*;
 
@@ -9,7 +8,6 @@ pub const G: f64 = 6.6743e-11; // Gravitational constant in m^3 kg^-1 s^-2
 
 pub struct SimulationState {
     pub particles: Vec<Particle>,
-    pub thread_pool: Option<rayon::ThreadPool>,
     pub scale: f64, // Scale factor (meters per simulation unit)
     pub dt: f64,    // Duration per frame in seconds
 }
@@ -50,14 +48,9 @@ fn init_particles(particle_count: u32) -> (Vec<Particle>, f64, f64) {
 
 impl SimulationState {
     pub fn new(particle_count: u32) -> Self {
-        let thread_pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(num_cpus::get())
-            .build()
-            .unwrap();
         let (particles, scale, dt) = init_particles(particle_count);
         Self {
             particles,
-            thread_pool: Some(thread_pool),
             scale,
             dt,
         }
@@ -70,41 +63,31 @@ impl SimulationState {
     pub fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
         let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
-        if let Some(pool) = &self.thread_pool {
-            pool.install(|| {
-                self.particles
-                    .par_iter_mut()
-                    .enumerate()
-                    .for_each(|(i, particle)| {
-                        let mut acceleration = DVec3::ZERO;
-                        for (j, (&pos_j, &mass_j)) in
-                            positions.iter().zip(masses.iter()).enumerate()
-                        {
-                            if i == j {
-                                continue;
-                            }
-                            let diff = pos_j - particle.position;
-                            let r_squared = diff.length_squared();
-                            if r_squared > 0.0 {
-                                let force_magnitude = G * mass_j / r_squared;
-                                let accel_magnitude = force_magnitude / particle.mass;
-                                acceleration += accel_magnitude * diff.normalize();
-                            }
-                        }
-                        particle.velocity += acceleration * delta_seconds;
-                    });
+        self.particles
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(i, particle)| {
+                let mut acceleration = DVec3::ZERO;
+                for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
+                    if i == j {
+                        continue;
+                    }
+                    let diff = pos_j - particle.position;
+                    let r_squared = diff.length_squared();
+                    if r_squared > 0.0 {
+                        let force_magnitude = G * mass_j / r_squared;
+                        let accel_magnitude = force_magnitude / particle.mass;
+                        acceleration += accel_magnitude * diff.normalize();
+                    }
+                }
+                particle.velocity += acceleration * delta_seconds;
             });
-        }
     }
 
     pub fn advance_time(&mut self, delta_seconds: f64) {
-        if let Some(pool) = &self.thread_pool {
-            pool.install(|| {
-                self.particles.par_iter_mut().for_each(|particle| {
-                    particle.position += particle.velocity * delta_seconds;
-                });
-            });
-        }
+        self.particles.par_iter_mut().for_each(|particle| {
+            particle.position += particle.velocity * delta_seconds;
+        });
     }
 }
 
@@ -112,7 +95,6 @@ impl Default for SimulationState {
     fn default() -> Self {
         Self {
             particles: vec![],
-            thread_pool: None,
             scale: 1.0,
             dt: 1.0,
         }
