@@ -133,6 +133,7 @@ pub struct App {
     ui_state: Arc<RwLock<UiState>>,
     simulation_state: Arc<RwLock<SimulationState>>,
     positions: Vec<[f32; 3]>,
+    colors: Vec<[f32; 4]>,
     need_redraw: Arc<RwLock<bool>>,
     skip_redraw: Arc<RwLock<u32>>,
     mouse_left_down: bool,
@@ -157,6 +158,7 @@ impl Default for App {
             ui_state: Arc::new(RwLock::new(UiState::default())),
             simulation_state: Arc::new(RwLock::new(SimulationState::default())),
             positions: Vec::new(),
+            colors: Vec::new(),
             need_redraw: Arc::new(RwLock::new(true)),
             skip_redraw: Arc::new(RwLock::new(0)),
             mouse_left_down: false,
@@ -318,9 +320,10 @@ impl ApplicationHandler for App {
                     ]
                 })
                 .collect();
+            self.colors = sim.particles.iter().map(|p| p.color).collect();
             self.need_redraw.write().unwrap().clone_from(&false);
             if let Some(pipeline) = self.render_pipeline.as_mut() {
-                pipeline.set_particles(&self.positions);
+                pipeline.set_particles(&self.positions, &self.colors);
             }
         }
     }

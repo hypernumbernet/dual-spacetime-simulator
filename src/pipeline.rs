@@ -147,23 +147,13 @@ impl ParticleRenderPipeline {
         }
     }
 
-    pub fn set_particles(&mut self, positions: &[[f32; 3]]) {
+    pub fn set_particles(&mut self, positions: &[[f32; 3]], colors: &[[f32; 4]]) {
         let verts: Vec<ParticleVertex> = positions
             .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let color = match i % 5 {
-                    0 => [1.0, 0.3, 0.2, 1.0], // Reddish color
-                    1 => [0.2, 0.5, 1.0, 1.0], // Bluish color
-                    2 => [1.0, 0.8, 0.2, 1.0], // Yellowish color
-                    3 => [0.9, 0.4, 1.0, 1.0], // Purplish color
-                    4 => [0.6, 1.0, 0.8, 1.0], // Cyanish color
-                    _ => unreachable!(),
-                };
-                ParticleVertex {
-                    position: *p,
-                    color,
-                }
+            .zip(colors.iter())
+            .map(|(p, c)| ParticleVertex {
+                position: *p,
+                color: *c,
             })
             .collect();
         let new_buf = Buffer::from_iter(

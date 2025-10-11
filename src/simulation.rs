@@ -17,6 +17,7 @@ pub struct Particle {
     pub position: DVec3,
     pub velocity: DVec3,
     pub mass: f64,
+    pub color: [f32; 4],
 }
 
 fn init_particles(particle_count: u32) -> (Vec<Particle>, f64, f64) {
@@ -27,18 +28,30 @@ fn init_particles(particle_count: u32) -> (Vec<Particle>, f64, f64) {
     let mut rng = rand::thread_rng();
     (
         (0..particle_count)
-            .map(|_| Particle {
-                position: DVec3::new(
-                    rng.gen_range(-1.0..1.0),
-                    rng.gen_range(-1.0..1.0),
-                    rng.gen_range(-1.0..1.0),
-                ),
-                velocity: DVec3::new(
-                    rng.gen_range(-speed_max..speed_max),
-                    rng.gen_range(-speed_max..speed_max),
-                    rng.gen_range(-speed_max..speed_max),
-                ),
-                mass: rng.gen_range(1e31 * correct_kg..1e33 * correct_kg),
+            .enumerate()
+            .map(|(i, _)| {
+                let color = match i % 5 {
+                    0 => [1.0, 0.3, 0.2, 1.0], // Reddish color
+                    1 => [0.2, 0.5, 1.0, 1.0], // Bluish color
+                    2 => [1.0, 0.8, 0.2, 1.0], // Yellowish color
+                    3 => [0.9, 0.4, 1.0, 1.0], // Purplish color
+                    4 => [0.6, 1.0, 0.8, 1.0], // Cyanish color
+                    _ => unreachable!(),
+                };
+                Particle {
+                    position: DVec3::new(
+                        rng.gen_range(-1.0..1.0),
+                        rng.gen_range(-1.0..1.0),
+                        rng.gen_range(-1.0..1.0),
+                    ),
+                    velocity: DVec3::new(
+                        rng.gen_range(-speed_max..speed_max),
+                        rng.gen_range(-speed_max..speed_max),
+                        rng.gen_range(-speed_max..speed_max),
+                    ),
+                    mass: rng.gen_range(1e31 * correct_kg..1e33 * correct_kg),
+                    color,
+                }
             })
             .collect(),
         scale,
