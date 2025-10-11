@@ -9,7 +9,6 @@ pub const G: f64 = 6.6743e-11; // Gravitational constant in m^3 kg^-1 s^-2
 
 pub struct SimulationState {
     pub particles: Vec<Particle>,
-    pub time: f64,
     pub thread_pool: Option<rayon::ThreadPool>,
     pub scale: f64, // Scale factor (meters per simulation unit)
     pub dt: f64,    // Duration per frame in seconds
@@ -58,7 +57,6 @@ impl SimulationState {
         let (particles, scale, dt) = init_particles(particle_count);
         Self {
             particles,
-            time: 0.0,
             thread_pool: Some(thread_pool),
             scale,
             dt,
@@ -67,7 +65,6 @@ impl SimulationState {
 
     pub fn reset(&mut self, particle_count: u32) {
         (self.particles, self.scale, self.dt) = init_particles(particle_count);
-        self.time = 0.0;
     }
 
     pub fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
@@ -101,7 +98,6 @@ impl SimulationState {
     }
 
     pub fn advance_time(&mut self, delta_seconds: f64) {
-        self.time += delta_seconds;
         if let Some(pool) = &self.thread_pool {
             pool.install(|| {
                 self.particles.par_iter_mut().for_each(|particle| {
@@ -116,7 +112,6 @@ impl Default for SimulationState {
     fn default() -> Self {
         Self {
             particles: vec![],
-            time: 0.0,
             thread_pool: None,
             scale: 1.0,
             dt: 1.0,
