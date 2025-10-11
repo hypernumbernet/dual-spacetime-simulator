@@ -1,3 +1,4 @@
+use glam::DVec3;
 use num_cpus;
 use rand::Rng;
 use rayon::prelude::*;
@@ -16,8 +17,8 @@ pub struct SimulationState {
 
 #[derive(Clone, Copy)]
 pub struct Particle {
-    pub position: [f64; 3],
-    pub velocity: [f64; 3],
+    pub position: DVec3,
+    pub velocity: DVec3,
     pub mass: f64,
 }
 
@@ -30,16 +31,16 @@ fn init_particles(particle_count: u32) -> (Vec<Particle>, f64, f64) {
     (
         (0..particle_count)
             .map(|_| Particle {
-                position: [
+                position: DVec3::new(
                     rng.gen_range(-1.0..1.0),
                     rng.gen_range(-1.0..1.0),
                     rng.gen_range(-1.0..1.0),
-                ],
-                velocity: [
+                ),
+                velocity: DVec3::new(
                     rng.gen_range(-speed_max..speed_max),
                     rng.gen_range(-speed_max..speed_max),
                     rng.gen_range(-speed_max..speed_max),
-                ],
+                ),
                 mass: rng.gen_range(1e31 * correct_kg..1e33 * correct_kg),
             })
             .collect(),
@@ -69,8 +70,8 @@ impl SimulationState {
         self.time = 0.0;
     }
 
-    pub fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
-        let positions: Vec<[f64; 3]> = self.particles.iter().map(|p| p.position).collect();
+    pub fn update_velocities_with_gravity(&mut self, delta_seconds: f64, gravity_threshold: f64) {
+        let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
         if let Some(pool) = &self.thread_pool {
             pool.install(|| {
@@ -78,28 +79,21 @@ impl SimulationState {
                     .par_iter_mut()
                     .enumerate()
                     .for_each(|(i, particle)| {
-                        let mut acceleration = [0.0, 0.0, 0.0];
-                        for (j, (&pos, &mass_j)) in positions.iter().zip(masses.iter()).enumerate()
+                        let mut acceleration = DVec3::ZERO;
+                        for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate()
                         {
                             if i == j {
                                 continue;
                             }
-                            let dx = pos[0] - particle.position[0];
-                            let dy = pos[1] - particle.position[1];
-                            let dz = pos[2] - particle.position[2];
-                            let r_squared = dx * dx + dy * dy + dz * dz;
-                            if r_squared > 0.0 {
-                                let r = r_squared.sqrt();
+                            let diff = pos_j - particle.position;
+                            let r_squared = diff.length_squared();
+                            if r_squared > 0.0 && (gravity_threshold <= 0.0 || r_squared <= gravity_threshold) {
                                 let force_magnitude = G * mass_j / r_squared;
                                 let accel_magnitude = force_magnitude / particle.mass;
-                                acceleration[0] += accel_magnitude * dx / r;
-                                acceleration[1] += accel_magnitude * dy / r;
-                                acceleration[2] += accel_magnitude * dz / r;
+                                acceleration += accel_magnitude * diff.normalize();
                             }
                         }
-                        for k in 0..3 {
-                            particle.velocity[k] += acceleration[k] * delta_seconds;
-                        }
+                        particle.velocity += acceleration * delta_seconds;
                     });
             });
         }
@@ -110,9 +104,7 @@ impl SimulationState {
         if let Some(pool) = &self.thread_pool {
             pool.install(|| {
                 self.particles.par_iter_mut().for_each(|particle| {
-                    for i in 0..3 {
-                        particle.position[i] += particle.velocity[i] * delta_seconds;
-                    }
+                    particle.position += particle.velocity * delta_seconds;
                 });
             });
         }

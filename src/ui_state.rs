@@ -16,6 +16,7 @@ pub struct UiState {
     pub max_fps: u32,
     pub is_reset_requested: bool,
     pub skip: u32,
+    pub gravity_threshold: f64,
 }
 
 impl Default for UiState {
@@ -36,6 +37,7 @@ impl Default for UiState {
             max_fps: 60,
             is_reset_requested: false,
             skip: 0,
+            gravity_threshold: 0.0,
         }
     }
 }

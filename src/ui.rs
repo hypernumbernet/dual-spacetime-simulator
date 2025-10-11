@@ -83,6 +83,8 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     .speed(0.1)
                     .prefix("Time(sec)/Frame: "),
             );
+            ui.add(Label::new("Gravity Threshold (r²):"));
+            ui.add(Slider::new(&mut ui_state_guard.gravity_threshold, 0.0..=1.0));
             ui.separator();
             ui.horizontal(|ui| {
                 label_normal(ui, "Scale (m):");
