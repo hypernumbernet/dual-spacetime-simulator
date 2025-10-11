@@ -18,9 +18,9 @@ fn format_simulation_time(simulation_time: f64) -> String {
     )
 }
 
-fn format_scale(scale_guage: f64, scale: f64) -> String {
+fn format_scale(scale_guage: f64, scale: f32) -> String {
     let scale_inv = DEFAULT_SCALE_UI / scale_guage;
-    let pow10 = scale_inv.powi(4) * scale;
+    let pow10 = scale_inv.powi(4) * scale as f64;
     if pow10 >= AU * 1e6 {
         format!("{:.3e} au", pow10 / AU)
     } else if pow10 >= AU {
@@ -80,11 +80,11 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             ));
             ui.add(
                 DragValue::new(&mut ui_state_guard.time_per_frame)
-                    .speed(0.1)
+                    .speed(0.1f32)
                     .prefix("Time(sec)/Frame: "),
             );
             ui.add(Label::new("Gravity Threshold (r²):"));
-            ui.add(Slider::new(&mut ui_state_guard.gravity_threshold, 0.0..=1.0));
+            ui.add(Slider::new(&mut ui_state_guard.gravity_threshold, 0.0f32..=1.0f32));
             ui.separator();
             ui.horizontal(|ui| {
                 label_normal(ui, "Scale (m):");

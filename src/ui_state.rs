@@ -9,14 +9,14 @@ pub struct UiState {
     pub fps: i64,
     pub frame: i64,
     pub simulation_time: f64,
-    pub time_per_frame: f64,
-    pub scale: f64,
+    pub time_per_frame: f32,
+    pub scale: f32,
     pub scale_gauge: f64,
     pub is_running: bool,
     pub max_fps: u32,
     pub is_reset_requested: bool,
     pub skip: u32,
-    pub gravity_threshold: f64,
+    pub gravity_threshold: f32,
 }
 
 impl Default for UiState {
@@ -30,14 +30,14 @@ impl Default for UiState {
             fps: 0,
             frame: 1,
             simulation_time: 0.0,
-            time_per_frame: 1.0,
-            scale: 1.0,
+            time_per_frame: 1.0f32,
+            scale: 1.0f32,
             scale_gauge: DEFAULT_SCALE_UI,
             is_running: false,
             max_fps: 60,
             is_reset_requested: false,
             skip: 0,
-            gravity_threshold: 0.0,
+            gravity_threshold: 0.0f32,
         }
     }
 }

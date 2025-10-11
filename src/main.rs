@@ -109,7 +109,7 @@ fn main() -> Result<(), EventLoopError> {
             last_advance = now;
             let mut ui_state = ui_state_clone.write().unwrap();
             ui_state.frame += 1;
-            ui_state.simulation_time += time_per_frame;
+            ui_state.simulation_time += time_per_frame as f64;
         }
     });
     event_loop.run_app(&mut app)
