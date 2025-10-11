@@ -12,7 +12,7 @@ pub struct SimulationState {
     pub time: f64,
     pub thread_pool: Option<rayon::ThreadPool>,
     pub scale: f64, // Scale factor (meters per simulation unit)
-    pub dt: f64, // Duration per frame in seconds
+    pub dt: f64,    // Duration per frame in seconds
 }
 
 #[derive(Clone, Copy)]
@@ -61,7 +61,7 @@ impl SimulationState {
             time: 0.0,
             thread_pool: Some(thread_pool),
             scale,
-            dt
+            dt,
         }
     }
 
@@ -70,7 +70,7 @@ impl SimulationState {
         self.time = 0.0;
     }
 
-    pub fn update_velocities_with_gravity(&mut self, delta_seconds: f64, gravity_threshold: f64) {
+    pub fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
         let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
         if let Some(pool) = &self.thread_pool {
@@ -80,14 +80,15 @@ impl SimulationState {
                     .enumerate()
                     .for_each(|(i, particle)| {
                         let mut acceleration = DVec3::ZERO;
-                        for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate()
+                        for (j, (&pos_j, &mass_j)) in
+                            positions.iter().zip(masses.iter()).enumerate()
                         {
                             if i == j {
                                 continue;
                             }
                             let diff = pos_j - particle.position;
                             let r_squared = diff.length_squared();
-                            if r_squared > 0.0 && (gravity_threshold <= 0.0 || r_squared <= gravity_threshold) {
+                            if r_squared > 0.0 {
                                 let force_magnitude = G * mass_j / r_squared;
                                 let accel_magnitude = force_magnitude / particle.mass;
                                 acceleration += accel_magnitude * diff.normalize();

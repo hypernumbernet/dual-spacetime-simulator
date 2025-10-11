@@ -93,10 +93,9 @@ fn main() -> Result<(), EventLoopError> {
             if dt < 1.0 / target_fps {
                 continue;
             }
-            let gravity_threshold = ui_state_clone.read().unwrap().gravity_threshold;
             let mut sim = simulation_state.write().unwrap();
             sim.advance_time(time_per_frame);
-            sim.update_velocities_with_gravity(time_per_frame, gravity_threshold);
+            sim.update_velocities_with_gravity(time_per_frame);
             drop(sim);
             if *skip_redraw.read().unwrap() < 1 {
                 let mut sr = skip_redraw.write().unwrap();
