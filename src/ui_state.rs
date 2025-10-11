@@ -1,3 +1,5 @@
+use crate::initial_condition::InitialCondition;
+
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 
 pub struct UiState {
@@ -16,6 +18,7 @@ pub struct UiState {
     pub max_fps: u32,
     pub is_reset_requested: bool,
     pub skip: u32,
+    pub selected_initial_condition: InitialCondition,
 }
 
 impl Default for UiState {
@@ -36,6 +39,12 @@ impl Default for UiState {
             max_fps: 60,
             is_reset_requested: false,
             skip: 0,
+            selected_initial_condition: InitialCondition::RandomCube {
+                num_particles: 1000,
+                cube_size: 1.0,
+                mass_range: (1e31, 1e33),
+                velocity_std: 1e-6,
+            },
         }
     }
 }

@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod camera;
+mod initial_condition;
 mod integration;
 mod pipeline;
 mod renderer;
@@ -59,12 +60,12 @@ fn main() -> Result<(), EventLoopError> {
             let max_fps = ui_state.max_fps;
             let time_per_frame = ui_state.time_per_frame;
             let is_reset_requested = ui_state.is_reset_requested;
-            let particle_count = ui_state.particle_count;
+            let selected_initial_condition = ui_state.selected_initial_condition.clone();
             let skip = ui_state.skip;
             drop(ui_state);
             if is_reset_requested {
                 let mut sim = simulation_state.write().unwrap();
-                sim.reset(particle_count);
+                sim.reset(&selected_initial_condition);
                 drop(sim);
                 let mut ui_state = ui_state_clone.write().unwrap();
                 ui_state.frame = 1;

@@ -1,7 +1,9 @@
+use crate::initial_condition::InitialCondition;
 use crate::simulation::AU;
 use crate::ui_state::*;
 use crate::ui_styles::*;
-use egui::{Button, DragValue, Label, Slider, vec2};
+use egui::{Button, ComboBox, DragValue, Label, Slider, vec2};
+use glam::DVec3;
 use std::sync::{Arc, RwLock};
 
 fn format_simulation_time(simulation_time: f64) -> String {
@@ -40,6 +42,7 @@ fn format_scale(scale_guage: f64, scale: f64) -> String {
 
 pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
     let mut ui_state_guard = ui_state.write().unwrap();
+    let particle_count = ui_state_guard.particle_count;
     egui::Window::new("Control Panel")
         .resizable(false)
         .collapsible(true)
@@ -67,10 +70,58 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             {
                 ui_state_guard.is_running = !ui_state_guard.is_running;
             }
-            if ui.add_sized(button_size, Button::new("Reset")).clicked() {
-                ui_state_guard.is_reset_requested = true;
-            }
             ui.separator();
+            ui.add(Label::new("Initial Condition:"));
+            ComboBox::from_label("")
+                .selected_text(format!("{}", ui_state_guard.selected_initial_condition))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut ui_state_guard.selected_initial_condition,
+                        InitialCondition::RandomCube {
+                            num_particles: particle_count as usize,
+                            cube_size: 1.0,
+                            mass_range: (1e31, 1e33),
+                            velocity_std: 1e-6,
+                        },
+                        "Random Cube",
+                    );
+                    ui.selectable_value(
+                        &mut ui_state_guard.selected_initial_condition,
+                        InitialCondition::TwoSpheres {
+                            num_particles: particle_count as usize,
+                            sphere1_center: DVec3::new(-0.5, 0.0, 0.0),
+                            sphere1_radius: 0.3,
+                            sphere2_center: DVec3::new(0.5, 0.0, 0.0),
+                            sphere2_radius: 0.3,
+                            mass_fixed: 1e32,
+                        },
+                        "Two Spheres",
+                    );
+                    ui.selectable_value(
+                        &mut ui_state_guard.selected_initial_condition,
+                        InitialCondition::SpiralDisk {
+                            num_particles: particle_count as usize,
+                            disk_radius: 1.0,
+                            spiral_strength: 0.1,
+                            mass_fixed: 1e32,
+                        },
+                        "Spiral Disk",
+                    );
+                    ui.selectable_value(
+                        &mut ui_state_guard.selected_initial_condition,
+                        InitialCondition::SolarSystem,
+                        "Solar System",
+                    );
+                    ui.selectable_value(
+                        &mut ui_state_guard.selected_initial_condition,
+                        InitialCondition::SatelliteOrbit {
+                            num_satellites: 5,
+                            earth_mass: 5.972e24,
+                            orbit_radius: 6.371e6 * 100.0, // 100 km above Earth
+                        },
+                        "Satellite Orbit",
+                    );
+                });
             ui.style_mut().spacing.slider_width = 150.0;
             ui.add(Label::new("Particle Count:"));
             let max_particle_count = ui_state_guard.max_particle_count;
@@ -78,6 +129,10 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 &mut ui_state_guard.particle_count,
                 2..=max_particle_count as u32,
             ));
+            if ui.add_sized(button_size, Button::new("Reset")).clicked() {
+                ui_state_guard.is_reset_requested = true;
+            }
+            ui.separator();
             ui.add(
                 DragValue::new(&mut ui_state_guard.time_per_frame)
                     .speed(0.1)

@@ -1,3 +1,4 @@
+use crate::initial_condition::InitialCondition;
 use glam::DVec3;
 use rand::Rng;
 use rayon::prelude::*;
@@ -25,11 +26,10 @@ fn init_particles(particle_count: u32) -> (Vec<Particle>, f64, f64) {
     let correct_m = 1.0 / scale; // Scale-corrected length
     let correct_kg = correct_m * correct_m * correct_m; // Scale-corrected mass
     let speed_max = 1e-6;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (
         (0..particle_count)
-            .enumerate()
-            .map(|(i, _)| {
+            .map(|i| {
                 let color = match i % 5 {
                     0 => [1.0, 0.3, 0.2, 1.0], // Reddish color
                     1 => [0.2, 0.5, 1.0, 1.0], // Bluish color
@@ -40,16 +40,16 @@ fn init_particles(particle_count: u32) -> (Vec<Particle>, f64, f64) {
                 };
                 Particle {
                     position: DVec3::new(
-                        rng.gen_range(-1.0..1.0),
-                        rng.gen_range(-1.0..1.0),
-                        rng.gen_range(-1.0..1.0),
+                        rng.random_range(-1.0..1.0),
+                        rng.random_range(-1.0..1.0),
+                        rng.random_range(-1.0..1.0),
                     ),
                     velocity: DVec3::new(
-                        rng.gen_range(-speed_max..speed_max),
-                        rng.gen_range(-speed_max..speed_max),
-                        rng.gen_range(-speed_max..speed_max),
+                        rng.random_range(-speed_max..speed_max),
+                        rng.random_range(-speed_max..speed_max),
+                        rng.random_range(-speed_max..speed_max),
                     ),
-                    mass: rng.gen_range(1e31 * correct_kg..1e33 * correct_kg),
+                    mass: rng.random_range(1e31 * correct_kg..1e33 * correct_kg),
                     color,
                 }
             })
@@ -69,8 +69,8 @@ impl SimulationState {
         }
     }
 
-    pub fn reset(&mut self, particle_count: u32) {
-        (self.particles, self.scale, self.dt) = init_particles(particle_count);
+    pub fn reset(&mut self, initial_condition: &InitialCondition) {
+        *self = initial_condition.generate_particles();
     }
 
     pub fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
