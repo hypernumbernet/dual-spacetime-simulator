@@ -78,10 +78,10 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     ui.selectable_value(
                         &mut ui_state_guard.selected_initial_condition,
                         InitialCondition::RandomCube {
-                            scale: 1.0,
-                            cube_size: 1.0,
+                            scale: 1e10,
+                            cube_size: 2e10,
                             mass_range: (1e31, 1e33),
-                            velocity_std: 1e-6,
+                            velocity_std: 1e6,
                         },
                         "Random Cube",
                     );
@@ -93,17 +93,16 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                             sphere1_radius: 0.3,
                             sphere2_center: DVec3::new(0.5, 0.0, 0.0),
                             sphere2_radius: 0.3,
-                            mass_fixed: 1e32,
+                            mass_fixed: 1e30,
                         },
                         "Two Spheres",
                     );
                     ui.selectable_value(
                         &mut ui_state_guard.selected_initial_condition,
                         InitialCondition::SpiralDisk {
-                            num_particles: particle_count as usize,
-                            disk_radius: 1.0,
-                            spiral_strength: 0.1,
-                            mass_fixed: 1e32,
+                            scale: 1e10,
+                            disk_radius: 1.5e10,
+                            mass_fixed: 1e20,
                         },
                         "Spiral Disk",
                     );

@@ -2,8 +2,7 @@ use crate::simulation::{AU, Particle, SimulationState};
 use glam::DVec3;
 use rand::Rng;
 use rand_distr::Distribution;
-use rand_distr::Normal;
-use rand_distr::Uniform;
+use std::f64::consts::*;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum InitialCondition {
@@ -22,9 +21,8 @@ pub enum InitialCondition {
         mass_fixed: f64,
     },
     SpiralDisk {
-        num_particles: usize,
+        scale: f64,
         disk_radius: f64,
-        spiral_strength: f64,
         mass_fixed: f64,
     },
     SolarSystem,
@@ -75,11 +73,11 @@ impl InitialCondition {
                         let mass =
                             rng.random_range(mass_range.0 * correct.kg..mass_range.1 * correct.kg);
                         let color = match i % 5 {
-                            0 => [1.0, 0.3, 0.2, 1.0], // Reddish color
-                            1 => [0.2, 0.5, 1.0, 1.0], // Bluish color
-                            2 => [1.0, 0.8, 0.2, 1.0], // Yellowish color
-                            3 => [0.9, 0.4, 1.0, 1.0], // Purplish color
-                            4 => [0.6, 1.0, 0.8, 1.0], // Cyanish color
+                            0 => [1.0, 0.3, 0.2, 1.0], // Red
+                            1 => [0.2, 0.5, 1.0, 1.0], // Blue
+                            2 => [1.0, 0.8, 0.2, 1.0], // Yellow
+                            3 => [0.9, 0.4, 1.0, 1.0], // Purple
+                            4 => [0.6, 1.0, 0.8, 1.0], // Cyan
                             _ => unreachable!(),
                         };
                         Particle {
@@ -128,25 +126,32 @@ impl InitialCondition {
                 }
             }
             InitialCondition::SpiralDisk {
-                num_particles,
+                scale,
                 disk_radius,
-                spiral_strength,
                 mass_fixed,
             } => {
-                let particles = (0..*num_particles)
+                let correct = Correct::new(*scale);
+                let radius = *disk_radius * correct.m;
+                let mass = *mass_fixed * correct.kg;
+                let total_mass = particle_count as f64 * mass;
+                let normal = rand_distr::Normal::new(0.0, radius * 0.05).unwrap();
+                dbg!(radius, mass, total_mass);
+                let particles = (0..particle_count)
                     .map(|i| {
-                        let theta =
-                            (i as f64) * 2.0 * std::f64::consts::PI / (*num_particles as f64);
-                        let r = rng.random_range(0.0..*disk_radius);
+                        let theta = (i as f64) * TAU / (particle_count as f64);
+                        let r = rng.random_range(radius * 0.1..radius);
+                        let speed_rate =
+                            (crate::simulation::G * total_mass * (r / radius) / r).sqrt();
+                        let y_thickness = normal.sample(&mut rng);
                         let pos = DVec3 {
-                            x: r * theta.cos() + *spiral_strength * theta,
-                            y: r * theta.sin() + *spiral_strength * theta,
-                            z: 0.0,
+                            x: r * theta.cos(),
+                            y: y_thickness,
+                            z: r * theta.sin(),
                         };
                         let vel = DVec3 {
-                            x: -r * theta.sin(),
-                            y: r * theta.cos(),
-                            z: 0.0,
+                            x: -theta.sin() * speed_rate,
+                            y: 0.0,
+                            z: theta.cos() * speed_rate,
                         };
                         let color = match i % 5 {
                             0 => [1.0, 0.3, 0.2, 1.0], // Reddish color
@@ -159,14 +164,14 @@ impl InitialCondition {
                         Particle {
                             position: pos,
                             velocity: vel,
-                            mass: *mass_fixed,
+                            mass,
                             color,
                         }
                     })
                     .collect();
                 SimulationState {
                     particles,
-                    scale: 1e10,
+                    scale: *scale,
                     dt,
                 }
             }
