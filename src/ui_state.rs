@@ -32,19 +32,14 @@ impl Default for UiState {
             fps: 0,
             frame: 1,
             simulation_time: 0.0,
-            time_per_frame: 1.0,
+            time_per_frame: 10.0,
             scale: 1.0,
             scale_gauge: DEFAULT_SCALE_UI,
             is_running: false,
             max_fps: 60,
             is_reset_requested: false,
             skip: 0,
-            selected_initial_condition: InitialCondition::RandomCube {
-                num_particles: 1000,
-                cube_size: 1.0,
-                mass_range: (1e31, 1e33),
-                velocity_std: 1e-6,
-            },
+            selected_initial_condition: InitialCondition::default(),
         }
     }
 }

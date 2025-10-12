@@ -12,6 +12,7 @@ mod ui_state;
 mod ui_styles;
 mod utils;
 
+use crate::initial_condition::InitialCondition;
 use crate::integration::{Gui, GuiConfig};
 use crate::pipeline::ParticleRenderPipeline;
 use crate::simulation::SimulationState;
@@ -62,10 +63,13 @@ fn main() -> Result<(), EventLoopError> {
             let is_reset_requested = ui_state.is_reset_requested;
             let selected_initial_condition = ui_state.selected_initial_condition.clone();
             let skip = ui_state.skip;
+            let particle_count = ui_state.particle_count;
             drop(ui_state);
             if is_reset_requested {
+                let new_simulation_state =
+                    selected_initial_condition.generate_particles(particle_count, time_per_frame);
                 let mut sim = simulation_state.write().unwrap();
-                sim.reset(&selected_initial_condition);
+                *sim = new_simulation_state;
                 drop(sim);
                 let mut ui_state = ui_state_clone.write().unwrap();
                 ui_state.frame = 1;
@@ -207,7 +211,8 @@ impl ApplicationHandler for App {
             primary_renderer.swapchain_format(),
             GuiConfig::default(),
         ));
-        let sim = SimulationState::new(ui_state.particle_count);
+        let sim = InitialCondition::default()
+            .generate_particles(ui_state.particle_count, ui_state.time_per_frame);
         ui_state.scale = sim.scale;
         ui_state.time_per_frame = sim.dt;
         *self.simulation_state.write().unwrap() = sim;

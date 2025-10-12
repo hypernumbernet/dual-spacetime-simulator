@@ -8,7 +8,7 @@ use rand_distr::Uniform;
 #[derive(Clone, PartialEq, Debug)]
 pub enum InitialCondition {
     RandomCube {
-        num_particles: usize,
+        scale: f64,
         cube_size: f64,
         mass_range: (f64, f64),
         velocity_std: f64,
@@ -48,30 +48,32 @@ impl std::fmt::Display for InitialCondition {
 }
 
 impl InitialCondition {
-    pub fn generate_particles(&self) -> SimulationState {
+    pub fn generate_particles(&self, particle_count: u32, dt: f64) -> SimulationState {
         let mut rng = rand::rng();
-        let (particles, scale, dt) = match self {
+        let sim = match self {
             InitialCondition::RandomCube {
-                num_particles,
+                scale,
                 cube_size,
                 mass_range,
                 velocity_std,
             } => {
-                let particles = (0..*num_particles)
+                let correct = Correct::new(*scale);
+                let pos_max = cube_size * 0.5 * correct.m;
+                let speed_max = velocity_std * correct.m;
+                let particles = (0..particle_count)
                     .map(|i| {
                         let pos = DVec3 {
-                            x: rng.random_range(-cube_size / 2.0..cube_size / 2.0),
-                            y: rng.random_range(-cube_size / 2.0..cube_size / 2.0),
-                            z: rng.random_range(-cube_size / 2.0..cube_size / 2.0),
+                            x: rng.random_range(-pos_max..pos_max),
+                            y: rng.random_range(-pos_max..pos_max),
+                            z: rng.random_range(-pos_max..pos_max),
                         };
-                        let normal = Normal::new(0.0, *velocity_std).unwrap();
                         let vel = DVec3 {
-                            x: normal.sample(&mut rng),
-                            y: normal.sample(&mut rng),
-                            z: normal.sample(&mut rng),
+                            x: rng.random_range(-speed_max..speed_max),
+                            y: rng.random_range(-speed_max..speed_max),
+                            z: rng.random_range(-speed_max..speed_max),
                         };
-                        let uniform = Uniform::new(mass_range.0, mass_range.1).unwrap();
-                        let mass = uniform.sample(&mut rng);
+                        let mass =
+                            rng.random_range(mass_range.0 * correct.kg..mass_range.1 * correct.kg);
                         let color = match i % 5 {
                             0 => [1.0, 0.3, 0.2, 1.0], // Reddish color
                             1 => [0.2, 0.5, 1.0, 1.0], // Bluish color
@@ -88,7 +90,11 @@ impl InitialCondition {
                         }
                     })
                     .collect();
-                (particles, 1e10, 10.5)
+                SimulationState {
+                    particles,
+                    scale: *scale,
+                    dt,
+                }
             }
             InitialCondition::TwoSpheres {
                 num_particles,
@@ -115,7 +121,11 @@ impl InitialCondition {
                         &mut rng,
                     ));
                 }
-                (particles, 1e10, 10.5)
+                SimulationState {
+                    particles,
+                    scale: 1e10,
+                    dt,
+                }
             }
             InitialCondition::SpiralDisk {
                 num_particles,
@@ -154,7 +164,11 @@ impl InitialCondition {
                         }
                     })
                     .collect();
-                (particles, 1e10, 10.5)
+                SimulationState {
+                    particles,
+                    scale: 1e10,
+                    dt,
+                }
             }
             InitialCondition::SolarSystem => {
                 let particles = vec![
@@ -189,7 +203,11 @@ impl InitialCondition {
                         color: [0.2, 0.5, 1.0, 1.0], // Blue
                     },
                 ];
-                (particles, AU, 10.5)
+                SimulationState {
+                    particles,
+                    scale: AU,
+                    dt,
+                }
             }
             InitialCondition::SatelliteOrbit {
                 num_satellites,
@@ -233,14 +251,14 @@ impl InitialCondition {
                         color: [1.0, 0.0, 0.0, 1.0],
                     });
                 }
-                (particles, AU, 10.5)
+                SimulationState {
+                    particles,
+                    scale: 1e7,
+                    dt,
+                }
             }
         };
-        SimulationState {
-            particles,
-            scale,
-            dt,
-        }
+        sim
     }
 
     fn random_in_sphere(center: DVec3, radius: f64, mass: f64, rng: &mut impl Rng) -> Particle {
@@ -264,5 +282,29 @@ impl InitialCondition {
                 };
             }
         }
+    }
+}
+
+impl Default for InitialCondition {
+    fn default() -> Self {
+        InitialCondition::RandomCube {
+            scale: 1e10,
+            cube_size: 2e10,
+            mass_range: (1e31, 1e33),
+            velocity_std: 1e6,
+        }
+    }
+}
+
+struct Correct {
+    m: f64,
+    kg: f64,
+}
+
+impl Correct {
+    fn new(scale: f64) -> Self {
+        let m = 1.0 / scale; // Scale-corrected length
+        let kg = m * m * m; // Scale-corrected mass
+        Self { m, kg }
     }
 }

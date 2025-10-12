@@ -78,7 +78,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     ui.selectable_value(
                         &mut ui_state_guard.selected_initial_condition,
                         InitialCondition::RandomCube {
-                            num_particles: particle_count as usize,
+                            scale: 1.0,
                             cube_size: 1.0,
                             mass_range: (1e31, 1e33),
                             velocity_std: 1e-6,
