@@ -28,9 +28,7 @@ pub enum InitialCondition {
     },
     SolarSystem,
     SatelliteOrbit {
-        num_satellites: usize,
         earth_mass: f64,
-        orbit_radius: f64,
     },
 }
 
@@ -268,11 +266,10 @@ impl InitialCondition {
                     dt,
                 }
             }
-            InitialCondition::SatelliteOrbit {
-                num_satellites,
-                earth_mass,
-                orbit_radius,
-            } => {
+            InitialCondition::SatelliteOrbit { earth_mass } => {
+                let scale = 12_756e3 * 0.5;
+                let correct = Correct::new(scale);
+                let mass = earth_mass * correct.kg;
                 let mut particles = vec![
                     // Earth
                     Particle {
@@ -286,33 +283,33 @@ impl InitialCondition {
                             y: 0.0,
                             z: 0.0,
                         },
-                        mass: *earth_mass,
+                        mass,
                         color: [0.2, 0.5, 1.0, 1.0], // Blue
                     },
                 ];
-                for i in 0..*num_satellites {
-                    let theta = (i as f64) * 2.0 * std::f64::consts::PI / (*num_satellites as f64);
+                for _ in 0..particle_count {
+                    let orbit_radius = (scale + rng.random_range(100e3..500e3)) * correct.m;
+                    let cos_theta = rng.random::<f64>() * 2.0 - 1.0;
+                    let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+                    let phi = rng.random::<f64>() * TAU;
                     let pos = DVec3 {
-                        x: *orbit_radius * theta.cos(),
-                        y: *orbit_radius * theta.sin(),
-                        z: 0.0,
+                        x: orbit_radius * sin_theta * phi.cos(),
+                        y: orbit_radius * sin_theta * phi.sin(),
+                        z: orbit_radius * cos_theta,
                     };
-                    let vel_speed = (6.67430e-11 * *earth_mass / *orbit_radius).sqrt();
-                    let vel = DVec3 {
-                        x: -vel_speed * theta.sin(),
-                        y: vel_speed * theta.cos(),
-                        z: 0.0,
-                    };
+                    let vel_speed = (crate::simulation::G * mass / orbit_radius).sqrt();
+                    let vel = Self::random_perpendicular_unit_vector(pos, &mut rng);
+                    let vel = vel * vel_speed;
                     particles.push(Particle {
                         position: pos,
                         velocity: vel,
-                        mass: 1000.0,
-                        color: [1.0, 0.0, 0.0, 1.0],
+                        mass: 1000.0 * correct.kg,
+                        color: [1.0, 1.0, 1.0, 1.0],
                     });
                 }
                 SimulationState {
                     particles,
-                    scale: 1e7,
+                    scale,
                     dt,
                 }
             }
@@ -343,6 +340,15 @@ impl InitialCondition {
             y: center.y + r * sin_theta * phi.sin(),
             z: center.z + r * cos_theta,
         }
+    }
+
+    fn random_perpendicular_unit_vector(x: DVec3, rng: &mut impl Rng) -> DVec3 {
+        let n = x.normalize();
+        let a = if n.x.abs() > 0.9 { DVec3::Y } else { DVec3::X };
+        let u = n.cross(a).normalize();
+        let v = n.cross(u).normalize();
+        let theta = rng.random_range(0.0..std::f64::consts::TAU);
+        u * theta.cos() + v * theta.sin()
     }
 }
 

@@ -113,9 +113,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     ui.selectable_value(
                         &mut ui_state_guard.selected_initial_condition,
                         InitialCondition::SatelliteOrbit {
-                            num_satellites: 5,
                             earth_mass: 5.972e24,
-                            orbit_radius: 6.371e6 * 100.0, // 100 km above Earth
                         },
                         "Satellite Orbit",
                     );
