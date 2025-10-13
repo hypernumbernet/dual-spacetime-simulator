@@ -76,10 +76,15 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
                         &mut ui_state_guard.selected_initial_condition,
+                        InitialCondition::default(),
+                        "Random Sphere",
+                    );
+                    ui.selectable_value(
+                        &mut ui_state_guard.selected_initial_condition,
                         InitialCondition::RandomCube {
                             scale: 1e10,
                             cube_size: 2e10,
-                            mass_range: (1e31, 1e33),
+                            mass_range: (1e29, 1e31),
                             velocity_std: 1e6,
                         },
                         "Random Cube",

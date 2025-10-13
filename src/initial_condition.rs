@@ -3,10 +3,15 @@ use glam::DVec3;
 use rand::Rng;
 use rand_distr::Distribution;
 use std::f64::consts::*;
-use vulkano::half;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum InitialCondition {
+    RandomSphere {
+        scale: f64,
+        radius: f64,
+        mass_range: (f64, f64),
+        velocity_std: f64,
+    },
     RandomCube {
         scale: f64,
         cube_size: f64,
@@ -35,6 +40,7 @@ pub enum InitialCondition {
 impl std::fmt::Display for InitialCondition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InitialCondition::RandomSphere { .. } => write!(f, "Random Sphere"),
             InitialCondition::RandomCube { .. } => write!(f, "Random Cube"),
             InitialCondition::TwoSpheres { .. } => write!(f, "Two Spheres"),
             InitialCondition::SpiralDisk { .. } => write!(f, "Spiral Disk"),
@@ -48,6 +54,47 @@ impl InitialCondition {
     pub fn generate_particles(&self, particle_count: u32, dt: f64) -> SimulationState {
         let mut rng = rand::rng();
         let sim = match self {
+            InitialCondition::RandomSphere {
+                scale,
+                radius,
+                mass_range,
+                velocity_std,
+            } => {
+                let correct = Correct::new(*scale);
+                let pos_max = radius * correct.m;
+                let speed_max = velocity_std * correct.m;
+                let particles = (0..particle_count)
+                    .map(|i| {
+                        let pos = Self::position_in_sphere(DVec3::ZERO, pos_max, &mut rng);
+                        let vel = DVec3 {
+                            x: rng.random_range(-speed_max..speed_max),
+                            y: rng.random_range(-speed_max..speed_max),
+                            z: rng.random_range(-speed_max..speed_max),
+                        };
+                        let mass =
+                            rng.random_range(mass_range.0 * correct.kg..mass_range.1 * correct.kg);
+                        let color = match i % 5 {
+                            0 => [1.0, 0.3, 0.2, 1.0], // Red
+                            1 => [0.2, 0.5, 1.0, 1.0], // Blue
+                            2 => [1.0, 0.8, 0.2, 1.0], // Yellow
+                            3 => [0.9, 0.4, 1.0, 1.0], // Purple
+                            4 => [0.6, 1.0, 0.8, 1.0], // Cyan
+                            _ => unreachable!(),
+                        };
+                        Particle {
+                            position: pos,
+                            velocity: vel,
+                            mass,
+                            color,
+                        }
+                    })
+                    .collect();
+                SimulationState {
+                    particles,
+                    scale: *scale,
+                    dt,
+                }
+            }
             InitialCondition::RandomCube {
                 scale,
                 cube_size,
@@ -354,10 +401,10 @@ impl InitialCondition {
 
 impl Default for InitialCondition {
     fn default() -> Self {
-        InitialCondition::RandomCube {
+        InitialCondition::RandomSphere {
             scale: 1e10,
-            cube_size: 2e10,
-            mass_range: (1e31, 1e33),
+            radius: 1e10,
+            mass_range: (1e29, 1e31),
             velocity_std: 1e6,
         }
     }
