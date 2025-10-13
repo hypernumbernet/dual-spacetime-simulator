@@ -88,12 +88,12 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     ui.selectable_value(
                         &mut ui_state_guard.selected_initial_condition,
                         InitialCondition::TwoSpheres {
-                            num_particles: particle_count as usize,
-                            sphere1_center: DVec3::new(-0.5, 0.0, 0.0),
-                            sphere1_radius: 0.3,
-                            sphere2_center: DVec3::new(0.5, 0.0, 0.0),
-                            sphere2_radius: 0.3,
-                            mass_fixed: 1e30,
+                            scale: 1.0,
+                            sphere1_center: DVec3::new(-1.0, 0.0, 0.0),
+                            sphere1_radius: 0.5,
+                            sphere2_center: DVec3::new(1.0, 0.0, 0.0),
+                            sphere2_radius: 0.5,
+                            mass_fixed: 1e-1,
                         },
                         "Two Spheres",
                     );

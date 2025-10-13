@@ -1,4 +1,4 @@
-use crate::simulation::{AU, Particle, SimulationState};
+use crate::simulation::{Particle, SimulationState};
 use glam::DVec3;
 use rand::Rng;
 use rand_distr::Distribution;
@@ -13,7 +13,7 @@ pub enum InitialCondition {
         velocity_std: f64,
     },
     TwoSpheres {
-        num_particles: usize,
+        scale: f64,
         sphere1_center: DVec3,
         sphere1_radius: f64,
         sphere2_center: DVec3,
@@ -95,33 +95,40 @@ impl InitialCondition {
                 }
             }
             InitialCondition::TwoSpheres {
-                num_particles,
+                scale,
                 sphere1_center,
                 sphere1_radius,
                 sphere2_center,
                 sphere2_radius,
                 mass_fixed,
             } => {
-                let mut particles = Vec::with_capacity(*num_particles);
-                for _ in 0..(*num_particles / 2) {
+                let correct = Correct::new(*scale);
+                let sphere1_center = *sphere1_center * correct.m;
+                let sphere1_radius = *sphere1_radius * correct.m;
+                let sphere2_center = *sphere2_center * correct.m;
+                let sphere2_radius = *sphere2_radius * correct.m;
+                let mass = *mass_fixed * correct.kg;
+                let mut particles = Vec::with_capacity(particle_count as usize);
+                for _ in 0..(particle_count / 2) {
                     particles.push(Self::random_in_sphere(
-                        *sphere1_center,
-                        *sphere1_radius,
-                        *mass_fixed,
+                        sphere1_center,
+                        sphere1_radius,
+                        mass,
                         &mut rng,
                     ));
                 }
-                for _ in 0..(*num_particles / 2) {
+                for _ in 0..(particle_count / 2) {
                     particles.push(Self::random_in_sphere(
-                        *sphere2_center,
-                        *sphere2_radius,
-                        *mass_fixed,
+                        sphere2_center,
+                        sphere2_radius,
+                        mass,
                         &mut rng,
                     ));
                 }
+                dbg!(particles.len());
                 SimulationState {
                     particles,
-                    scale: 1e10,
+                    scale: *scale,
                     dt,
                 }
             }
@@ -314,25 +321,27 @@ impl InitialCondition {
     }
 
     fn random_in_sphere(center: DVec3, radius: f64, mass: f64, rng: &mut impl Rng) -> Particle {
-        loop {
-            let pos = DVec3 {
-                x: center.x + rng.random_range(-radius..radius),
-                y: center.y + rng.random_range(-radius..radius),
-                z: center.z + rng.random_range(-radius..radius),
-            };
-            let dist = (pos.x.powi(2) + pos.y.powi(2) + pos.z.powi(2)).sqrt();
-            if dist <= radius {
-                return Particle {
-                    position: pos,
-                    velocity: DVec3 {
-                        x: 0.0,
-                        y: 0.0,
-                        z: 0.0,
-                    },
-                    mass,
-                    color: [0.5, 0.5, 0.5, 1.0],
-                };
-            }
+        Particle {
+            position: Self::position_in_sphere(center, radius, rng),
+            velocity: DVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            mass,
+            color: [0.5, 0.5, 0.5, 1.0],
+        }
+    }
+
+    fn position_in_sphere(center: DVec3, radius: f64, rng: &mut impl Rng) -> DVec3 {
+        let r = radius * rng.random::<f64>().cbrt();
+        let cos_theta = rng.random::<f64>() * 2.0 - 1.0;
+        let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+        let phi = rng.random::<f64>() * TAU;
+        DVec3 {
+            x: center.x + r * sin_theta * phi.cos(),
+            y: center.y + r * sin_theta * phi.sin(),
+            z: center.z + r * cos_theta,
         }
     }
 }
