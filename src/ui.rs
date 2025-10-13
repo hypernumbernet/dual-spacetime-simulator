@@ -104,8 +104,8 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     ui.selectable_value(
                         &mut ui_state_guard.selected_initial_condition,
                         InitialCondition::SpiralDisk {
-                            scale: 1e10,
-                            disk_radius: 1.5e10,
+                            scale: 1e7,
+                            disk_radius: 1.5e7,
                             mass_fixed: 1e20,
                         },
                         "Spiral Disk",
