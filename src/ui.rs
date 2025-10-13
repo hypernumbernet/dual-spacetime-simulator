@@ -42,7 +42,6 @@ fn format_scale(scale_guage: f64, scale: f64) -> String {
 
 pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
     let mut ui_state_guard = ui_state.write().unwrap();
-    let particle_count = ui_state_guard.particle_count;
     egui::Window::new("Control Panel")
         .resizable(false)
         .collapsible(true)

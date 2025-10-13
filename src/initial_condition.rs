@@ -3,6 +3,7 @@ use glam::DVec3;
 use rand::Rng;
 use rand_distr::Distribution;
 use std::f64::consts::*;
+use vulkano::half;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum InitialCondition {
@@ -109,7 +110,8 @@ impl InitialCondition {
                 let sphere2_radius = *sphere2_radius * correct.m;
                 let mass = *mass_fixed * correct.kg;
                 let mut particles = Vec::with_capacity(particle_count as usize);
-                for _ in 0..(particle_count / 2) {
+                let half = particle_count / 2;
+                for _ in 0..half {
                     particles.push(Self::random_in_sphere(
                         sphere1_center,
                         sphere1_radius,
@@ -117,7 +119,7 @@ impl InitialCondition {
                         &mut rng,
                     ));
                 }
-                for _ in 0..(particle_count / 2) {
+                for _ in half..particle_count {
                     particles.push(Self::random_in_sphere(
                         sphere2_center,
                         sphere2_radius,
@@ -125,7 +127,6 @@ impl InitialCondition {
                         &mut rng,
                     ));
                 }
-                dbg!(particles.len());
                 SimulationState {
                     particles,
                     scale: *scale,
@@ -142,7 +143,6 @@ impl InitialCondition {
                 let mass = *mass_fixed * correct.kg;
                 let total_mass = particle_count as f64 * mass;
                 let normal = rand_distr::Normal::new(0.0, radius * 0.05).unwrap();
-                dbg!(radius, mass, total_mass);
                 let particles = (0..particle_count)
                     .map(|i| {
                         let theta = (i as f64) * TAU / (particle_count as f64);
