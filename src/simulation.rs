@@ -35,8 +35,7 @@ impl SimulationState {
                     let diff = pos_j - particle.position;
                     let r_squared = diff.length_squared();
                     if r_squared > 0.0 {
-                        let force_magnitude = G * mass_j / r_squared;
-                        let accel_magnitude = force_magnitude / particle.mass;
+                        let accel_magnitude = G * mass_j / r_squared;
                         acceleration += accel_magnitude * diff.normalize();
                     }
                 }

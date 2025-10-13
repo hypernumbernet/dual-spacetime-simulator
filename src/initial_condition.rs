@@ -176,6 +176,8 @@ impl InitialCondition {
                 }
             }
             InitialCondition::SolarSystem => {
+                let scale = 1.5e11;
+                let correct = Correct::new(scale);
                 let particles = vec![
                     // Sun
                     Particle {
@@ -189,28 +191,73 @@ impl InitialCondition {
                             y: 0.0,
                             z: 0.0,
                         },
-                        mass: 1.989e30,
+                        mass: 1.989e30 * correct.kg,
                         color: [1.0, 1.0, 0.0, 1.0], // Yellow
                     },
                     // Earth
                     Particle {
                         position: DVec3 {
-                            x: 1.496e11,
+                            x: 1.496e11 * correct.m,
                             y: 0.0,
                             z: 0.0,
                         },
                         velocity: DVec3 {
                             x: 0.0,
-                            y: 29780.0,
+                            y: 0.0,
+                            z: 29780.0 * correct.m,
+                        },
+                        mass: 5.972e24 * correct.kg,
+                        color: [0.2, 0.5, 1.0, 1.0], // Blue
+                    },
+                    // Mars
+                    Particle {
+                        position: DVec3 {
+                            x: 2.279e11 * correct.m,
+                            y: 0.0,
                             z: 0.0,
                         },
-                        mass: 5.972e24,
-                        color: [0.2, 0.5, 1.0, 1.0], // Blue
+                        velocity: DVec3 {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 24070.0 * correct.m,
+                        },
+                        mass: 6.39e23 * correct.kg,
+                        color: [1.0, 0.3, 0.2, 1.0], // Reddish color
+                    },
+                    // Venus
+                    Particle {
+                        position: DVec3 {
+                            x: 1.082e11 * correct.m,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        velocity: DVec3 {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 35020.0 * correct.m,
+                        },
+                        mass: 4.867e24 * correct.kg,
+                        color: [1.0, 0.8, 0.2, 1.0], // Yellowish color
+                    },
+                    // Mercury
+                    Particle {
+                        position: DVec3 {
+                            x: 5.791e10 * correct.m,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        velocity: DVec3 {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 47360.0 * correct.m,
+                        },
+                        mass: 3.285e23 * correct.kg,
+                        color: [0.5, 0.5, 0.5, 1.0], // Grayish color
                     },
                 ];
                 SimulationState {
                     particles,
-                    scale: AU,
+                    scale,
                     dt,
                 }
             }
