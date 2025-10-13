@@ -2,6 +2,12 @@ use crate::initial_condition::InitialCondition;
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum SimulationType {
+    Normal,
+    Special,
+}
+
 pub struct UiState {
     pub input_panel_width: f32,
     pub min_window_width: f32,
@@ -19,6 +25,7 @@ pub struct UiState {
     pub is_reset_requested: bool,
     pub skip: u32,
     pub selected_initial_condition: InitialCondition,
+    pub simulation_type: SimulationType,
 }
 
 impl Default for UiState {
@@ -40,6 +47,7 @@ impl Default for UiState {
             is_reset_requested: false,
             skip: 0,
             selected_initial_condition: InitialCondition::default(),
+            simulation_type: SimulationType::Normal,
         }
     }
 }

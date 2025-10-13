@@ -1,4 +1,4 @@
-use crate::simulation::{Particle, SimulationState};
+use crate::simulation::{Particle, SimulationNormal};
 use glam::DVec3;
 use rand::Rng;
 use rand_distr::Distribution;
@@ -51,7 +51,7 @@ impl std::fmt::Display for InitialCondition {
 }
 
 impl InitialCondition {
-    pub fn generate_particles(&self, particle_count: u32, dt: f64) -> SimulationState {
+    pub fn generate_particles(&self, particle_count: u32, dt: f64) -> SimulationNormal {
         let mut rng = rand::rng();
         let sim = match self {
             InitialCondition::RandomSphere {
@@ -89,7 +89,7 @@ impl InitialCondition {
                         }
                     })
                     .collect();
-                SimulationState {
+                SimulationNormal {
                     particles,
                     scale: *scale,
                     dt,
@@ -134,7 +134,7 @@ impl InitialCondition {
                         }
                     })
                     .collect();
-                SimulationState {
+                SimulationNormal {
                     particles,
                     scale: *scale,
                     dt,
@@ -172,7 +172,7 @@ impl InitialCondition {
                         &mut rng,
                     ));
                 }
-                SimulationState {
+                SimulationNormal {
                     particles,
                     scale: *scale,
                     dt,
@@ -221,7 +221,7 @@ impl InitialCondition {
                         }
                     })
                     .collect();
-                SimulationState {
+                SimulationNormal {
                     particles,
                     scale: *scale,
                     dt,
@@ -307,7 +307,7 @@ impl InitialCondition {
                         color: [0.5, 0.5, 0.5, 1.0], // Grayish color
                     },
                 ];
-                SimulationState {
+                SimulationNormal {
                     particles,
                     scale,
                     dt,
@@ -354,7 +354,7 @@ impl InitialCondition {
                         color: [1.0, 1.0, 1.0, 1.0],
                     });
                 }
-                SimulationState {
+                SimulationNormal {
                     particles,
                     scale,
                     dt,

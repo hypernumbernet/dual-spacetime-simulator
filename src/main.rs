@@ -15,7 +15,7 @@ mod utils;
 use crate::initial_condition::InitialCondition;
 use crate::integration::{Gui, GuiConfig};
 use crate::pipeline::ParticleRenderPipeline;
-use crate::simulation::SimulationState;
+use crate::simulation::{SimulationEngine, SimulationNormal, SimulationSpecial, SimulationState};
 use crate::ui::draw_ui;
 use crate::ui_state::UiState;
 use std::sync::{Arc, RwLock};
@@ -62,12 +62,29 @@ fn main() -> Result<(), EventLoopError> {
             let time_per_frame = ui_state.time_per_frame;
             let is_reset_requested = ui_state.is_reset_requested;
             let selected_initial_condition = ui_state.selected_initial_condition.clone();
+            let simulation_type = ui_state.simulation_type;
             let skip = ui_state.skip;
             let particle_count = ui_state.particle_count;
             drop(ui_state);
             if is_reset_requested {
-                let new_simulation_state =
+                let new_simulation_data =
                     selected_initial_condition.generate_particles(particle_count, time_per_frame);
+                let new_simulation_state = match simulation_type {
+                    crate::ui_state::SimulationType::Normal => {
+                        SimulationState::Normal(SimulationNormal {
+                            particles: new_simulation_data.particles,
+                            scale: new_simulation_data.scale,
+                            dt: new_simulation_data.dt,
+                        })
+                    }
+                    crate::ui_state::SimulationType::Special => {
+                        SimulationState::Special(SimulationSpecial {
+                            particles: new_simulation_data.particles,
+                            scale: new_simulation_data.scale,
+                            dt: new_simulation_data.dt,
+                        })
+                    }
+                };
                 let mut sim = simulation_state.write().unwrap();
                 *sim = new_simulation_state;
                 drop(sim);
@@ -215,7 +232,7 @@ impl ApplicationHandler for App {
             .generate_particles(ui_state.particle_count, ui_state.time_per_frame);
         ui_state.scale = sim.scale;
         ui_state.time_per_frame = sim.dt;
-        *self.simulation_state.write().unwrap() = sim;
+        *self.simulation_state.write().unwrap() = SimulationState::Normal(sim);
         self.skip_redraw.write().unwrap().clone_from(&ui_state.skip);
     }
 
@@ -316,7 +333,7 @@ impl ApplicationHandler for App {
         }
         if let Ok(sim) = self.simulation_state.try_read() {
             self.positions = sim
-                .particles
+                .particles()
                 .iter()
                 .map(|p| {
                     [
@@ -326,7 +343,7 @@ impl ApplicationHandler for App {
                     ]
                 })
                 .collect();
-            self.colors = sim.particles.iter().map(|p| p.color).collect();
+            self.colors = sim.particles().iter().map(|p| p.color).collect();
             self.need_redraw.write().unwrap().clone_from(&false);
             if let Some(pipeline) = self.render_pipeline.as_mut() {
                 pipeline.set_particles(&self.positions, &self.colors);

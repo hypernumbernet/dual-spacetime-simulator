@@ -71,7 +71,8 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             }
             ui.separator();
             ui.add(Label::new("Initial Condition:"));
-            ComboBox::from_label("")
+            let id_salt = ui.make_persistent_id("initial_condition_combobox");
+            ComboBox::from_id_salt(id_salt)
                 .selected_text(format!("{}", ui_state_guard.selected_initial_condition))
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
@@ -121,6 +122,22 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                             earth_mass: 5.972e24,
                         },
                         "Satellite Orbit",
+                    );
+                });
+            ui.add(Label::new("Simulation Type:"));
+            let id_salt = ui.make_persistent_id("simulation_type_combobox");
+            ComboBox::from_id_salt(id_salt)
+                .selected_text(format!("{:?}", ui_state_guard.simulation_type))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut ui_state_guard.simulation_type,
+                        SimulationType::Normal,
+                        "Normal",
+                    );
+                    ui.selectable_value(
+                        &mut ui_state_guard.simulation_type,
+                        SimulationType::Special,
+                        "Special",
                     );
                 });
             ui.style_mut().spacing.slider_width = 150.0;
