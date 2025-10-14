@@ -333,6 +333,20 @@ impl InitialCondition {
                         mass,
                         color: [0.2, 0.5, 1.0, 1.0], // Blue
                     },
+                    Particle {
+                        position: DVec3 {
+                            x: 5.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        velocity: DVec3 {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 0.0001,
+                        },
+                        mass,
+                        color: [1.0, 0.0, 0.3, 1.0], // Red
+                    },
                 ];
                 for _ in 0..particle_count {
                     let orbit_radius = (scale + rng.random_range(100e3..500e3)) * correct.m;
