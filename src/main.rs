@@ -7,6 +7,7 @@ mod integration;
 mod pipeline;
 mod renderer;
 mod simulation;
+mod tetraquaternion;
 mod ui;
 mod ui_state;
 mod ui_styles;
