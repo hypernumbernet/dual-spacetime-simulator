@@ -67,8 +67,28 @@ impl SimulationEngine for SimulationNormal {
 }
 
 impl SimulationEngine for SimulationSpecial {
-    fn update_velocities_with_gravity(&mut self, _delta_seconds: f64) {
-        // No gravity in special mode
+    fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
+        let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
+        let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
+        self.particles
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(i, particle)| {
+                let mut acceleration = DVec3::ZERO;
+                for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
+                    if i == j {
+                        continue;
+                    }
+                    let diff = pos_j - particle.position;
+                    let r_squared = diff.length_squared();
+                    if r_squared > 0.0 {
+                        let accel_magnitude = G * mass_j / r_squared;
+                        acceleration += accel_magnitude * diff.normalize();
+                    }
+                }
+
+                particle.velocity += acceleration * delta_seconds;
+            });
     }
 
     fn advance_time(&mut self, delta_seconds: f64) {
