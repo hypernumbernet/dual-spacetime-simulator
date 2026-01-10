@@ -40,7 +40,7 @@ impl Default for UiState {
             frame: 1,
             simulation_time: 0.0,
             time_per_frame: 10.0,
-            scale: 1.0,
+            scale: 1e10,
             scale_gauge: DEFAULT_SCALE_UI,
             is_running: false,
             max_fps: 60,

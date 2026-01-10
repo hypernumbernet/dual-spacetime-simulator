@@ -89,11 +89,7 @@ impl InitialCondition {
                         }
                     })
                     .collect();
-                SimulationNormal {
-                    particles,
-                    scale: *scale,
-                    dt,
-                }
+                SimulationNormal { particles }
             }
             InitialCondition::RandomCube {
                 scale,
@@ -136,8 +132,6 @@ impl InitialCondition {
                     .collect();
                 SimulationNormal {
                     particles,
-                    scale: *scale,
-                    dt,
                 }
             }
             InitialCondition::TwoSpheres {
@@ -174,8 +168,6 @@ impl InitialCondition {
                 }
                 SimulationNormal {
                     particles,
-                    scale: *scale,
-                    dt,
                 }
             }
             InitialCondition::SpiralDisk {
@@ -223,8 +215,6 @@ impl InitialCondition {
                     .collect();
                 SimulationNormal {
                     particles,
-                    scale: *scale,
-                    dt,
                 }
             }
             InitialCondition::SolarSystem => {
@@ -309,8 +299,6 @@ impl InitialCondition {
                 ];
                 SimulationNormal {
                     particles,
-                    scale,
-                    dt,
                 }
             }
             InitialCondition::SatelliteOrbit { earth_mass } => {
@@ -370,8 +358,6 @@ impl InitialCondition {
                 }
                 SimulationNormal {
                     particles,
-                    scale,
-                    dt,
                 }
             }
         };

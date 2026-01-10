@@ -14,14 +14,10 @@ pub trait SimulationEngine {
 
 pub struct SimulationNormal {
     pub particles: Vec<Particle>,
-    pub scale: f64, // Scale factor (meters per simulation unit)
-    pub dt: f64,    // Duration per frame in seconds
 }
 
 pub struct SimulationSpecialRelativity {
     pub particles: Vec<Particle>,
-    pub scale: f64, // Scale factor (meters per simulation unit)
-    pub dt: f64,    // Duration per frame in seconds
 }
 
 pub enum SimulationState {
@@ -122,21 +118,13 @@ impl SimulationEngine for SimulationState {
 
 impl Default for SimulationNormal {
     fn default() -> Self {
-        Self {
-            particles: vec![],
-            scale: 1.0,
-            dt: 1.0,
-        }
+        Self { particles: vec![] }
     }
 }
 
 impl Default for SimulationSpecialRelativity {
     fn default() -> Self {
-        Self {
-            particles: vec![],
-            scale: 1.0,
-            dt: 1.0,
-        }
+        Self { particles: vec![] }
     }
 }
 

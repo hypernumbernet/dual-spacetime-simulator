@@ -76,15 +76,11 @@ fn main() -> Result<(), EventLoopError> {
                     crate::ui_state::SimulationType::Normal => {
                         SimulationState::Normal(SimulationNormal {
                             particles: new_simulation_data.particles,
-                            scale: new_simulation_data.scale,
-                            dt: new_simulation_data.dt,
                         })
                     }
                     crate::ui_state::SimulationType::SpecialRelativity => {
                         SimulationState::SpecialRelativity(SimulationSpecialRelativity {
                             particles: new_simulation_data.particles,
-                            scale: new_simulation_data.scale,
-                            dt: new_simulation_data.dt,
                         })
                     }
                 };
@@ -200,7 +196,7 @@ impl Default for App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let mut ui_state = self.ui_state.write().unwrap();
+        let ui_state = self.ui_state.write().unwrap();
         let resize_constraints = vulkano_util::window::WindowResizeConstraints {
             min_width: ui_state.min_window_width,
             min_height: ui_state.min_window_height,
@@ -233,8 +229,8 @@ impl ApplicationHandler for App {
         ));
         let sim = InitialCondition::default()
             .generate_particles(ui_state.particle_count, ui_state.time_per_frame);
-        ui_state.scale = sim.scale;
-        ui_state.time_per_frame = sim.dt;
+        //ui_state.scale = 1e10;
+        //ui_state.time_per_frame = sim.dt;
         *self.simulation_state.write().unwrap() = SimulationState::Normal(sim);
         self.skip_redraw.write().unwrap().clone_from(&ui_state.skip);
     }
