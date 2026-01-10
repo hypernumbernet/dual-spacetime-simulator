@@ -2,7 +2,9 @@ use glam::DVec3;
 use rayon::prelude::*;
 
 pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
-pub const _LIGHT_SPEED: f64 = 299_792_458.0; // Speed of light in meters per second
+pub const LIGHT_SPEED: f64 = 299_792_458.0; // Speed of light in meters per second
+pub const LIGHT_SPEED_INV: f64 = 1.0 / LIGHT_SPEED;
+pub const LIGHT_SPEED_SQUARED: f64 = LIGHT_SPEED * LIGHT_SPEED;
 pub const G: f64 = 6.6743e-11; // Gravitational constant in m^3 kg^-1 s^-2
 
 pub trait SimulationEngine {
@@ -86,7 +88,9 @@ impl SimulationEngine for SimulationSpecial {
                         acceleration += accel_magnitude * diff.normalize();
                     }
                 }
-
+                let relativistic_factor =
+                    1.0 / (1.0 - particle.velocity.length_squared() / (LIGHT_SPEED_SQUARED)).sqrt();
+                acceleration *= relativistic_factor;
                 particle.velocity += acceleration * delta_seconds;
             });
     }
