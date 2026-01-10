@@ -18,7 +18,7 @@ pub struct SimulationNormal {
     pub dt: f64,    // Duration per frame in seconds
 }
 
-pub struct SimulationSpecial {
+pub struct SimulationSpecialRelativity {
     pub particles: Vec<Particle>,
     pub scale: f64, // Scale factor (meters per simulation unit)
     pub dt: f64,    // Duration per frame in seconds
@@ -26,7 +26,7 @@ pub struct SimulationSpecial {
 
 pub enum SimulationState {
     Normal(SimulationNormal),
-    Special(SimulationSpecial),
+    SpecialRelativity(SimulationSpecialRelativity),
 }
 
 #[derive(Clone, Copy)]
@@ -68,7 +68,7 @@ impl SimulationEngine for SimulationNormal {
     }
 }
 
-impl SimulationEngine for SimulationSpecial {
+impl SimulationEngine for SimulationSpecialRelativity {
     fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
         let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
@@ -106,14 +106,16 @@ impl SimulationEngine for SimulationState {
     fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
         match self {
             SimulationState::Normal(s) => s.update_velocities_with_gravity(delta_seconds),
-            SimulationState::Special(s) => s.update_velocities_with_gravity(delta_seconds),
+            SimulationState::SpecialRelativity(s) => {
+                s.update_velocities_with_gravity(delta_seconds)
+            }
         }
     }
 
     fn advance_time(&mut self, delta_seconds: f64) {
         match self {
             SimulationState::Normal(s) => s.advance_time(delta_seconds),
-            SimulationState::Special(s) => s.advance_time(delta_seconds),
+            SimulationState::SpecialRelativity(s) => s.advance_time(delta_seconds),
         }
     }
 }
@@ -128,7 +130,7 @@ impl Default for SimulationNormal {
     }
 }
 
-impl Default for SimulationSpecial {
+impl Default for SimulationSpecialRelativity {
     fn default() -> Self {
         Self {
             particles: vec![],
@@ -142,7 +144,7 @@ impl SimulationState {
     pub fn particles(&self) -> &Vec<Particle> {
         match self {
             SimulationState::Normal(s) => &s.particles,
-            SimulationState::Special(s) => &s.particles,
+            SimulationState::SpecialRelativity(s) => &s.particles,
         }
     }
 }

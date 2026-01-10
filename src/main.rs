@@ -16,7 +16,9 @@ mod utils;
 use crate::initial_condition::InitialCondition;
 use crate::integration::{Gui, GuiConfig};
 use crate::pipeline::ParticleRenderPipeline;
-use crate::simulation::{SimulationEngine, SimulationNormal, SimulationSpecial, SimulationState};
+use crate::simulation::{
+    SimulationEngine, SimulationNormal, SimulationSpecialRelativity, SimulationState,
+};
 use crate::ui::draw_ui;
 use crate::ui_state::UiState;
 use std::sync::{Arc, RwLock};
@@ -78,8 +80,8 @@ fn main() -> Result<(), EventLoopError> {
                             dt: new_simulation_data.dt,
                         })
                     }
-                    crate::ui_state::SimulationType::Special => {
-                        SimulationState::Special(SimulationSpecial {
+                    crate::ui_state::SimulationType::SpecialRelativity => {
+                        SimulationState::SpecialRelativity(SimulationSpecialRelativity {
                             particles: new_simulation_data.particles,
                             scale: new_simulation_data.scale,
                             dt: new_simulation_data.dt,
