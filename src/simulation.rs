@@ -3,7 +3,6 @@ use rayon::prelude::*;
 
 pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
 pub const LIGHT_SPEED: f64 = 299_792_458.0; // Speed of light in meters per second
-pub const LIGHT_SPEED_INV: f64 = 1.0 / LIGHT_SPEED;
 pub const LIGHT_SPEED_SQUARED: f64 = LIGHT_SPEED * LIGHT_SPEED;
 pub const G: f64 = 6.6743e-11; // Gravitational constant in m^3 kg^-1 s^-2
 

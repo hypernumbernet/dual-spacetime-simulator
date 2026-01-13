@@ -20,7 +20,7 @@ use crate::simulation::{
     SimulationEngine, SimulationNormal, SimulationSpecialRelativity, SimulationState,
 };
 use crate::ui::draw_ui;
-use crate::ui_state::UiState;
+use crate::ui_state::{SimulationType, UiState};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use vulkano_util::{
@@ -71,14 +71,12 @@ fn main() -> Result<(), EventLoopError> {
             drop(ui_state);
             if is_reset_requested {
                 let new_simulation_data =
-                    selected_initial_condition.generate_particles(particle_count, time_per_frame);
+                    selected_initial_condition.generate_particles(particle_count);
                 let new_simulation_state = match simulation_type {
-                    crate::ui_state::SimulationType::Normal => {
-                        SimulationState::Normal(SimulationNormal {
-                            particles: new_simulation_data.particles,
-                        })
-                    }
-                    crate::ui_state::SimulationType::SpecialRelativity => {
+                    SimulationType::Normal => SimulationState::Normal(SimulationNormal {
+                        particles: new_simulation_data.particles,
+                    }),
+                    SimulationType::SpecialRelativity => {
                         SimulationState::SpecialRelativity(SimulationSpecialRelativity {
                             particles: new_simulation_data.particles,
                         })
@@ -227,10 +225,7 @@ impl ApplicationHandler for App {
             primary_renderer.swapchain_format(),
             GuiConfig::default(),
         ));
-        let sim = InitialCondition::default()
-            .generate_particles(ui_state.particle_count, ui_state.time_per_frame);
-        //ui_state.scale = 1e10;
-        //ui_state.time_per_frame = sim.dt;
+        let sim = InitialCondition::default().generate_particles(ui_state.particle_count);
         *self.simulation_state.write().unwrap() = SimulationState::Normal(sim);
         self.skip_redraw.write().unwrap().clone_from(&ui_state.skip);
     }

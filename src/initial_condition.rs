@@ -51,7 +51,7 @@ impl std::fmt::Display for InitialCondition {
 }
 
 impl InitialCondition {
-    pub fn generate_particles(&self, particle_count: u32, dt: f64) -> SimulationNormal {
+    pub fn generate_particles(&self, particle_count: u32) -> SimulationNormal {
         let mut rng = rand::rng();
         let sim = match self {
             InitialCondition::RandomSphere {
@@ -130,9 +130,7 @@ impl InitialCondition {
                         }
                     })
                     .collect();
-                SimulationNormal {
-                    particles,
-                }
+                SimulationNormal { particles }
             }
             InitialCondition::TwoSpheres {
                 scale,
@@ -166,9 +164,7 @@ impl InitialCondition {
                         &mut rng,
                     ));
                 }
-                SimulationNormal {
-                    particles,
-                }
+                SimulationNormal { particles }
             }
             InitialCondition::SpiralDisk {
                 scale,
@@ -213,9 +209,7 @@ impl InitialCondition {
                         }
                     })
                     .collect();
-                SimulationNormal {
-                    particles,
-                }
+                SimulationNormal { particles }
             }
             InitialCondition::SolarSystem => {
                 let scale = 1.5e11;
@@ -297,9 +291,7 @@ impl InitialCondition {
                         color: [0.5, 0.5, 0.5, 1.0], // Grayish color
                     },
                 ];
-                SimulationNormal {
-                    particles,
-                }
+                SimulationNormal { particles }
             }
             InitialCondition::SatelliteOrbit { earth_mass } => {
                 let scale = 12_756e3 * 0.5;
@@ -356,9 +348,7 @@ impl InitialCondition {
                         color: [1.0, 1.0, 1.0, 1.0],
                     });
                 }
-                SimulationNormal {
-                    particles,
-                }
+                SimulationNormal { particles }
             }
         };
         sim

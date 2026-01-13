@@ -167,7 +167,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             slider_pure(
                 ui,
                 &mut ui_state_guard.scale_gauge,
-                DEFAULT_SCALE_UI * 3.0..=DEFAULT_SCALE_UI * 0.2,
+                DEFAULT_SCALE_UI * 0.2..=DEFAULT_SCALE_UI * 3.0,
             );
             ui.separator();
             ui.style_mut().spacing.slider_width = 160.0;
