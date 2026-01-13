@@ -70,6 +70,13 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 ui_state_guard.is_running = !ui_state_guard.is_running;
             }
             ui.separator();
+            if ui
+                .add_sized(button_size, Button::new("Initial Condition"))
+                .clicked()
+            {
+                ui_state_guard.is_running = !ui_state_guard.is_running;
+            }
+            ui.separator();
             ui.add(Label::new("Initial Condition:"));
             let id_salt = ui.make_persistent_id("initial_condition_combobox");
             ComboBox::from_id_salt(id_salt)
@@ -157,6 +164,9 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     .prefix("Time(sec)/Frame: "),
             );
             ui.separator();
+            if ui_state_guard.is_reset_requested {
+                ui_state_guard.scale = ui_state_guard.selected_initial_condition.get_scale();
+            }
             ui.horizontal(|ui| {
                 label_normal(ui, "Scale (m):");
                 label_indicator(

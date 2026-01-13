@@ -2,7 +2,7 @@ use crate::simulation::{Particle, SimulationNormal};
 use glam::DVec3;
 use rand::Rng;
 use rand_distr::Distribution;
-use std::f64::consts::*;
+use std::{default, f64::consts::*};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum InitialCondition {
@@ -51,6 +51,17 @@ impl std::fmt::Display for InitialCondition {
 }
 
 impl InitialCondition {
+    pub fn get_scale(&self) -> f64 {
+        match self {
+            InitialCondition::RandomSphere { scale, .. } => *scale,
+            InitialCondition::RandomCube { scale, .. } => *scale,
+            InitialCondition::TwoSpheres { scale, .. } => *scale,
+            InitialCondition::SpiralDisk { scale, .. } => *scale,
+            InitialCondition::SolarSystem => 1.5e11,
+            InitialCondition::SatelliteOrbit { .. } => 12_756e3 * 0.5,
+        }
+    }
+
     pub fn generate_particles(&self, particle_count: u32) -> SimulationNormal {
         let mut rng = rand::rng();
         let sim = match self {
