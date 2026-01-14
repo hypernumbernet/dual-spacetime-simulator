@@ -26,6 +26,7 @@ pub struct UiState {
     pub skip: u32,
     pub selected_initial_condition: InitialCondition,
     pub simulation_type: SimulationType,
+    pub is_initial_condition_window_open: bool,
 }
 
 impl Default for UiState {
@@ -48,6 +49,7 @@ impl Default for UiState {
             skip: 0,
             selected_initial_condition: InitialCondition::default(),
             simulation_type: SimulationType::Normal,
+            is_initial_condition_window_open: false,
         }
     }
 }
