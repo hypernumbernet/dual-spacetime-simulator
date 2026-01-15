@@ -17,7 +17,8 @@ use crate::initial_condition::InitialCondition;
 use crate::integration::{Gui, GuiConfig};
 use crate::pipeline::ParticleRenderPipeline;
 use crate::simulation::{
-    SimulationEngine, SimulationNormal, SimulationSpecialRelativity, SimulationState,
+    SimulationDoubleSpacetimeTheory, SimulationEngine, SimulationNormal,
+    SimulationSpecialRelativity, SimulationState,
 };
 use crate::ui::draw_ui;
 use crate::ui_state::{SimulationType, UiState};
@@ -78,6 +79,11 @@ fn main() -> Result<(), EventLoopError> {
                     }),
                     SimulationType::SpecialRelativity => {
                         SimulationState::SpecialRelativity(SimulationSpecialRelativity {
+                            particles: new_simulation_data.particles,
+                        })
+                    }
+                    SimulationType::DoubleSpacetimeTheory => {
+                        SimulationState::DoubleSpacetimeTheory(SimulationDoubleSpacetimeTheory {
                             particles: new_simulation_data.particles,
                         })
                     }

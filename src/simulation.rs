@@ -19,9 +19,14 @@ pub struct SimulationSpecialRelativity {
     pub particles: Vec<Particle>,
 }
 
+pub struct SimulationDoubleSpacetimeTheory {
+    pub particles: Vec<Particle>,
+}
+
 pub enum SimulationState {
     Normal(SimulationNormal),
     SpecialRelativity(SimulationSpecialRelativity),
+    DoubleSpacetimeTheory(SimulationDoubleSpacetimeTheory),
 }
 
 #[derive(Clone, Copy)]
@@ -96,11 +101,31 @@ impl SimulationEngine for SimulationSpecialRelativity {
     }
 }
 
+impl SimulationEngine for SimulationDoubleSpacetimeTheory {
+    fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
+        let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
+        let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
+        self.particles
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(i, particle)| {});
+    }
+
+    fn advance_time(&mut self, delta_seconds: f64) {
+        self.particles.par_iter_mut().for_each(|particle| {
+            particle.position += particle.velocity * delta_seconds;
+        });
+    }
+}
+
 impl SimulationEngine for SimulationState {
     fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
         match self {
             SimulationState::Normal(s) => s.update_velocities_with_gravity(delta_seconds),
             SimulationState::SpecialRelativity(s) => {
+                s.update_velocities_with_gravity(delta_seconds)
+            }
+            SimulationState::DoubleSpacetimeTheory(s) => {
                 s.update_velocities_with_gravity(delta_seconds)
             }
         }
@@ -110,6 +135,7 @@ impl SimulationEngine for SimulationState {
         match self {
             SimulationState::Normal(s) => s.advance_time(delta_seconds),
             SimulationState::SpecialRelativity(s) => s.advance_time(delta_seconds),
+            SimulationState::DoubleSpacetimeTheory(s) => s.advance_time(delta_seconds),
         }
     }
 }
@@ -126,11 +152,18 @@ impl Default for SimulationSpecialRelativity {
     }
 }
 
+impl Default for SimulationDoubleSpacetimeTheory {
+    fn default() -> Self {
+        Self { particles: vec![] }
+    }
+}
+
 impl SimulationState {
     pub fn particles(&self) -> &Vec<Particle> {
         match self {
             SimulationState::Normal(s) => &s.particles,
             SimulationState::SpecialRelativity(s) => &s.particles,
+            SimulationState::DoubleSpacetimeTheory(s) => &s.particles,
         }
     }
 }

@@ -182,6 +182,11 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                             SimulationType::SpecialRelativity,
                             "SpecialRelativity",
                         );
+                        ui.selectable_value(
+                            &mut ui_state_guard.simulation_type,
+                            SimulationType::DoubleSpacetimeTheory,
+                            "DoubleSpacetimeTheory",
+                        );
                     });
                 ui.style_mut().spacing.slider_width = 150.0;
                 ui.add(Label::new("Particle Count:"));
