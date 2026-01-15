@@ -83,16 +83,15 @@ impl SimulationEngine for SimulationSpecialRelativity {
                         acceleration += accel_magnitude * diff.normalize();
                     }
                 }
-                let relativistic_factor =
-                    1.0 / (1.0 - particle.velocity.length_squared() / (LIGHT_SPEED_SQUARED)).sqrt();
-                acceleration *= relativistic_factor;
                 particle.velocity += acceleration * delta_seconds;
             });
     }
 
     fn advance_time(&mut self, delta_seconds: f64) {
         self.particles.par_iter_mut().for_each(|particle| {
-            particle.position += particle.velocity * delta_seconds;
+            let speed_squared = particle.velocity.length_squared();
+            let gamma_inv = (1.0 - speed_squared / LIGHT_SPEED_SQUARED).sqrt();
+            particle.position += particle.velocity * gamma_inv * delta_seconds;
         });
     }
 }

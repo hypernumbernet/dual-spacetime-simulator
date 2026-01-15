@@ -2,7 +2,7 @@ use crate::simulation::{Particle, SimulationNormal};
 use glam::DVec3;
 use rand::Rng;
 use rand_distr::Distribution;
-use std::{default, f64::consts::*};
+use std::f64::consts::*;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum InitialCondition {
