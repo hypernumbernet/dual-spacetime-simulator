@@ -5,7 +5,7 @@ pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SimulationType {
     Normal,
-    SpecialRelativity,
+    SpeedOfLightLimit,
     DoubleSpacetimeTheory,
 }
 

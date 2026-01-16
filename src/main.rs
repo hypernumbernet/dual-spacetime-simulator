@@ -18,7 +18,7 @@ use crate::integration::{Gui, GuiConfig};
 use crate::pipeline::ParticleRenderPipeline;
 use crate::simulation::{
     SimulationDoubleSpacetimeTheory, SimulationEngine, SimulationNormal,
-    SimulationSpecialRelativity, SimulationState,
+    SimulationSpeedOfLightLimit, SimulationState,
 };
 use crate::ui::draw_ui;
 use crate::ui_state::{SimulationType, UiState};
@@ -77,8 +77,8 @@ fn main() -> Result<(), EventLoopError> {
                     SimulationType::Normal => SimulationState::Normal(SimulationNormal {
                         particles: new_simulation_data.particles,
                     }),
-                    SimulationType::SpecialRelativity => {
-                        SimulationState::SpecialRelativity(SimulationSpecialRelativity {
+                    SimulationType::SpeedOfLightLimit => {
+                        SimulationState::SpeedOfLightLimit(SimulationSpeedOfLightLimit {
                             particles: new_simulation_data.particles,
                         })
                     }

@@ -289,7 +289,8 @@ impl InitialCondition {
                     // Mercury
                     Particle {
                         position: DVec3 {
-                            x: 5.791e10 * correct.m,
+                            //x: 5.791e10 * correct.m,
+                            x: 5.0e10 * correct.m,
                             y: 0.0,
                             z: 0.0,
                         },
