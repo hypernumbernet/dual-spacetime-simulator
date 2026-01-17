@@ -184,8 +184,8 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                         );
                         ui.selectable_value(
                             &mut ui_state_guard.simulation_type,
-                            SimulationType::DoubleSpacetimeTheory,
-                            "DoubleSpacetimeTheory",
+                            SimulationType::LorentzTransformation,
+                            "Lorentz Transformation",
                         );
                     });
                 ui.style_mut().spacing.slider_width = 150.0;

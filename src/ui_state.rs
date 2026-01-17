@@ -6,7 +6,7 @@ pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 pub enum SimulationType {
     Normal,
     SpeedOfLightLimit,
-    DoubleSpacetimeTheory,
+    LorentzTransformation,
 }
 
 pub struct UiState {

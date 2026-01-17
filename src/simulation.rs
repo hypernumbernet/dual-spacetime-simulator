@@ -1,4 +1,5 @@
 use glam::DVec3;
+use rand_distr::num_traits::ops::inv;
 use rayon::prelude::*;
 
 use crate::math::spacetime::Spacetime;
@@ -7,9 +8,10 @@ pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
 pub const LIGHT_SPEED: f64 = 299_792_458.0; // Speed of light in meters per second
 pub const LIGHT_SPEED_SQUARED: f64 = LIGHT_SPEED * LIGHT_SPEED;
 pub const G: f64 = 6.6743e-11; // Gravitational constant in m^3 kg^-1 s^-2
+pub const EPSILON: f64 = 1e-10;
 
 pub trait SimulationEngine {
-    fn update_velocities_with_gravity(&mut self, delta_seconds: f64);
+    fn update_velocities(&mut self, delta_seconds: f64);
     fn advance_time(&mut self, delta_seconds: f64);
 }
 
@@ -21,14 +23,15 @@ pub struct SimulationSpeedOfLightLimit {
     pub particles: Vec<Particle>,
 }
 
-pub struct SimulationDoubleSpacetimeTheory {
+pub struct SimulationLorentzTransformation {
     pub particles: Vec<Particle>,
+    pub scale: f64,
 }
 
 pub enum SimulationState {
     Normal(SimulationNormal),
     SpeedOfLightLimit(SimulationSpeedOfLightLimit),
-    DoubleSpacetimeTheory(SimulationDoubleSpacetimeTheory),
+    LorentzTransformation(SimulationLorentzTransformation),
 }
 
 #[derive(Clone, Copy)]
@@ -40,7 +43,7 @@ pub struct Particle {
 }
 
 impl SimulationEngine for SimulationNormal {
-    fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
+    fn update_velocities(&mut self, delta_seconds: f64) {
         let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
         self.particles
@@ -54,10 +57,11 @@ impl SimulationEngine for SimulationNormal {
                     }
                     let diff = pos_j - particle.position;
                     let r_squared = diff.length_squared();
-                    if r_squared > 0.0 {
-                        let accel_magnitude = G * mass_j / r_squared;
-                        acceleration += accel_magnitude * diff.normalize();
+                    if r_squared < EPSILON {
+                        continue;
                     }
+                    let accel_magnitude = G * mass_j / r_squared;
+                    acceleration += accel_magnitude * diff.normalize();
                 }
                 particle.velocity += acceleration * delta_seconds;
             });
@@ -71,7 +75,7 @@ impl SimulationEngine for SimulationNormal {
 }
 
 impl SimulationEngine for SimulationSpeedOfLightLimit {
-    fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
+    fn update_velocities(&mut self, delta_seconds: f64) {
         let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
         self.particles
@@ -85,10 +89,11 @@ impl SimulationEngine for SimulationSpeedOfLightLimit {
                     }
                     let diff = pos_j - particle.position;
                     let r_squared = diff.length_squared();
-                    if r_squared > 0.0 {
-                        let accel_magnitude = G * mass_j / r_squared;
-                        acceleration += accel_magnitude * diff.normalize();
+                    if r_squared < EPSILON {
+                        continue;
                     }
+                    let accel_magnitude = G * mass_j / r_squared;
+                    acceleration += accel_magnitude * diff.normalize();
                 }
                 particle.velocity += acceleration * delta_seconds;
             });
@@ -103,8 +108,8 @@ impl SimulationEngine for SimulationSpeedOfLightLimit {
     }
 }
 
-impl SimulationEngine for SimulationDoubleSpacetimeTheory {
-    fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
+impl SimulationEngine for SimulationLorentzTransformation {
+    fn update_velocities(&mut self, delta_seconds: f64) {
         let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
         self.particles
@@ -117,33 +122,41 @@ impl SimulationEngine for SimulationDoubleSpacetimeTheory {
                         continue;
                     }
                     let diff = pos_j - particle.position;
-                    let r_squared = diff.length_squared();
-                    if r_squared > 0.0 {
-                        let accel_magnitude = G * mass_j / r_squared;
-                        acceleration += accel_magnitude * diff.normalize();
+                    let r = diff.length();
+                    if r < EPSILON {
+                        continue;
                     }
+                    let inv_r = 1.0 / r;
+                    let accel_magnitude =
+                        G * delta_seconds * mass_j * particle.mass * inv_r * inv_r * inv_r;
+                    let momentum_delta = diff * accel_magnitude;
+                    let angleI =
+                        Spacetime::versor_angle_p(momentum_delta, particle.mass, LIGHT_SPEED);
+                    let angleJ = Spacetime::versor_angle_p(-momentum_delta, mass_j, LIGHT_SPEED);
+                    acceleration += angleJ;
                 }
-                particle.velocity += acceleration * delta_seconds;
+                //particle.velocity += acceleration;
             });
     }
 
     fn advance_time(&mut self, delta_seconds: f64) {
+        let ct = LIGHT_SPEED * delta_seconds / self.scale;
+        //let st = Spacetime::from_w(ct);
         self.particles.par_iter_mut().for_each(|particle| {
-            particle.position += particle.velocity * delta_seconds;
+            let mut st = Spacetime::from_w(ct);
+            st.lorentz_transformation_va(particle.velocity / (self.scale * LIGHT_SPEED));
+            let tau = ct / st.w();
+            particle.position = DVec3::new(st.x() * tau, st.y() * tau, st.z() * tau);
         });
     }
 }
 
 impl SimulationEngine for SimulationState {
-    fn update_velocities_with_gravity(&mut self, delta_seconds: f64) {
+    fn update_velocities(&mut self, delta_seconds: f64) {
         match self {
-            SimulationState::Normal(s) => s.update_velocities_with_gravity(delta_seconds),
-            SimulationState::SpeedOfLightLimit(s) => {
-                s.update_velocities_with_gravity(delta_seconds)
-            }
-            SimulationState::DoubleSpacetimeTheory(s) => {
-                s.update_velocities_with_gravity(delta_seconds)
-            }
+            SimulationState::Normal(s) => s.update_velocities(delta_seconds),
+            SimulationState::SpeedOfLightLimit(s) => s.update_velocities(delta_seconds),
+            SimulationState::LorentzTransformation(s) => s.update_velocities(delta_seconds),
         }
     }
 
@@ -151,7 +164,7 @@ impl SimulationEngine for SimulationState {
         match self {
             SimulationState::Normal(s) => s.advance_time(delta_seconds),
             SimulationState::SpeedOfLightLimit(s) => s.advance_time(delta_seconds),
-            SimulationState::DoubleSpacetimeTheory(s) => s.advance_time(delta_seconds),
+            SimulationState::LorentzTransformation(s) => s.advance_time(delta_seconds),
         }
     }
 }
@@ -168,9 +181,12 @@ impl Default for SimulationSpeedOfLightLimit {
     }
 }
 
-impl Default for SimulationDoubleSpacetimeTheory {
+impl Default for SimulationLorentzTransformation {
     fn default() -> Self {
-        Self { particles: vec![] }
+        Self {
+            particles: vec![],
+            scale: 1e10,
+        }
     }
 }
 
@@ -179,7 +195,7 @@ impl SimulationState {
         match self {
             SimulationState::Normal(s) => &s.particles,
             SimulationState::SpeedOfLightLimit(s) => &s.particles,
-            SimulationState::DoubleSpacetimeTheory(s) => &s.particles,
+            SimulationState::LorentzTransformation(s) => &s.particles,
         }
     }
 }

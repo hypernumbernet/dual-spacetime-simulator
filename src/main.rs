@@ -17,7 +17,7 @@ use crate::initial_condition::InitialCondition;
 use crate::integration::{Gui, GuiConfig};
 use crate::pipeline::ParticleRenderPipeline;
 use crate::simulation::{
-    SimulationDoubleSpacetimeTheory, SimulationEngine, SimulationNormal,
+    SimulationEngine, SimulationLorentzTransformation, SimulationNormal,
     SimulationSpeedOfLightLimit, SimulationState,
 };
 use crate::ui::draw_ui;
@@ -69,6 +69,7 @@ fn main() -> Result<(), EventLoopError> {
             let simulation_type = ui_state.simulation_type;
             let skip = ui_state.skip;
             let particle_count = ui_state.particle_count;
+            let scale = ui_state.scale;
             drop(ui_state);
             if is_reset_requested {
                 let new_simulation_data =
@@ -82,9 +83,10 @@ fn main() -> Result<(), EventLoopError> {
                             particles: new_simulation_data.particles,
                         })
                     }
-                    SimulationType::DoubleSpacetimeTheory => {
-                        SimulationState::DoubleSpacetimeTheory(SimulationDoubleSpacetimeTheory {
+                    SimulationType::LorentzTransformation => {
+                        SimulationState::LorentzTransformation(SimulationLorentzTransformation {
                             particles: new_simulation_data.particles,
+                            scale: scale,
                         })
                     }
                 };
@@ -125,7 +127,7 @@ fn main() -> Result<(), EventLoopError> {
             thread_pool.install(|| {
                 let mut sim = simulation_state.write().unwrap();
                 sim.advance_time(time_per_frame);
-                sim.update_velocities_with_gravity(time_per_frame);
+                sim.update_velocities(time_per_frame);
             });
             if *skip_redraw.read().unwrap() < 1 {
                 let mut sr = skip_redraw.write().unwrap();
