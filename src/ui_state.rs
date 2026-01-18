@@ -9,6 +9,17 @@ pub enum SimulationType {
     LorentzTransformation,
 }
 
+impl std::fmt::Display for SimulationType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            SimulationType::Normal => "Normal",
+            SimulationType::SpeedOfLightLimit => "Speed of Light Limit",
+            SimulationType::LorentzTransformation => "Lorentz Transformation",
+        };
+        write!(f, "{}", text)
+    }
+}
+
 pub struct UiState {
     pub input_panel_width: f32,
     pub min_window_width: f32,

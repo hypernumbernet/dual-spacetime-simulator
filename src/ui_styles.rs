@@ -91,3 +91,12 @@ pub fn slider_pure(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive
     ui.style_mut().spacing.slider_width = ui.available_width();
     ui.add(egui::Slider::new(value, range).show_value(false));
 }
+
+pub fn selectable_value<T: PartialEq + std::fmt::Display>(
+    ui: &mut Ui,
+    current: &mut T,
+    selected: T,
+) {
+    let display_text = format!("{}", selected);
+    ui.selectable_value(current, selected, display_text.as_str());
+}
