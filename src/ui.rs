@@ -41,23 +41,23 @@ fn format_scale(scale_guage: f64, scale: f64) -> String {
 }
 
 pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
-    let mut ui_state_guard = ui_state.write().unwrap();
+    let mut uis = ui_state.write().unwrap();
     egui::Window::new("Control Panel")
         .resizable(false)
         .collapsible(true)
-        .default_width(ui_state_guard.input_panel_width)
+        .default_width(uis.input_panel_width)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 label_normal(ui, "FPS");
-                label_indicator(ui, &ui_state_guard.fps.to_string());
+                label_indicator(ui, &uis.fps.to_string());
             });
             ui.horizontal(|ui| {
                 label_normal(ui, "Frame");
-                label_indicator(ui, &ui_state_guard.frame.to_string());
+                label_indicator(ui, &uis.frame.to_string());
             });
             ui.horizontal(|ui| {
                 label_normal(ui, "Time");
-                label_indicator(ui, &format_simulation_time(ui_state_guard.simulation_time));
+                label_indicator(ui, &format_simulation_time(uis.simulation_time));
             });
             ui.separator();
             let button_width = ui.available_width();
@@ -67,76 +67,70 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 .add_sized(button_size, Button::new("Start/Pause"))
                 .clicked()
             {
-                ui_state_guard.is_running = !ui_state_guard.is_running;
+                uis.is_running = !uis.is_running;
             }
             ui.separator();
             if ui
                 .add_sized(button_size, Button::new("Initial Condition"))
                 .clicked()
             {
-                ui_state_guard.is_initial_condition_window_open =
-                    !ui_state_guard.is_initial_condition_window_open;
+                uis.is_initial_condition_window_open = !uis.is_initial_condition_window_open;
             }
             ui.separator();
             ui.add(
-                DragValue::new(&mut ui_state_guard.time_per_frame)
+                DragValue::new(&mut uis.time_per_frame)
                     .speed(0.1)
                     .prefix("Time(sec)/Frame: "),
             );
             ui.separator();
-            if ui_state_guard.is_reset_requested {
-                ui_state_guard.scale = ui_state_guard.selected_initial_condition.get_scale();
-            }
             ui.horizontal(|ui| {
                 label_normal(ui, "Scale (m):");
-                label_indicator(
-                    ui,
-                    format_scale(ui_state_guard.scale_gauge, ui_state_guard.scale).as_str(),
-                );
+                label_indicator(ui, format_scale(uis.scale_gauge, uis.scale).as_str());
             });
             slider_pure(
                 ui,
-                &mut ui_state_guard.scale_gauge,
+                &mut uis.scale_gauge,
                 DEFAULT_SCALE_UI * 0.2..=DEFAULT_SCALE_UI * 3.0,
             );
             ui.separator();
             ui.style_mut().spacing.slider_width = 160.0;
             label_normal(ui, "Max FPS:");
-            ui.add(Slider::new(&mut ui_state_guard.max_fps, 1..=1000));
+            ui.add(Slider::new(&mut uis.max_fps, 1..=1000));
             label_normal(ui, "Skip drawing:");
-            ui.add(Slider::new(&mut ui_state_guard.skip, 0..=1000));
+            ui.add(Slider::new(&mut uis.skip, 0..=1000));
         });
 
-    if ui_state_guard.is_initial_condition_window_open {
+    if uis.is_initial_condition_window_open {
         egui::Window::new("Initial Condition")
             .resizable(false)
             .collapsible(true)
-            .default_width(ui_state_guard.input_panel_width)
+            .default_width(uis.input_panel_width)
             .show(ctx, |ui| {
-                combobox_simulation_type(ui, &mut ui_state_guard);
-                combobox_basic_presets(ui, &mut ui_state_guard);
+                combobox_simulation_type(ui, &mut uis);
+                combobox_basic_presets(ui, &mut uis);
                 ui.style_mut().spacing.slider_width = 150.0;
                 ui.add(Label::new("Particle Count:"));
-                let max_particle_count = ui_state_guard.max_particle_count;
+                let max_particle_count = uis.max_particle_count;
                 ui.add(Slider::new(
-                    &mut ui_state_guard.particle_count,
+                    &mut uis.particle_count,
                     2..=max_particle_count as u32,
                 ));
                 let button_width = ui.available_width();
                 let button_height = ui.spacing().interact_size.y * 1.5;
                 let button_size = vec2(button_width, button_height);
                 if ui.add_sized(button_size, Button::new("Reset")).clicked() {
-                    ui_state_guard.is_reset_requested = true;
+                    uis.is_reset_requested = true;
                 }
             });
     }
-}
-
-fn simulation_type_display_text(simulation_type: SimulationType) -> &'static str {
-    match simulation_type {
-        SimulationType::Normal => "Normal",
-        SimulationType::SpeedOfLightLimit => "Speed of Light Limit",
-        SimulationType::LorentzTransformation => "Lorentz Transformation",
+    if uis.is_reset_requested {
+        uis.scale = uis.selected_initial_condition.get_scale();
+        if uis.selected_initial_condition == InitialCondition::SolarSystem {
+            uis.time_per_frame = 10000.0;
+            uis.max_fps = 1000;
+            uis.skip = 10;
+        }
+        uis.scale_gauge = DEFAULT_SCALE_UI;
     }
 }
 
@@ -214,6 +208,17 @@ fn combobox_basic_presets(ui: &mut egui::Ui, state: &mut UiState) {
                 &mut state.selected_initial_condition,
                 InitialCondition::SatelliteOrbit {
                     earth_mass: 5.972e24,
+                },
+            );
+            selectable_value(
+                ui,
+                &mut state.selected_initial_condition,
+                InitialCondition::EllipticalOrbit {
+                    central_mass: 1.989e30,
+                    planetary_mass: 5.972e24,
+                    planetary_speed: 2.0e4,
+                    planetary_distance: 2.0e11,
+                    scale: 1.5e11,
                 },
             );
         });

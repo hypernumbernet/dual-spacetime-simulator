@@ -35,6 +35,13 @@ pub enum InitialCondition {
     SatelliteOrbit {
         earth_mass: f64,
     },
+    EllipticalOrbit {
+        scale: f64,
+        central_mass: f64,
+        planetary_mass: f64,
+        planetary_speed: f64,
+        planetary_distance: f64,
+    },
 }
 
 impl std::fmt::Display for InitialCondition {
@@ -46,6 +53,7 @@ impl std::fmt::Display for InitialCondition {
             InitialCondition::SpiralDisk { .. } => write!(f, "Spiral Disk"),
             InitialCondition::SolarSystem => write!(f, "Solar System"),
             InitialCondition::SatelliteOrbit { .. } => write!(f, "Satellite Orbit"),
+            InitialCondition::EllipticalOrbit { .. } => write!(f, "Elliptical Orbit"),
         }
     }
 }
@@ -59,6 +67,7 @@ impl InitialCondition {
             InitialCondition::SpiralDisk { scale, .. } => *scale,
             InitialCondition::SolarSystem => 1.5e11,
             InitialCondition::SatelliteOrbit { .. } => 12_756e3 * 0.5,
+            InitialCondition::EllipticalOrbit { scale, .. } => *scale,
         }
     }
 
@@ -289,8 +298,7 @@ impl InitialCondition {
                     // Mercury
                     Particle {
                         position: DVec3 {
-                            //x: 5.791e10 * correct.m,
-                            x: 5.0e10 * correct.m,
+                            x: 5.791e10 * correct.m,
                             y: 0.0,
                             z: 0.0,
                         },
@@ -360,6 +368,44 @@ impl InitialCondition {
                         color: [1.0, 1.0, 1.0, 1.0],
                     });
                 }
+                SimulationNormal { particles }
+            }
+            InitialCondition::EllipticalOrbit {
+                scale,
+                central_mass,
+                planetary_mass,
+                planetary_speed,
+                planetary_distance,
+            } => {
+                let correct = Correct::new(*scale);
+                let central_mass = *central_mass * correct.kg;
+                let planetary_mass = *planetary_mass * correct.kg;
+                let planetary_distance = *planetary_distance * correct.m;
+                let planetary_speed = *planetary_speed * correct.m;
+                let particles = vec![
+                    // Central Body
+                    Particle {
+                        position: DVec3::ZERO,
+                        velocity: DVec3::ZERO,
+                        mass: central_mass,
+                        color: [1.0, 1.0, 0.0, 1.0], // Yellow
+                    },
+                    // Orbiting Body
+                    Particle {
+                        position: DVec3 {
+                            x: planetary_distance,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        velocity: DVec3 {
+                            x: 0.0,
+                            y: 0.0,
+                            z: planetary_speed,
+                        },
+                        mass: planetary_mass,
+                        color: [0.2, 0.5, 1.0, 1.0], // Blue
+                    },
+                ];
                 SimulationNormal { particles }
             }
         };

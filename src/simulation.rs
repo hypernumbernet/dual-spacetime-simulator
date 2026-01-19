@@ -108,6 +108,34 @@ impl SimulationEngine for SimulationSpeedOfLightLimit {
 }
 
 impl SimulationEngine for SimulationLorentzTransformation {
+    // fn update_velocities(&mut self, delta_seconds: f64) {
+    //     let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
+    //     let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
+    //     let ls = self.scale / LIGHT_SPEED;
+    //     let time_g = G * delta_seconds;
+    //     self.particles
+    //         .par_iter_mut()
+    //         .enumerate()
+    //         .for_each(|(i, particle)| {
+    //             let mut acceleration = DVec3::ZERO;
+    //             for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
+    //                 if i == j {
+    //                     continue;
+    //                 }
+    //                 let diff = pos_j - particle.position;
+    //                 let r = diff.length();
+    //                 if r < EPSILON {
+    //                     continue;
+    //                 }
+    //                 let inv_r = 1.0 / r;
+    //                 let accel_magnitude = time_g * mass_j * inv_r * inv_r;
+    //                 let momentum_delta = diff * accel_magnitude;
+    //                 let angle = Spacetime::versor_angle(momentum_delta, ls);
+    //                 acceleration += angle;
+    //             }
+    //             particle.velocity += acceleration;
+    //         });
+    // }
     fn update_velocities(&mut self, delta_seconds: f64) {
         let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
@@ -121,31 +149,25 @@ impl SimulationEngine for SimulationLorentzTransformation {
                         continue;
                     }
                     let diff = pos_j - particle.position;
-                    let r = diff.length();
-                    if r < EPSILON {
+                    let r_squared = diff.length_squared();
+                    if r_squared < EPSILON {
                         continue;
                     }
-                    let inv_r = 1.0 / r;
-                    let accel_magnitude =
-                        G * delta_seconds * mass_j * particle.mass * inv_r * inv_r * inv_r;
-                    let momentum_delta = diff * accel_magnitude;
-                    let angleI =
-                        Spacetime::versor_angle_p(momentum_delta, particle.mass, LIGHT_SPEED);
-                    let angleJ = Spacetime::versor_angle_p(-momentum_delta, mass_j, LIGHT_SPEED);
-                    acceleration += angleJ;
+                    let accel_magnitude = G * mass_j / r_squared;
+                    acceleration += accel_magnitude * diff.normalize();
                 }
-                //particle.velocity += acceleration;
+                particle.velocity += acceleration * delta_seconds;
             });
     }
 
     fn advance_time(&mut self, delta_seconds: f64) {
+        let ls = self.scale / LIGHT_SPEED;
         let ct = LIGHT_SPEED * delta_seconds / self.scale;
-        //let st = Spacetime::from_w(ct);
         self.particles.par_iter_mut().for_each(|particle| {
             let mut st = Spacetime::from_w(ct);
-            st.lorentz_transformation_va(particle.velocity / (self.scale * LIGHT_SPEED));
+            st.lorentz_transformation_va(particle.velocity * ls);
             let tau = ct / st.w();
-            particle.position = DVec3::new(st.x() * tau, st.y() * tau, st.z() * tau);
+            particle.position += DVec3::new(st.x() * tau, st.y() * tau, st.z() * tau);
         });
     }
 }
