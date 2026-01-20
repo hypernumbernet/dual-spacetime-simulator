@@ -65,7 +65,7 @@ fn main() -> Result<(), EventLoopError> {
             let max_fps = ui_state.max_fps;
             let time_per_frame = ui_state.time_per_frame;
             let is_reset_requested = ui_state.is_reset_requested;
-            let selected_initial_condition = ui_state.selected_initial_condition.clone();
+            let selected_initial_condition = ui_state.initial_condition.clone();
             let simulation_type = ui_state.simulation_type;
             let skip = ui_state.skip;
             let particle_count = ui_state.particle_count;

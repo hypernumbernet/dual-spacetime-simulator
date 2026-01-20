@@ -58,6 +58,80 @@ impl std::fmt::Display for InitialCondition {
     }
 }
 
+#[derive(Clone, PartialEq, Debug)]
+pub enum InitialConditionType {
+    RandomSphere,
+    RandomCube,
+    TwoSpheres,
+    SpiralDisk,
+    SolarSystem,
+    SatelliteOrbit,
+    EllipticalOrbit,
+}
+
+impl Default for InitialConditionType {
+    fn default() -> Self {
+        InitialConditionType::RandomSphere
+    }
+}
+
+impl std::fmt::Display for InitialConditionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InitialConditionType::RandomSphere => write!(f, "Random Sphere"),
+            InitialConditionType::RandomCube => write!(f, "Random Cube"),
+            InitialConditionType::TwoSpheres => write!(f, "Two Spheres"),
+            InitialConditionType::SpiralDisk => write!(f, "Spiral Disk"),
+            InitialConditionType::SolarSystem => write!(f, "Solar System"),
+            InitialConditionType::SatelliteOrbit => write!(f, "Satellite Orbit"),
+            InitialConditionType::EllipticalOrbit => write!(f, "Elliptical Orbit"),
+        }
+    }
+}
+
+impl InitialConditionType {
+    pub fn to_initial_condition(&self) -> InitialCondition {
+        match self {
+            InitialConditionType::RandomSphere => InitialCondition::RandomSphere {
+                scale: 1e10,
+                radius: 1e10,
+                mass_range: (1e29, 1e31),
+                velocity_std: 1e6,
+            },
+            InitialConditionType::RandomCube => InitialCondition::RandomCube {
+                scale: 1e10,
+                cube_size: 1e10,
+                mass_range: (1e29, 1e31),
+                velocity_std: 1e6,
+            },
+            InitialConditionType::TwoSpheres => InitialCondition::TwoSpheres {
+                scale: 1e10,
+                sphere1_center: DVec3::ZERO,
+                sphere1_radius: 1e9,
+                sphere2_center: DVec3::new(2e10, 0.0, 0.0),
+                sphere2_radius: 1e9,
+                mass_fixed: 1e30,
+            },
+            InitialConditionType::SpiralDisk => InitialCondition::SpiralDisk {
+                scale: 1e10,
+                disk_radius: 1e10,
+                mass_fixed: 1e30,
+            },
+            InitialConditionType::SolarSystem => InitialCondition::SolarSystem,
+            InitialConditionType::SatelliteOrbit => InitialCondition::SatelliteOrbit {
+                earth_mass: 5.972e24,
+            },
+            InitialConditionType::EllipticalOrbit => InitialCondition::EllipticalOrbit {
+                scale: 1e10,
+                central_mass: 1e30,
+                planetary_mass: 1e29,
+                planetary_speed: 1e6,
+                planetary_distance: 1e10,
+            },
+        }
+    }
+}
+
 impl InitialCondition {
     pub fn get_scale(&self) -> f64 {
         match self {
@@ -68,6 +142,18 @@ impl InitialCondition {
             InitialCondition::SolarSystem => 1.5e11,
             InitialCondition::SatelliteOrbit { .. } => 12_756e3 * 0.5,
             InitialCondition::EllipticalOrbit { scale, .. } => *scale,
+        }
+    }
+
+    pub fn get_type(&self) -> InitialConditionType {
+        match self {
+            InitialCondition::RandomSphere { .. } => InitialConditionType::RandomSphere,
+            InitialCondition::RandomCube { .. } => InitialConditionType::RandomCube,
+            InitialCondition::TwoSpheres { .. } => InitialConditionType::TwoSpheres,
+            InitialCondition::SpiralDisk { .. } => InitialConditionType::SpiralDisk,
+            InitialCondition::SolarSystem => InitialConditionType::SolarSystem,
+            InitialCondition::SatelliteOrbit { .. } => InitialConditionType::SatelliteOrbit,
+            InitialCondition::EllipticalOrbit { .. } => InitialConditionType::EllipticalOrbit,
         }
     }
 

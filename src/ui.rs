@@ -1,8 +1,8 @@
-use crate::initial_condition::InitialCondition;
+use crate::initial_condition::{InitialCondition, InitialConditionType};
 use crate::simulation::AU;
 use crate::ui_state::*;
 use crate::ui_styles::*;
-use egui::{Button, ComboBox, DragValue, Label, Slider, vec2};
+use egui::{Button, ComboBox, Label, Slider, vec2};
 use glam::DVec3;
 use std::sync::{Arc, RwLock};
 
@@ -77,11 +77,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 uis.is_initial_condition_window_open = !uis.is_initial_condition_window_open;
             }
             ui.separator();
-            ui.add(
-                DragValue::new(&mut uis.time_per_frame)
-                    .speed(0.1)
-                    .prefix("Time(sec)/Frame: "),
-            );
+            dragvalue_normal(ui, &mut uis.time_per_frame, 1.0, "Time(sec)/Frame: ");
             ui.separator();
             ui.horizontal(|ui| {
                 label_normal(ui, "Scale (m):");
@@ -107,25 +103,26 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             .default_width(uis.input_panel_width)
             .show(ctx, |ui| {
                 combobox_simulation_type(ui, &mut uis);
-                combobox_basic_presets(ui, &mut uis);
-                ui.style_mut().spacing.slider_width = 150.0;
-                ui.add(Label::new("Particle Count:"));
-                let max_particle_count = uis.max_particle_count;
-                ui.add(Slider::new(
-                    &mut uis.particle_count,
-                    2..=max_particle_count as u32,
-                ));
-                let button_width = ui.available_width();
-                let button_height = ui.spacing().interact_size.y * 1.5;
-                let button_size = vec2(button_width, button_height);
-                if ui.add_sized(button_size, Button::new("Reset")).clicked() {
-                    uis.is_reset_requested = true;
+                combobox_initial_condition_type(ui, &mut uis);
+                match uis.initial_condition_type {
+                    InitialConditionType::RandomSphere => {
+                        condition_random_sphere(ui, &mut uis);
+                    }
+                    InitialConditionType::RandomCube => {}
+                    InitialConditionType::TwoSpheres => {}
+                    InitialConditionType::SpiralDisk => {}
+                    InitialConditionType::SolarSystem => {}
+                    InitialConditionType::SatelliteOrbit => {}
+                    InitialConditionType::EllipticalOrbit => {}
                 }
+                combobox_basic_presets(ui, &mut uis);
+                slider_perticle_count(ui, &mut uis);
+                button_reset(ui, &mut uis);
             });
     }
     if uis.is_reset_requested {
-        uis.scale = uis.selected_initial_condition.get_scale();
-        if uis.selected_initial_condition == InitialCondition::SolarSystem {
+        uis.scale = uis.initial_condition.get_scale();
+        if uis.initial_condition == InitialCondition::SolarSystem {
             uis.time_per_frame = 10000.0;
             uis.max_fps = 1000;
             uis.skip = 10;
@@ -134,42 +131,87 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
     }
 }
 
-fn combobox_simulation_type(ui: &mut egui::Ui, state: &mut UiState) {
+fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
     ui.add(Label::new("Simulation Type:"));
     let id = ui.make_persistent_id("simulation_type_combobox");
     ComboBox::from_id_salt(id)
-        .selected_text(format!("{}", state.simulation_type))
+        .selected_text(format!("{}", uis.simulation_type))
         .width(ui.available_width())
         .show_ui(ui, |ui| {
-            selectable_value(ui, &mut state.simulation_type, SimulationType::Normal);
+            selectable_value(ui, &mut uis.simulation_type, SimulationType::Normal);
             selectable_value(
                 ui,
-                &mut state.simulation_type,
+                &mut uis.simulation_type,
                 SimulationType::SpeedOfLightLimit,
             );
             selectable_value(
                 ui,
-                &mut state.simulation_type,
+                &mut uis.simulation_type,
                 SimulationType::LorentzTransformation,
             );
         });
 }
 
-fn combobox_basic_presets(ui: &mut egui::Ui, state: &mut UiState) {
-    ui.add(Label::new("Basic Presets:"));
-    let id = ui.make_persistent_id("basic_presets_combobox");
+fn combobox_initial_condition_type(ui: &mut egui::Ui, uis: &mut UiState) {
+    ui.add(Label::new("Initial Condition Type:"));
+    let id = ui.make_persistent_id("initial_condition_type_combobox");
     ComboBox::from_id_salt(id)
-        .selected_text(format!("{}", state.selected_initial_condition))
+        .selected_text(format!("{}", uis.initial_condition_type))
         .width(ui.available_width())
         .show_ui(ui, |ui| {
             selectable_value(
                 ui,
-                &mut state.selected_initial_condition,
-                InitialCondition::default(),
+                &mut uis.initial_condition_type,
+                InitialConditionType::RandomSphere,
             );
             selectable_value(
                 ui,
-                &mut state.selected_initial_condition,
+                &mut uis.initial_condition_type,
+                InitialConditionType::RandomCube,
+            );
+            selectable_value(
+                ui,
+                &mut uis.initial_condition_type,
+                InitialConditionType::TwoSpheres,
+            );
+            selectable_value(
+                ui,
+                &mut uis.initial_condition_type,
+                InitialConditionType::SpiralDisk,
+            );
+            selectable_value(
+                ui,
+                &mut uis.initial_condition_type,
+                InitialConditionType::SolarSystem,
+            );
+            selectable_value(
+                ui,
+                &mut uis.initial_condition_type,
+                InitialConditionType::SatelliteOrbit,
+            );
+            selectable_value(
+                ui,
+                &mut uis.initial_condition_type,
+                InitialConditionType::EllipticalOrbit,
+            );
+        });
+}
+
+fn condition_random_sphere(ui: &mut egui::Ui, uis: &mut UiState) {
+    ui.add(Label::new("Random Sphere Condition Parameters:"));
+}
+
+fn combobox_basic_presets(ui: &mut egui::Ui, uis: &mut UiState) {
+    ui.add(Label::new("Basic Presets:"));
+    let id = ui.make_persistent_id("basic_presets_combobox");
+    ComboBox::from_id_salt(id)
+        .selected_text(format!("{}", uis.initial_condition))
+        .width(ui.available_width())
+        .show_ui(ui, |ui| {
+            selectable_value(ui, &mut uis.initial_condition, InitialCondition::default());
+            selectable_value(
+                ui,
+                &mut uis.initial_condition,
                 InitialCondition::RandomCube {
                     scale: 1e10,
                     cube_size: 2e10,
@@ -179,7 +221,7 @@ fn combobox_basic_presets(ui: &mut egui::Ui, state: &mut UiState) {
             );
             selectable_value(
                 ui,
-                &mut state.selected_initial_condition,
+                &mut uis.initial_condition,
                 InitialCondition::TwoSpheres {
                     scale: 1.0,
                     sphere1_center: DVec3::new(-1.0, 0.0, 0.0),
@@ -191,7 +233,7 @@ fn combobox_basic_presets(ui: &mut egui::Ui, state: &mut UiState) {
             );
             selectable_value(
                 ui,
-                &mut state.selected_initial_condition,
+                &mut uis.initial_condition,
                 InitialCondition::SpiralDisk {
                     scale: 1e7,
                     disk_radius: 1.5e7,
@@ -200,19 +242,19 @@ fn combobox_basic_presets(ui: &mut egui::Ui, state: &mut UiState) {
             );
             selectable_value(
                 ui,
-                &mut state.selected_initial_condition,
+                &mut uis.initial_condition,
                 InitialCondition::SolarSystem,
             );
             selectable_value(
                 ui,
-                &mut state.selected_initial_condition,
+                &mut uis.initial_condition,
                 InitialCondition::SatelliteOrbit {
                     earth_mass: 5.972e24,
                 },
             );
             selectable_value(
                 ui,
-                &mut state.selected_initial_condition,
+                &mut uis.initial_condition,
                 InitialCondition::EllipticalOrbit {
                     central_mass: 1.989e30,
                     planetary_mass: 5.972e24,
@@ -222,4 +264,23 @@ fn combobox_basic_presets(ui: &mut egui::Ui, state: &mut UiState) {
                 },
             );
         });
+}
+
+fn slider_perticle_count(ui: &mut egui::Ui, uis: &mut UiState) {
+    ui.style_mut().spacing.slider_width = 150.0;
+    ui.add(Label::new("Particle Count:"));
+    let max_particle_count = uis.max_particle_count;
+    ui.add(Slider::new(
+        &mut uis.particle_count,
+        2..=max_particle_count as u32,
+    ));
+}
+
+fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
+    let button_width = ui.available_width();
+    let button_height = ui.spacing().interact_size.y * 1.5;
+    let button_size = vec2(button_width, button_height);
+    if ui.add_sized(button_size, Button::new("Reset")).clicked() {
+        uis.is_reset_requested = true;
+    }
 }

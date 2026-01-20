@@ -1,4 +1,4 @@
-use crate::initial_condition::InitialCondition;
+use crate::initial_condition::{InitialCondition, InitialConditionType};
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 
@@ -36,7 +36,8 @@ pub struct UiState {
     pub max_fps: u32,
     pub is_reset_requested: bool,
     pub skip: u32,
-    pub selected_initial_condition: InitialCondition,
+    pub initial_condition_type: InitialConditionType,
+    pub initial_condition: InitialCondition,
     pub simulation_type: SimulationType,
     pub is_initial_condition_window_open: bool,
 }
@@ -59,7 +60,8 @@ impl Default for UiState {
             max_fps: 60,
             is_reset_requested: false,
             skip: 0,
-            selected_initial_condition: InitialCondition::default(),
+            initial_condition_type: InitialConditionType::default(),
+            initial_condition: InitialCondition::default(),
             simulation_type: SimulationType::Normal,
             is_initial_condition_window_open: false,
         }

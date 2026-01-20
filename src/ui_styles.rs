@@ -1,4 +1,4 @@
-use egui::{Align, Color32, Frame, Layout, Margin, RichText, Stroke, Ui};
+use egui::{Align, Color32, FontId, Frame, Layout, Margin, RichText, Stroke, TextStyle, Ui};
 
 #[derive(Default, Clone)]
 pub struct LabelStyle {
@@ -56,6 +56,34 @@ pub fn draw_label_with_style(ui: &mut Ui, text: &str, style: &LabelStyle) {
             ui.set_min_height(style.height);
         }
         ui.label(rich_text);
+    });
+}
+
+pub fn dragvalue_normal<T: egui::emath::Numeric>(
+    ui: &mut Ui,
+    value: &mut T,
+    speed: impl Into<f64>,
+    prefix: &str,
+) {
+    ui.scope(|ui| {
+        let visuals = ui.visuals_mut();
+        visuals.widgets.inactive.weak_bg_fill = Color32::BLACK;
+        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::LIGHT_BLUE);
+        visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(60, 0, 0);
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::RED);
+        visuals.widgets.active.weak_bg_fill = Color32::from_rgb(60, 60, 0);
+        visuals.widgets.active.bg_stroke = Stroke::new(1.0, Color32::YELLOW);
+        visuals.extreme_bg_color = Color32::from_rgb(0, 60, 0);
+        visuals.override_text_color = Some(Color32::WHITE);
+        visuals.selection.stroke = Stroke::new(1.0, Color32::GREEN);
+
+        let style = ui.style_mut();
+        style
+            .text_styles
+            .insert(TextStyle::Body, FontId::proportional(14.0));
+        style.drag_value_text_style = TextStyle::Body;
+        ui.spacing_mut().button_padding = egui::vec2(6.0, 4.0);
+        ui.add(egui::DragValue::new(value).speed(speed).prefix(prefix));
     });
 }
 
