@@ -77,10 +77,10 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 uis.is_initial_condition_window_open = !uis.is_initial_condition_window_open;
             }
             ui.separator();
-            dragvalue_normal(ui, &mut uis.time_per_frame, 1.0, "Time(sec)/Frame: ");
+            dragvalue_normal(ui, &mut uis.time_per_frame, 1.0, "Time(sec)/Frame");
             ui.separator();
             ui.horizontal(|ui| {
-                label_normal(ui, "Scale (m):");
+                label_normal(ui, "Scale");
                 label_indicator(ui, format_scale(uis.scale_gauge, uis.scale).as_str());
             });
             slider_pure(
@@ -90,9 +90,10 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             );
             ui.separator();
             ui.style_mut().spacing.slider_width = 160.0;
-            label_normal(ui, "Max FPS:");
+            label_normal(ui, "Max FPS");
             ui.add(Slider::new(&mut uis.max_fps, 1..=1000));
-            label_normal(ui, "Skip drawing:");
+            ui.separator();
+            label_normal(ui, "Skip drawing frames");
             ui.add(Slider::new(&mut uis.skip, 0..=1000));
         });
 
@@ -103,20 +104,25 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             .default_width(uis.input_panel_width)
             .show(ctx, |ui| {
                 combobox_simulation_type(ui, &mut uis);
+                ui.separator();
                 combobox_initial_condition_type(ui, &mut uis);
                 match uis.initial_condition_type {
                     InitialConditionType::RandomSphere => {
                         condition_random_sphere(ui, &mut uis);
                     }
-                    InitialConditionType::RandomCube => {}
+                    InitialConditionType::RandomCube => {
+                        condition_random_cube(ui, &mut uis);
+                    }
                     InitialConditionType::TwoSpheres => {}
                     InitialConditionType::SpiralDisk => {}
                     InitialConditionType::SolarSystem => {}
                     InitialConditionType::SatelliteOrbit => {}
                     InitialConditionType::EllipticalOrbit => {}
                 }
-                combobox_basic_presets(ui, &mut uis);
+                //combobox_basic_presets(ui, &mut uis);
+                ui.separator();
                 slider_perticle_count(ui, &mut uis);
+                ui.separator();
                 button_reset(ui, &mut uis);
             });
     }
@@ -132,7 +138,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
 }
 
 fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
-    ui.add(Label::new("Simulation Type:"));
+    label_normal(ui, "Simulation Type");
     let id = ui.make_persistent_id("simulation_type_combobox");
     ComboBox::from_id_salt(id)
         .selected_text(format!("{}", uis.simulation_type))
@@ -153,7 +159,7 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
 }
 
 fn combobox_initial_condition_type(ui: &mut egui::Ui, uis: &mut UiState) {
-    ui.add(Label::new("Initial Condition Type:"));
+    label_normal(ui, "Initial Condition Type");
     let id = ui.make_persistent_id("initial_condition_type_combobox");
     ComboBox::from_id_salt(id)
         .selected_text(format!("{}", uis.initial_condition_type))
@@ -198,7 +204,54 @@ fn combobox_initial_condition_type(ui: &mut egui::Ui, uis: &mut UiState) {
 }
 
 fn condition_random_sphere(ui: &mut egui::Ui, uis: &mut UiState) {
-    ui.add(Label::new("Random Sphere Condition Parameters:"));
+    dragvalue_normal(ui, &mut uis.random_sphere.scale, 1e3, "Scale (m): ");
+    dragvalue_normal(
+        ui,
+        &mut uis.random_sphere.radius,
+        1e3,
+        "Sphere Radius (m)",
+    );
+    dragvalue_normal(
+        ui,
+        &mut uis.random_sphere.mass_range.0,
+        1e20,
+        "Mass Min (kg)",
+    );
+    dragvalue_normal(
+        ui,
+        &mut uis.random_sphere.mass_range.1,
+        1e20,
+        "Mass Max (kg)",
+    );
+    dragvalue_normal(
+        ui,
+        &mut uis.random_sphere.velocity_std,
+        1e3,
+        "Velocity Std (m/s)",
+    );
+}
+
+fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
+    dragvalue_normal(ui, &mut uis.random_cube.scale, 1e3, "Scale (m)");
+    dragvalue_normal(ui, &mut uis.random_cube.cube_size, 1e3, "Cube Size (m)");
+    dragvalue_normal(
+        ui,
+        &mut uis.random_cube.mass_range.0,
+        1e20,
+        "Mass Min (kg)",
+    );
+    dragvalue_normal(
+        ui,
+        &mut uis.random_cube.mass_range.1,
+        1e20,
+        "Mass Max (kg)",
+    );
+    dragvalue_normal(
+        ui,
+        &mut uis.random_cube.velocity_std,
+        1e3,
+        "Velocity Std (m/s)",
+    );
 }
 
 fn combobox_basic_presets(ui: &mut egui::Ui, uis: &mut UiState) {
@@ -268,7 +321,7 @@ fn combobox_basic_presets(ui: &mut egui::Ui, uis: &mut UiState) {
 
 fn slider_perticle_count(ui: &mut egui::Ui, uis: &mut UiState) {
     ui.style_mut().spacing.slider_width = 150.0;
-    ui.add(Label::new("Particle Count:"));
+    label_normal(ui, "Particle Count");
     let max_particle_count = uis.max_particle_count;
     ui.add(Slider::new(
         &mut uis.particle_count,

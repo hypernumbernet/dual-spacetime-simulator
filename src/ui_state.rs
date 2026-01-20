@@ -40,6 +40,8 @@ pub struct UiState {
     pub initial_condition: InitialCondition,
     pub simulation_type: SimulationType,
     pub is_initial_condition_window_open: bool,
+    pub random_sphere: RandomSphereParameters,
+    pub random_cube: RandomCubeParameters,
 }
 
 impl Default for UiState {
@@ -64,6 +66,44 @@ impl Default for UiState {
             initial_condition: InitialCondition::default(),
             simulation_type: SimulationType::Normal,
             is_initial_condition_window_open: false,
+            random_sphere: RandomSphereParameters::default(),
+            random_cube: RandomCubeParameters::default(),
+        }
+    }
+}
+
+pub struct RandomSphereParameters {
+    pub scale: f64,
+    pub radius: f64,
+    pub mass_range: (f64, f64),
+    pub velocity_std: f64,
+}
+
+impl Default for RandomSphereParameters {
+    fn default() -> Self {
+        Self {
+            scale: 1e10,
+            radius: 1e10,
+            mass_range: (1e29, 1e31),
+            velocity_std: 1e6,
+        }
+    }
+}
+
+pub struct RandomCubeParameters {
+    pub scale: f64,
+    pub cube_size: f64,
+    pub mass_range: (f64, f64),
+    pub velocity_std: f64,
+}
+
+impl Default for RandomCubeParameters {
+    fn default() -> Self {
+        Self {
+            scale: 1e10,
+            cube_size: 2e10,
+            mass_range: (1e29, 1e31),
+            velocity_std: 1e6,
         }
     }
 }
