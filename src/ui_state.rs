@@ -1,4 +1,5 @@
 use crate::initial_condition::{InitialCondition, InitialConditionType};
+use glam::DVec3;
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 
@@ -43,6 +44,8 @@ pub struct UiState {
     pub is_initial_condition_window_open: bool,
     pub random_sphere: RandomSphereParameters,
     pub random_cube: RandomCubeParameters,
+    pub two_spheres: TwoSpheresParameters,
+    pub spiral_disk: SpiralDiskParameters,
 }
 
 impl Default for UiState {
@@ -70,6 +73,8 @@ impl Default for UiState {
             is_initial_condition_window_open: false,
             random_sphere: RandomSphereParameters::default(),
             random_cube: RandomCubeParameters::default(),
+            two_spheres: TwoSpheresParameters::default(),
+            spiral_disk: SpiralDiskParameters::default(),
         }
     }
 }
@@ -83,11 +88,21 @@ pub struct RandomSphereParameters {
 
 impl Default for RandomSphereParameters {
     fn default() -> Self {
-        Self {
-            scale: 1e10,
-            radius: 1e10,
-            mass_range: (1e29, 1e31),
-            velocity_std: 1e6,
+        if let InitialCondition::RandomSphere {
+            scale,
+            radius,
+            mass_range,
+            velocity_std,
+        } = InitialConditionType::RandomSphere.to_initial_condition()
+        {
+            Self {
+                scale,
+                radius,
+                mass_range,
+                velocity_std,
+            }
+        } else {
+            panic!("Default for RandomSphereParameters could not be created");
         }
     }
 }
@@ -101,11 +116,80 @@ pub struct RandomCubeParameters {
 
 impl Default for RandomCubeParameters {
     fn default() -> Self {
-        Self {
-            scale: 1e10,
-            cube_size: 2e10,
-            mass_range: (1e29, 1e31),
-            velocity_std: 1e6,
+        if let InitialCondition::RandomCube {
+            scale,
+            cube_size,
+            mass_range,
+            velocity_std,
+        } = InitialConditionType::RandomCube.to_initial_condition()
+        {
+            Self {
+                scale,
+                cube_size,
+                mass_range,
+                velocity_std,
+            }
+        } else {
+            panic!("Default for RandomCubeParameters could not be created");
+        }
+    }
+}
+
+pub struct TwoSpheresParameters {
+    pub scale: f64,
+    pub sphere1_center: DVec3,
+    pub sphere1_radius: f64,
+    pub sphere2_center: DVec3,
+    pub sphere2_radius: f64,
+    pub mass_fixed: f64,
+}
+
+impl Default for TwoSpheresParameters {
+    fn default() -> Self {
+        if let InitialCondition::TwoSpheres {
+            scale,
+            sphere1_center,
+            sphere1_radius,
+            sphere2_center,
+            sphere2_radius,
+            mass_fixed,
+        } = InitialConditionType::TwoSpheres.to_initial_condition()
+        {
+            Self {
+                scale,
+                sphere1_center,
+                sphere1_radius,
+                sphere2_center,
+                sphere2_radius,
+                mass_fixed,
+            }
+        } else {
+            panic!("Default for TwoSpheresParameters could not be created");
+        }
+    }
+}
+
+pub struct SpiralDiskParameters {
+    pub scale: f64,
+    pub disk_radius: f64,
+    pub mass_fixed: f64,
+}
+
+impl Default for SpiralDiskParameters {
+    fn default() -> Self {
+        if let InitialCondition::SpiralDisk {
+            scale,
+            disk_radius,
+            mass_fixed,
+        } = InitialConditionType::SpiralDisk.to_initial_condition()
+        {
+            Self {
+                scale,
+                disk_radius,
+                mass_fixed,
+            }
+        } else {
+            panic!("Default for SpiralDiskParameters could not be created");
         }
     }
 }

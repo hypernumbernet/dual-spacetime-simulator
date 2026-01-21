@@ -100,33 +100,33 @@ impl InitialConditionType {
             },
             InitialConditionType::RandomCube => InitialCondition::RandomCube {
                 scale: 1e10,
-                cube_size: 1e10,
+                cube_size: 2e10,
                 mass_range: (1e29, 1e31),
                 velocity_std: 1e6,
             },
             InitialConditionType::TwoSpheres => InitialCondition::TwoSpheres {
-                scale: 1e10,
-                sphere1_center: DVec3::ZERO,
-                sphere1_radius: 1e9,
-                sphere2_center: DVec3::new(2e10, 0.0, 0.0),
-                sphere2_radius: 1e9,
-                mass_fixed: 1e30,
+                scale: 1.0,
+                sphere1_center: DVec3::new(-1.0, 0.0, 0.0),
+                sphere1_radius: 0.5,
+                sphere2_center: DVec3::new(1.0, 0.0, 0.0),
+                sphere2_radius: 0.5,
+                mass_fixed: 1e-1,
             },
             InitialConditionType::SpiralDisk => InitialCondition::SpiralDisk {
-                scale: 1e10,
-                disk_radius: 1e10,
-                mass_fixed: 1e30,
+                scale: 1e7,
+                disk_radius: 1.5e7,
+                mass_fixed: 1e20,
             },
             InitialConditionType::SolarSystem => InitialCondition::SolarSystem,
             InitialConditionType::SatelliteOrbit => InitialCondition::SatelliteOrbit {
                 earth_mass: 5.972e24,
             },
             InitialConditionType::EllipticalOrbit => InitialCondition::EllipticalOrbit {
-                scale: 1e10,
-                central_mass: 1e30,
-                planetary_mass: 1e29,
-                planetary_speed: 1e6,
-                planetary_distance: 1e10,
+                scale: 1.5e11,
+                central_mass: 1.989e30,
+                planetary_mass: 5.972e24,
+                planetary_speed: 2.0e4,
+                planetary_distance: 2.0e11,
             },
         }
     }
@@ -142,18 +142,6 @@ impl InitialCondition {
             InitialCondition::SolarSystem => 1.5e11,
             InitialCondition::SatelliteOrbit { .. } => 12_756e3 * 0.5,
             InitialCondition::EllipticalOrbit { scale, .. } => *scale,
-        }
-    }
-
-    pub fn get_type(&self) -> InitialConditionType {
-        match self {
-            InitialCondition::RandomSphere { .. } => InitialConditionType::RandomSphere,
-            InitialCondition::RandomCube { .. } => InitialConditionType::RandomCube,
-            InitialCondition::TwoSpheres { .. } => InitialConditionType::TwoSpheres,
-            InitialCondition::SpiralDisk { .. } => InitialConditionType::SpiralDisk,
-            InitialCondition::SolarSystem => InitialConditionType::SolarSystem,
-            InitialCondition::SatelliteOrbit { .. } => InitialConditionType::SatelliteOrbit,
-            InitialCondition::EllipticalOrbit { .. } => InitialConditionType::EllipticalOrbit,
         }
     }
 

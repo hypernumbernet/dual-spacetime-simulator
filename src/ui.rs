@@ -2,8 +2,7 @@ use crate::initial_condition::{InitialCondition, InitialConditionType};
 use crate::simulation::AU;
 use crate::ui_state::*;
 use crate::ui_styles::*;
-use egui::{Button, ComboBox, Label, Slider, vec2};
-use glam::DVec3;
+use egui::{Button, ComboBox, Slider, vec2};
 use std::sync::{Arc, RwLock};
 
 fn format_simulation_time(simulation_time: f64) -> String {
@@ -113,8 +112,12 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     InitialConditionType::RandomCube => {
                         condition_random_cube(ui, &mut uis);
                     }
-                    InitialConditionType::TwoSpheres => {}
-                    InitialConditionType::SpiralDisk => {}
+                    InitialConditionType::TwoSpheres => {
+                        condition_two_spheres(ui, &mut uis);
+                    }
+                    InitialConditionType::SpiralDisk => {
+                        condition_spiral_disk(ui, &mut uis);
+                    }
                     InitialConditionType::SolarSystem => {}
                     InitialConditionType::SatelliteOrbit => {}
                     InitialConditionType::EllipticalOrbit => {}
@@ -139,8 +142,20 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 mass_range: uis.random_cube.mass_range,
                 velocity_std: uis.random_cube.velocity_std,
             },
-            InitialConditionType::TwoSpheres => InitialCondition::default(),
-            InitialConditionType::SpiralDisk => InitialCondition::default(),
+
+            InitialConditionType::TwoSpheres => InitialCondition::TwoSpheres {
+                scale: uis.two_spheres.scale,
+                sphere1_center: uis.two_spheres.sphere1_center,
+                sphere1_radius: uis.two_spheres.sphere1_radius,
+                sphere2_center: uis.two_spheres.sphere2_center,
+                sphere2_radius: uis.two_spheres.sphere2_radius,
+                mass_fixed: uis.two_spheres.mass_fixed,
+            },
+            InitialConditionType::SpiralDisk => InitialCondition::SpiralDisk {
+                scale: uis.spiral_disk.scale,
+                disk_radius: uis.spiral_disk.disk_radius,
+                mass_fixed: uis.spiral_disk.mass_fixed,
+            },
             InitialConditionType::SolarSystem => InitialCondition::SolarSystem,
             InitialConditionType::SatelliteOrbit => InitialCondition::default(),
             InitialConditionType::EllipticalOrbit => InitialCondition::default(),
@@ -260,69 +275,39 @@ fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
-fn combobox_basic_presets(ui: &mut egui::Ui, uis: &mut UiState) {
-    ui.add(Label::new("Basic Presets:"));
-    let id = ui.make_persistent_id("basic_presets_combobox");
-    ComboBox::from_id_salt(id)
-        .selected_text(format!("{}", uis.initial_condition))
-        .width(ui.available_width())
-        .show_ui(ui, |ui| {
-            selectable_value(ui, &mut uis.initial_condition, InitialCondition::default());
-            selectable_value(
-                ui,
-                &mut uis.initial_condition,
-                InitialCondition::RandomCube {
-                    scale: 1e10,
-                    cube_size: 2e10,
-                    mass_range: (1e29, 1e31),
-                    velocity_std: 1e6,
-                },
-            );
-            selectable_value(
-                ui,
-                &mut uis.initial_condition,
-                InitialCondition::TwoSpheres {
-                    scale: 1.0,
-                    sphere1_center: DVec3::new(-1.0, 0.0, 0.0),
-                    sphere1_radius: 0.5,
-                    sphere2_center: DVec3::new(1.0, 0.0, 0.0),
-                    sphere2_radius: 0.5,
-                    mass_fixed: 1e-1,
-                },
-            );
-            selectable_value(
-                ui,
-                &mut uis.initial_condition,
-                InitialCondition::SpiralDisk {
-                    scale: 1e7,
-                    disk_radius: 1.5e7,
-                    mass_fixed: 1e20,
-                },
-            );
-            selectable_value(
-                ui,
-                &mut uis.initial_condition,
-                InitialCondition::SolarSystem,
-            );
-            selectable_value(
-                ui,
-                &mut uis.initial_condition,
-                InitialCondition::SatelliteOrbit {
-                    earth_mass: 5.972e24,
-                },
-            );
-            selectable_value(
-                ui,
-                &mut uis.initial_condition,
-                InitialCondition::EllipticalOrbit {
-                    central_mass: 1.989e30,
-                    planetary_mass: 5.972e24,
-                    planetary_speed: 2.0e4,
-                    planetary_distance: 2.0e11,
-                    scale: 1.5e11,
-                },
-            );
-        });
+fn condition_two_spheres(ui: &mut egui::Ui, uis: &mut UiState) {
+    dragvalue_normal(ui, &mut uis.two_spheres.scale, 1e9, "Scale (m)");
+    ui.horizontal(|ui| {
+        label_normal(ui, "Sphere 1 Center");
+    });
+    dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.x, 1.0, "X");
+    dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.y, 1.0, "Y");
+    dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.z, 1.0, "Z");
+    dragvalue_normal(
+        ui,
+        &mut uis.two_spheres.sphere1_radius,
+        1e8,
+        "Sphere 1 Radius",
+    );
+    ui.horizontal(|ui| {
+        label_normal(ui, "Sphere 2 Center");
+    });
+    dragvalue_normal(ui, &mut uis.two_spheres.sphere2_center.x, 1.0, "X");
+    dragvalue_normal(ui, &mut uis.two_spheres.sphere2_center.y, 1.0, "Y");
+    dragvalue_normal(ui, &mut uis.two_spheres.sphere2_center.z, 1.0, "Z");
+    dragvalue_normal(
+        ui,
+        &mut uis.two_spheres.sphere2_radius,
+        1e8,
+        "Sphere 2 Radius",
+    );
+    dragvalue_normal(ui, &mut uis.two_spheres.mass_fixed, 1e20, "Mass Fixed (kg)");
+}
+
+fn condition_spiral_disk(ui: &mut egui::Ui, uis: &mut UiState) {
+    dragvalue_normal(ui, &mut uis.spiral_disk.scale, 1e7, "Scale (m)");
+    dragvalue_normal(ui, &mut uis.spiral_disk.disk_radius, 1e7, "Disk Radius (m)");
+    dragvalue_normal(ui, &mut uis.spiral_disk.mass_fixed, 1e20, "Mass Fixed (kg)");
 }
 
 fn slider_perticle_count(ui: &mut egui::Ui, uis: &mut UiState) {
