@@ -119,12 +119,33 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     InitialConditionType::SatelliteOrbit => {}
                     InitialConditionType::EllipticalOrbit => {}
                 }
-                //combobox_basic_presets(ui, &mut uis);
                 ui.separator();
                 slider_perticle_count(ui, &mut uis);
                 ui.separator();
                 button_reset(ui, &mut uis);
             });
+    }
+    if uis.initial_condition_type != uis.previous_initial_condition_type {
+        uis.initial_condition = match uis.initial_condition_type {
+            InitialConditionType::RandomSphere => InitialCondition::RandomSphere {
+                scale: uis.random_sphere.scale,
+                radius: uis.random_sphere.radius,
+                mass_range: uis.random_sphere.mass_range,
+                velocity_std: uis.random_sphere.velocity_std,
+            },
+            InitialConditionType::RandomCube => InitialCondition::RandomCube {
+                scale: uis.random_cube.scale,
+                cube_size: uis.random_cube.cube_size,
+                mass_range: uis.random_cube.mass_range,
+                velocity_std: uis.random_cube.velocity_std,
+            },
+            InitialConditionType::TwoSpheres => InitialCondition::default(),
+            InitialConditionType::SpiralDisk => InitialCondition::default(),
+            InitialConditionType::SolarSystem => InitialCondition::SolarSystem,
+            InitialConditionType::SatelliteOrbit => InitialCondition::default(),
+            InitialConditionType::EllipticalOrbit => InitialCondition::default(),
+        };
+        uis.previous_initial_condition_type = uis.initial_condition_type.clone();
     }
     if uis.is_reset_requested {
         uis.scale = uis.initial_condition.get_scale();
@@ -204,13 +225,8 @@ fn combobox_initial_condition_type(ui: &mut egui::Ui, uis: &mut UiState) {
 }
 
 fn condition_random_sphere(ui: &mut egui::Ui, uis: &mut UiState) {
-    dragvalue_normal(ui, &mut uis.random_sphere.scale, 1e3, "Scale (m): ");
-    dragvalue_normal(
-        ui,
-        &mut uis.random_sphere.radius,
-        1e3,
-        "Sphere Radius (m)",
-    );
+    dragvalue_normal(ui, &mut uis.random_sphere.scale, 1e9, "Scale (m): ");
+    dragvalue_normal(ui, &mut uis.random_sphere.radius, 1e9, "Sphere Radius (m)");
     dragvalue_normal(
         ui,
         &mut uis.random_sphere.mass_range.0,
@@ -234,18 +250,8 @@ fn condition_random_sphere(ui: &mut egui::Ui, uis: &mut UiState) {
 fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.random_cube.scale, 1e3, "Scale (m)");
     dragvalue_normal(ui, &mut uis.random_cube.cube_size, 1e3, "Cube Size (m)");
-    dragvalue_normal(
-        ui,
-        &mut uis.random_cube.mass_range.0,
-        1e20,
-        "Mass Min (kg)",
-    );
-    dragvalue_normal(
-        ui,
-        &mut uis.random_cube.mass_range.1,
-        1e20,
-        "Mass Max (kg)",
-    );
+    dragvalue_normal(ui, &mut uis.random_cube.mass_range.0, 1e20, "Mass Min (kg)");
+    dragvalue_normal(ui, &mut uis.random_cube.mass_range.1, 1e20, "Mass Max (kg)");
     dragvalue_normal(
         ui,
         &mut uis.random_cube.velocity_std,
