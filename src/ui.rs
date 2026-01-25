@@ -3,6 +3,7 @@ use crate::simulation::AU;
 use crate::ui_state::*;
 use crate::ui_styles::*;
 use egui::{Button, ComboBox, Slider, vec2};
+use satkit::Instant;
 use std::sync::{Arc, RwLock};
 
 fn format_simulation_time(simulation_time: f64) -> String {
@@ -128,7 +129,8 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 button_reset(ui, &mut uis);
             });
     }
-    if uis.initial_condition_type != uis.previous_initial_condition_type {
+    if uis.is_resetting {
+        uis.is_resetting = false;
         uis.initial_condition = match uis.initial_condition_type {
             InitialConditionType::RandomSphere => InitialCondition::RandomSphere {
                 scale: uis.random_sphere.scale,
@@ -156,18 +158,21 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 disk_radius: uis.spiral_disk.disk_radius,
                 mass_fixed: uis.spiral_disk.mass_fixed,
             },
-            InitialConditionType::SolarSystem => InitialCondition::SolarSystem,
+            InitialConditionType::SolarSystem => InitialCondition::SolarSystem {
+                start_time: Instant::from_datetime(2000, 1, 1, 12, 0, 0.0).unwrap(),
+            },
             InitialConditionType::SatelliteOrbit => InitialCondition::default(),
             InitialConditionType::EllipticalOrbit => InitialCondition::default(),
         };
-        uis.previous_initial_condition_type = uis.initial_condition_type.clone();
-    }
-    if uis.is_reset_requested {
         uis.scale = uis.initial_condition.get_scale();
-        if uis.initial_condition == InitialCondition::SolarSystem {
+        if uis.initial_condition_type == InitialConditionType::SolarSystem {
             uis.time_per_frame = 10000.0;
             uis.max_fps = 1000;
             uis.skip = 10;
+        } else {
+            uis.time_per_frame = 10.0;
+            uis.max_fps = 60;
+            uis.skip = 0;
         }
         uis.scale_gauge = DEFAULT_SCALE_UI;
     }
@@ -326,5 +331,6 @@ fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
     let button_size = vec2(button_width, button_height);
     if ui.add_sized(button_size, Button::new("Reset")).clicked() {
         uis.is_reset_requested = true;
+        uis.is_resetting = true;
     }
 }

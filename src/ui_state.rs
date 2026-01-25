@@ -1,5 +1,6 @@
 use crate::initial_condition::{InitialCondition, InitialConditionType};
 use glam::DVec3;
+use satkit::Instant;
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 
@@ -36,9 +37,9 @@ pub struct UiState {
     pub is_running: bool,
     pub max_fps: u32,
     pub is_reset_requested: bool,
+    pub is_resetting: bool,
     pub skip: u32,
     pub initial_condition_type: InitialConditionType,
-    pub previous_initial_condition_type: InitialConditionType,
     pub initial_condition: InitialCondition,
     pub simulation_type: SimulationType,
     pub is_initial_condition_window_open: bool,
@@ -65,9 +66,9 @@ impl Default for UiState {
             is_running: false,
             max_fps: 60,
             is_reset_requested: false,
+            is_resetting: false,
             skip: 0,
             initial_condition_type: InitialConditionType::default(),
-            previous_initial_condition_type: InitialConditionType::default(),
             initial_condition: InitialCondition::default(),
             simulation_type: SimulationType::Normal,
             is_initial_condition_window_open: false,
@@ -102,7 +103,7 @@ impl Default for RandomSphereParameters {
                 velocity_std,
             }
         } else {
-            panic!("Default for RandomSphereParameters could not be created");
+            panic!();
         }
     }
 }
@@ -130,7 +131,7 @@ impl Default for RandomCubeParameters {
                 velocity_std,
             }
         } else {
-            panic!("Default for RandomCubeParameters could not be created");
+            panic!();
         }
     }
 }
@@ -164,7 +165,7 @@ impl Default for TwoSpheresParameters {
                 mass_fixed,
             }
         } else {
-            panic!("Default for TwoSpheresParameters could not be created");
+            panic!();
         }
     }
 }
@@ -189,7 +190,22 @@ impl Default for SpiralDiskParameters {
                 mass_fixed,
             }
         } else {
-            panic!("Default for SpiralDiskParameters could not be created");
+            panic!();
+        }
+    }
+}
+
+pub struct SolarSystemParameters {
+    pub start_time: Instant,
+}
+impl Default for SolarSystemParameters {
+    fn default() -> Self {
+        if let InitialCondition::SolarSystem { start_time } =
+            InitialConditionType::SolarSystem.to_initial_condition()
+        {
+            Self { start_time }
+        } else {
+            panic!();
         }
     }
 }

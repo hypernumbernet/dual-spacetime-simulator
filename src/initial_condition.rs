@@ -2,6 +2,7 @@ use crate::simulation::{Particle, SimulationNormal};
 use glam::DVec3;
 use rand::Rng;
 use rand_distr::Distribution;
+use satkit::Instant;
 use std::f64::consts::*;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -31,7 +32,9 @@ pub enum InitialCondition {
         disk_radius: f64,
         mass_fixed: f64,
     },
-    SolarSystem,
+    SolarSystem {
+        start_time: Instant,
+    },
     SatelliteOrbit {
         earth_mass: f64,
     },
@@ -51,7 +54,7 @@ impl std::fmt::Display for InitialCondition {
             InitialCondition::RandomCube { .. } => write!(f, "Random Cube"),
             InitialCondition::TwoSpheres { .. } => write!(f, "Two Spheres"),
             InitialCondition::SpiralDisk { .. } => write!(f, "Spiral Disk"),
-            InitialCondition::SolarSystem => write!(f, "Solar System"),
+            InitialCondition::SolarSystem { .. } => write!(f, "Solar System"),
             InitialCondition::SatelliteOrbit { .. } => write!(f, "Satellite Orbit"),
             InitialCondition::EllipticalOrbit { .. } => write!(f, "Elliptical Orbit"),
         }
@@ -117,7 +120,9 @@ impl InitialConditionType {
                 disk_radius: 1.5e7,
                 mass_fixed: 1e20,
             },
-            InitialConditionType::SolarSystem => InitialCondition::SolarSystem,
+            InitialConditionType::SolarSystem => InitialCondition::SolarSystem {
+                start_time: Instant::from_datetime(2000, 1, 1, 12, 0, 0.0).unwrap(),
+            },
             InitialConditionType::SatelliteOrbit => InitialCondition::SatelliteOrbit {
                 earth_mass: 5.972e24,
             },
@@ -139,7 +144,7 @@ impl InitialCondition {
             InitialCondition::RandomCube { scale, .. } => *scale,
             InitialCondition::TwoSpheres { scale, .. } => *scale,
             InitialCondition::SpiralDisk { scale, .. } => *scale,
-            InitialCondition::SolarSystem => 1.5e11,
+            InitialCondition::SolarSystem { .. } => 1.5e11,
             InitialCondition::SatelliteOrbit { .. } => 12_756e3 * 0.5,
             InitialCondition::EllipticalOrbit { scale, .. } => *scale,
         }
@@ -305,7 +310,7 @@ impl InitialCondition {
                     .collect();
                 SimulationNormal { particles }
             }
-            InitialCondition::SolarSystem => {
+            InitialCondition::SolarSystem { start_time: _ } => {
                 let scale = 1.5e11;
                 let correct = Correct::new(scale);
                 let particles = vec![
