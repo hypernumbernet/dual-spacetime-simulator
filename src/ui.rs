@@ -127,10 +127,14 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 ui.separator();
                 slider_perticle_count(ui, &mut uis);
                 ui.separator();
-                button_reset(ui, &mut uis);
+                if !uis.is_reset_requested {
+                    button_reset(ui, &mut uis);
+                } else {
+                    label_normal(ui, "Resetting...");
+                }
             });
     }
-    if uis.is_resetting {
+    if uis.is_resetting && uis.is_reset_requested {
         uis.is_resetting = false;
         uis.initial_condition = match uis.initial_condition_type {
             InitialConditionType::RandomSphere => InitialCondition::RandomSphere {
