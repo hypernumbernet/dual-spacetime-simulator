@@ -2,8 +2,21 @@ use crate::simulation::{Particle, SimulationNormal};
 use glam::DVec3;
 use rand::Rng;
 use rand_distr::Distribution;
-use satkit::Instant;
+use satkit::{Instant, SolarSystem, jplephem, utils};
 use std::f64::consts::*;
+
+pub const MASS_SUN: f64 = 1.988475e30;
+pub const MASS_EARTH: f64 = 5.97217e24;
+//pub const MASS_MOON: f64 = 7.3458e22;
+pub const MASS_MERCURY: f64 = 3.3011e23;
+pub const MASS_VENUS: f64 = 4.8673e24;
+pub const MASS_MARS: f64 = 6.4171e23;
+pub const MASS_JUPITER: f64 = 1.898125e27;
+pub const MASS_SATURN: f64 = 5.68317e26;
+pub const MASS_URANUS: f64 = 8.68099e25;
+pub const MASS_NEPTUNE: f64 = 1.024092e26;
+pub const MASS_PLUTO: f64 = 1.3025e22;
+pub const SOLAR_SYSTEM_SCALE: f64 = 2.50e12;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum InitialCondition {
@@ -33,7 +46,10 @@ pub enum InitialCondition {
         mass_fixed: f64,
     },
     SolarSystem {
-        start_time: Instant,
+        start_year: i32,
+        start_month: i32,
+        start_day: i32,
+        start_hour: i32,
     },
     SatelliteOrbit {
         earth_mass: f64,
@@ -121,7 +137,10 @@ impl InitialConditionType {
                 mass_fixed: 1e20,
             },
             InitialConditionType::SolarSystem => InitialCondition::SolarSystem {
-                start_time: Instant::from_datetime(2000, 1, 1, 12, 0, 0.0).unwrap(),
+                start_year: 2000,
+                start_month: 1,
+                start_day: 1,
+                start_hour: 12,
             },
             InitialConditionType::SatelliteOrbit => InitialCondition::SatelliteOrbit {
                 earth_mass: 5.972e24,
@@ -137,6 +156,86 @@ impl InitialConditionType {
     }
 }
 
+fn get_solar_system_fallback_particles(correct: &Correct) -> Vec<Particle> {
+    vec![
+        // Sun
+        Particle {
+            position: DVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            velocity: DVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            mass: MASS_SUN * correct.kg,
+            color: [1.0, 1.0, 0.0, 1.0], // Yellow
+        },
+        // Earth
+        Particle {
+            position: DVec3 {
+                x: 1.496e11 * correct.m,
+                y: 0.0,
+                z: 0.0,
+            },
+            velocity: DVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 29780.0 * correct.m,
+            },
+            mass: MASS_EARTH * correct.kg,
+            color: [0.2, 0.5, 1.0, 1.0], // Blue
+        },
+        // Mars
+        Particle {
+            position: DVec3 {
+                x: 2.279e11 * correct.m,
+                y: 0.0,
+                z: 0.0,
+            },
+            velocity: DVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 24070.0 * correct.m,
+            },
+            mass: MASS_MARS * correct.kg,
+            color: [1.0, 0.3, 0.2, 1.0], // Reddish color
+        },
+        // Venus
+        Particle {
+            position: DVec3 {
+                x: 1.082e11 * correct.m,
+                y: 0.0,
+                z: 0.0,
+            },
+            velocity: DVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 35020.0 * correct.m,
+            },
+            mass: MASS_VENUS * correct.kg,
+            color: [1.0, 0.8, 0.2, 1.0], // Yellowish color
+        },
+        // Mercury
+        Particle {
+            position: DVec3 {
+                x: 5.791e10 * correct.m,
+                y: 0.0,
+                z: 0.0,
+            },
+            velocity: DVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 47360.0 * correct.m,
+            },
+            mass: MASS_MERCURY * correct.kg,
+            color: [0.5, 0.5, 0.5, 1.0], // Grayish color
+        },
+    ]
+}
+
 impl InitialCondition {
     pub fn get_scale(&self) -> f64 {
         match self {
@@ -144,7 +243,7 @@ impl InitialCondition {
             InitialCondition::RandomCube { scale, .. } => *scale,
             InitialCondition::TwoSpheres { scale, .. } => *scale,
             InitialCondition::SpiralDisk { scale, .. } => *scale,
-            InitialCondition::SolarSystem { .. } => 1.5e11,
+            InitialCondition::SolarSystem { .. } => SOLAR_SYSTEM_SCALE,
             InitialCondition::SatelliteOrbit { .. } => 12_756e3 * 0.5,
             InitialCondition::EllipticalOrbit { scale, .. } => *scale,
         }
@@ -310,86 +409,92 @@ impl InitialCondition {
                     .collect();
                 SimulationNormal { particles }
             }
-            InitialCondition::SolarSystem { start_time: _ } => {
-                let scale = 1.5e11;
+            InitialCondition::SolarSystem {
+                start_year,
+                start_month,
+                start_day,
+                start_hour,
+            } => {
+                let scale = SOLAR_SYSTEM_SCALE;
                 let correct = Correct::new(scale);
-                let particles = vec![
-                    // Sun
-                    Particle {
-                        position: DVec3 {
-                            x: 0.0,
-                            y: 0.0,
-                            z: 0.0,
-                        },
-                        velocity: DVec3 {
-                            x: 0.0,
-                            y: 0.0,
-                            z: 0.0,
-                        },
-                        mass: 1.989e30 * correct.kg,
-                        color: [1.0, 1.0, 0.0, 1.0], // Yellow
-                    },
-                    // Earth
-                    Particle {
-                        position: DVec3 {
-                            x: 1.496e11 * correct.m,
-                            y: 0.0,
-                            z: 0.0,
-                        },
-                        velocity: DVec3 {
-                            x: 0.0,
-                            y: 0.0,
-                            z: 29780.0 * correct.m,
-                        },
-                        mass: 5.972e24 * correct.kg,
-                        color: [0.2, 0.5, 1.0, 1.0], // Blue
-                    },
-                    // Mars
-                    Particle {
-                        position: DVec3 {
-                            x: 2.279e11 * correct.m,
-                            y: 0.0,
-                            z: 0.0,
-                        },
-                        velocity: DVec3 {
-                            x: 0.0,
-                            y: 0.0,
-                            z: 24070.0 * correct.m,
-                        },
-                        mass: 6.39e23 * correct.kg,
-                        color: [1.0, 0.3, 0.2, 1.0], // Reddish color
-                    },
-                    // Venus
-                    Particle {
-                        position: DVec3 {
-                            x: 1.082e11 * correct.m,
-                            y: 0.0,
-                            z: 0.0,
-                        },
-                        velocity: DVec3 {
-                            x: 0.0,
-                            y: 0.0,
-                            z: 35020.0 * correct.m,
-                        },
-                        mass: 4.867e24 * correct.kg,
-                        color: [1.0, 0.8, 0.2, 1.0], // Yellowish color
-                    },
-                    // Mercury
-                    Particle {
-                        position: DVec3 {
-                            x: 5.791e10 * correct.m,
-                            y: 0.0,
-                            z: 0.0,
-                        },
-                        velocity: DVec3 {
-                            x: 0.0,
-                            y: 0.0,
-                            z: 47360.0 * correct.m,
-                        },
-                        mass: 3.285e23 * correct.kg,
-                        color: [0.5, 0.5, 0.5, 1.0], // Grayish color
-                    },
+                match utils::update_datafiles(None, false) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        let particles = get_solar_system_fallback_particles(&correct);
+                        return SimulationNormal { particles };
+                    }
+                }
+                let time = Instant::from_datetime(
+                    *start_year,
+                    *start_month,
+                    *start_day,
+                    *start_hour,
+                    0,
+                    0.0,
+                )
+                .unwrap_or_else(|_| Instant::from_datetime(2000, 1, 1, 12, 0, 0.0).unwrap());
+                let mut particles: Vec<Particle> = vec![];
+                let bodies = vec![
+                    SolarSystem::Mercury,
+                    SolarSystem::Venus,
+                    SolarSystem::EMB,
+                    SolarSystem::Mars,
+                    SolarSystem::Jupiter,
+                    SolarSystem::Saturn,
+                    SolarSystem::Uranus,
+                    SolarSystem::Neptune,
+                    SolarSystem::Pluto,
+                    SolarSystem::Sun,
                 ];
+                for body in bodies {
+                    match jplephem::barycentric_state(body, &time) {
+                        Ok((position, velocity)) => {
+                            let pos_dvec3 = DVec3 {
+                                x: position.x,
+                                y: position.y,
+                                z: position.z,
+                            };
+                            let vel_dvec3 = DVec3 {
+                                x: velocity.x,
+                                y: velocity.y,
+                                z: velocity.z,
+                            };
+                            particles.push(Particle {
+                                position: pos_dvec3 * correct.m,
+                                velocity: vel_dvec3 * correct.m,
+                                mass: match body {
+                                    SolarSystem::Mercury => MASS_MERCURY * correct.kg,
+                                    SolarSystem::Venus => MASS_VENUS * correct.kg,
+                                    SolarSystem::EMB => MASS_EARTH * correct.kg,
+                                    SolarSystem::Mars => MASS_MARS * correct.kg,
+                                    SolarSystem::Jupiter => MASS_JUPITER * correct.kg,
+                                    SolarSystem::Saturn => MASS_SATURN * correct.kg,
+                                    SolarSystem::Uranus => MASS_URANUS * correct.kg,
+                                    SolarSystem::Neptune => MASS_NEPTUNE * correct.kg,
+                                    SolarSystem::Pluto => MASS_PLUTO * correct.kg,
+                                    SolarSystem::Sun => MASS_SUN * correct.kg,
+                                    _ => 1.0 * correct.kg,
+                                },
+                                color: match body {
+                                    SolarSystem::Mercury => [0.5, 0.5, 0.5, 1.0], // Grayish
+                                    SolarSystem::Venus => [1.0, 0.8, 0.2, 1.0],   // Yellowish
+                                    SolarSystem::EMB => [0.2, 0.5, 1.0, 1.0],     // Blueish
+                                    SolarSystem::Mars => [1.0, 0.3, 0.2, 1.0],    // Reddish
+                                    SolarSystem::Jupiter => [1.0, 0.9, 0.6, 1.0], // Light Brown
+                                    SolarSystem::Saturn => [1.0, 1.0, 0.6, 1.0],  // Pale Yellow
+                                    SolarSystem::Uranus => [0.5, 1.0, 1.0, 1.0],  // Cyanish
+                                    SolarSystem::Neptune => [0.2, 0.4, 1.0, 1.0], // Blueish
+                                    SolarSystem::Pluto => [0.8, 0.7, 0.6, 1.0],   // Light Brownish
+                                    SolarSystem::Sun => [1.0, 1.0, 0.0, 1.0],     // Yellow
+                                    _ => [1.0, 1.0, 1.0, 1.0],
+                                },
+                            });
+                        }
+                        Err(e) => {
+                            eprintln!("Error for {:?}: {}", body, e);
+                        }
+                    }
+                }
                 SimulationNormal { particles }
             }
             InitialCondition::SatelliteOrbit { earth_mass } => {

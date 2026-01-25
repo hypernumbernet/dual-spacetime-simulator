@@ -3,7 +3,6 @@ use crate::simulation::AU;
 use crate::ui_state::*;
 use crate::ui_styles::*;
 use egui::{Button, ComboBox, Slider, vec2};
-use satkit::Instant;
 use std::sync::{Arc, RwLock};
 
 fn format_simulation_time(simulation_time: f64) -> String {
@@ -119,7 +118,9 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     InitialConditionType::SpiralDisk => {
                         condition_spiral_disk(ui, &mut uis);
                     }
-                    InitialConditionType::SolarSystem => {}
+                    InitialConditionType::SolarSystem => {
+                        condition_solar_system(ui, &mut uis);
+                    }
                     InitialConditionType::SatelliteOrbit => {}
                     InitialConditionType::EllipticalOrbit => {}
                 }
@@ -159,7 +160,10 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 mass_fixed: uis.spiral_disk.mass_fixed,
             },
             InitialConditionType::SolarSystem => InitialCondition::SolarSystem {
-                start_time: Instant::from_datetime(2000, 1, 1, 12, 0, 0.0).unwrap(),
+                start_year: uis.solar_system.start_year,
+                start_month: uis.solar_system.start_month,
+                start_day: uis.solar_system.start_day,
+                start_hour: uis.solar_system.start_hour,
             },
             InitialConditionType::SatelliteOrbit => InitialCondition::default(),
             InitialConditionType::EllipticalOrbit => InitialCondition::default(),
@@ -313,6 +317,13 @@ fn condition_spiral_disk(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.spiral_disk.scale, 1e7, "Scale (m)");
     dragvalue_normal(ui, &mut uis.spiral_disk.disk_radius, 1e7, "Disk Radius (m)");
     dragvalue_normal(ui, &mut uis.spiral_disk.mass_fixed, 1e20, "Mass Fixed (kg)");
+}
+
+fn condition_solar_system(ui: &mut egui::Ui, uis: &mut UiState) {
+    dragvalue_normal(ui, &mut uis.solar_system.start_year, 1, "Year");
+    dragvalue_normal(ui, &mut uis.solar_system.start_month, 1, "Month");
+    dragvalue_normal(ui, &mut uis.solar_system.start_day, 1, "Day");
+    dragvalue_normal(ui, &mut uis.solar_system.start_hour, 1, "Hour");
 }
 
 fn slider_perticle_count(ui: &mut egui::Ui, uis: &mut UiState) {

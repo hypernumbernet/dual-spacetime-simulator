@@ -1,6 +1,5 @@
 use crate::initial_condition::{InitialCondition, InitialConditionType};
 use glam::DVec3;
-use satkit::Instant;
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 
@@ -47,6 +46,7 @@ pub struct UiState {
     pub random_cube: RandomCubeParameters,
     pub two_spheres: TwoSpheresParameters,
     pub spiral_disk: SpiralDiskParameters,
+    pub solar_system: SolarSystemParameters,
 }
 
 impl Default for UiState {
@@ -76,6 +76,7 @@ impl Default for UiState {
             random_cube: RandomCubeParameters::default(),
             two_spheres: TwoSpheresParameters::default(),
             spiral_disk: SpiralDiskParameters::default(),
+            solar_system: SolarSystemParameters::default(),
         }
     }
 }
@@ -196,14 +197,27 @@ impl Default for SpiralDiskParameters {
 }
 
 pub struct SolarSystemParameters {
-    pub start_time: Instant,
+    pub start_year: i32,
+    pub start_month: i32,
+    pub start_day: i32,
+    pub start_hour: i32,
 }
+
 impl Default for SolarSystemParameters {
     fn default() -> Self {
-        if let InitialCondition::SolarSystem { start_time } =
-            InitialConditionType::SolarSystem.to_initial_condition()
+        if let InitialCondition::SolarSystem {
+            start_year,
+            start_month,
+            start_day,
+            start_hour,
+        } = InitialConditionType::SolarSystem.to_initial_condition()
         {
-            Self { start_time }
+            Self {
+                start_year,
+                start_month,
+                start_day,
+                start_hour,
+            }
         } else {
             panic!();
         }
