@@ -121,7 +121,9 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     InitialConditionType::SolarSystem => {
                         condition_solar_system(ui, &mut uis);
                     }
-                    InitialConditionType::SatelliteOrbit => {}
+                    InitialConditionType::SatelliteOrbit => {
+                        condition_satellite_orbit(ui, &mut uis);
+                    }
                     InitialConditionType::EllipticalOrbit => {}
                 }
                 ui.separator();
@@ -169,7 +171,13 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 start_day: uis.solar_system.start_day,
                 start_hour: uis.solar_system.start_hour,
             },
-            InitialConditionType::SatelliteOrbit => InitialCondition::default(),
+            InitialConditionType::SatelliteOrbit => InitialCondition::SatelliteOrbit {
+                orbit_altitude_min: uis.satellite_orbit.orbit_altitude_min,
+                orbit_altitude_max: uis.satellite_orbit.orbit_altitude_max,
+                asteroid_mass: uis.satellite_orbit.asteroid_mass,
+                asteroid_distance: uis.satellite_orbit.asteroid_distance,
+                asteroid_speed: uis.satellite_orbit.asteroid_speed,
+            },
             InitialConditionType::EllipticalOrbit => InitialCondition::default(),
         };
         uis.scale = uis.initial_condition.get_scale();
@@ -328,6 +336,40 @@ fn condition_solar_system(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.solar_system.start_month, 1, "Month");
     dragvalue_normal(ui, &mut uis.solar_system.start_day, 1, "Day");
     dragvalue_normal(ui, &mut uis.solar_system.start_hour, 1, "Hour");
+}
+
+fn condition_satellite_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
+    dragvalue_normal(
+        ui,
+        &mut uis.satellite_orbit.orbit_altitude_min,
+        1e3,
+        "Orbit Min (m)",
+    );
+    dragvalue_normal(
+        ui,
+        &mut uis.satellite_orbit.orbit_altitude_max,
+        1e3,
+        "Orbit Max (m)",
+    );
+    label_normal(ui, "Asteroid");
+    dragvalue_normal(
+        ui,
+        &mut uis.satellite_orbit.asteroid_mass,
+        1e10,
+        "Mass (kg)",
+    );
+    dragvalue_normal(
+        ui,
+        &mut uis.satellite_orbit.asteroid_distance,
+        1e3,
+        "Distance (m)",
+    );
+    dragvalue_normal(
+        ui,
+        &mut uis.satellite_orbit.asteroid_speed,
+        1e3,
+        "Speed (m/s)",
+    );
 }
 
 fn slider_perticle_count(ui: &mut egui::Ui, uis: &mut UiState) {

@@ -17,6 +17,8 @@ pub const MASS_URANUS: f64 = 8.68099e25;
 pub const MASS_NEPTUNE: f64 = 1.024092e26;
 pub const MASS_PLUTO: f64 = 1.3025e22;
 pub const SOLAR_SYSTEM_SCALE: f64 = 2.50e12;
+pub const SATELLITE_ORBIT_SCALE: f64 = 12_756e3 * 0.5;
+pub const EARTH_RADIUS: f64 = 6.371e6;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum InitialCondition {
@@ -52,7 +54,11 @@ pub enum InitialCondition {
         start_hour: i32,
     },
     SatelliteOrbit {
-        earth_mass: f64,
+        orbit_altitude_min: f64,
+        orbit_altitude_max: f64,
+        asteroid_mass: f64,
+        asteroid_distance: f64,
+        asteroid_speed: f64,
     },
     EllipticalOrbit {
         scale: f64,
@@ -143,7 +149,11 @@ impl InitialConditionType {
                 start_hour: 12,
             },
             InitialConditionType::SatelliteOrbit => InitialCondition::SatelliteOrbit {
-                earth_mass: 5.972e24,
+                orbit_altitude_min: 300e3,
+                orbit_altitude_max: 800e3,
+                asteroid_mass: 1e24,
+                asteroid_distance: 2e7,
+                asteroid_speed: 3e3,
             },
             InitialConditionType::EllipticalOrbit => InitialCondition::EllipticalOrbit {
                 scale: 1.5e11,
@@ -244,7 +254,7 @@ impl InitialCondition {
             InitialCondition::TwoSpheres { scale, .. } => *scale,
             InitialCondition::SpiralDisk { scale, .. } => *scale,
             InitialCondition::SolarSystem { .. } => SOLAR_SYSTEM_SCALE,
-            InitialCondition::SatelliteOrbit { .. } => 12_756e3 * 0.5,
+            InitialCondition::SatelliteOrbit { .. } => SATELLITE_ORBIT_SCALE,
             InitialCondition::EllipticalOrbit { scale, .. } => *scale,
         }
     }
@@ -497,10 +507,15 @@ impl InitialCondition {
                 }
                 SimulationNormal { particles }
             }
-            InitialCondition::SatelliteOrbit { earth_mass } => {
-                let scale = 12_756e3 * 0.5;
+            InitialCondition::SatelliteOrbit {
+                orbit_altitude_min,
+                orbit_altitude_max,
+                asteroid_mass,
+                asteroid_distance,
+                asteroid_speed,
+            } => {
+                let scale = SATELLITE_ORBIT_SCALE;
                 let correct = Correct::new(scale);
-                let mass = earth_mass * correct.kg;
                 let mut particles = vec![
                     // Earth
                     Particle {
@@ -514,26 +529,28 @@ impl InitialCondition {
                             y: 0.0,
                             z: 0.0,
                         },
-                        mass,
+                        mass: MASS_EARTH * correct.kg,
                         color: [0.2, 0.5, 1.0, 1.0], // Blue
                     },
                     Particle {
                         position: DVec3 {
-                            x: 5.0,
+                            x: *asteroid_distance * correct.m,
                             y: 0.0,
                             z: 0.0,
                         },
                         velocity: DVec3 {
                             x: 0.0,
                             y: 0.0,
-                            z: 0.0001,
+                            z: *asteroid_speed * correct.m,
                         },
-                        mass,
+                        mass: *asteroid_mass * correct.kg,
                         color: [1.0, 0.0, 0.3, 1.0], // Red
                     },
                 ];
-                for _ in 0..particle_count {
-                    let orbit_radius = (scale + rng.random_range(100e3..500e3)) * correct.m;
+                for _ in 1..particle_count {
+                    let orbit_radius = (EARTH_RADIUS
+                        + rng.random_range(*orbit_altitude_min..*orbit_altitude_max))
+                        * correct.m;
                     let cos_theta = rng.random::<f64>() * 2.0 - 1.0;
                     let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
                     let phi = rng.random::<f64>() * TAU;
@@ -542,13 +559,17 @@ impl InitialCondition {
                         y: orbit_radius * sin_theta * phi.sin(),
                         z: orbit_radius * cos_theta,
                     };
-                    let vel_speed = (crate::simulation::G * mass / orbit_radius).sqrt();
+                    let vel_speed =
+                        (crate::simulation::G * MASS_EARTH * correct.kg / orbit_radius).sqrt();
                     let vel = Self::random_perpendicular_unit_vector(pos, &mut rng);
                     let vel = vel * vel_speed;
+                    let mass = rng.random_range(500.0 * correct.kg..1000.0 * correct.kg);
+                    let position = pos;
+                    let velocity = vel;
                     particles.push(Particle {
-                        position: pos,
-                        velocity: vel,
-                        mass: 1000.0 * correct.kg,
+                        position,
+                        velocity,
+                        mass,
                         color: [1.0, 1.0, 1.0, 1.0],
                     });
                 }

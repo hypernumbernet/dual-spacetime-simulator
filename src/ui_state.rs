@@ -47,6 +47,7 @@ pub struct UiState {
     pub two_spheres: TwoSpheresParameters,
     pub spiral_disk: SpiralDiskParameters,
     pub solar_system: SolarSystemParameters,
+    pub satellite_orbit: SatelliteOrbitParameters,
 }
 
 impl Default for UiState {
@@ -77,6 +78,7 @@ impl Default for UiState {
             two_spheres: TwoSpheresParameters::default(),
             spiral_disk: SpiralDiskParameters::default(),
             solar_system: SolarSystemParameters::default(),
+            satellite_orbit: SatelliteOrbitParameters::default(),
         }
     }
 }
@@ -217,6 +219,37 @@ impl Default for SolarSystemParameters {
                 start_month,
                 start_day,
                 start_hour,
+            }
+        } else {
+            panic!();
+        }
+    }
+}
+
+pub struct SatelliteOrbitParameters {
+    pub orbit_altitude_min: f64,
+    pub orbit_altitude_max: f64,
+    pub asteroid_mass: f64,
+    pub asteroid_distance: f64,
+    pub asteroid_speed: f64,
+}
+
+impl Default for SatelliteOrbitParameters {
+    fn default() -> Self {
+        if let InitialCondition::SatelliteOrbit {
+            orbit_altitude_min,
+            orbit_altitude_max,
+            asteroid_mass,
+            asteroid_distance,
+            asteroid_speed,
+        } = InitialConditionType::SatelliteOrbit.to_initial_condition()
+        {
+            Self {
+                orbit_altitude_min,
+                orbit_altitude_max,
+                asteroid_mass,
+                asteroid_distance,
+                asteroid_speed,
             }
         } else {
             panic!();
