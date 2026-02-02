@@ -298,9 +298,7 @@ fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
 
 fn condition_two_spheres(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.two_spheres.scale, 1e9, "Scale (m)");
-    ui.horizontal(|ui| {
-        label_normal(ui, "Sphere 1 Center");
-    });
+    label_normal(ui, "Sphere 1 Center");
     dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.x, 1.0, "X");
     dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.y, 1.0, "Y");
     dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.z, 1.0, "Z");
@@ -310,9 +308,7 @@ fn condition_two_spheres(ui: &mut egui::Ui, uis: &mut UiState) {
         1e8,
         "Sphere 1 Radius",
     );
-    ui.horizontal(|ui| {
-        label_normal(ui, "Sphere 2 Center");
-    });
+    label_normal(ui, "Sphere 2 Center");
     dragvalue_normal(ui, &mut uis.two_spheres.sphere2_center.x, 1.0, "X");
     dragvalue_normal(ui, &mut uis.two_spheres.sphere2_center.y, 1.0, "Y");
     dragvalue_normal(ui, &mut uis.two_spheres.sphere2_center.z, 1.0, "Z");
