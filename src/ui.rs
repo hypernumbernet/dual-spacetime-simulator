@@ -124,7 +124,9 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                     InitialConditionType::SatelliteOrbit => {
                         condition_satellite_orbit(ui, &mut uis);
                     }
-                    InitialConditionType::EllipticalOrbit => {}
+                    InitialConditionType::EllipticalOrbit => {
+                        condition_elliptical_orbit(ui, &mut uis);
+                    }
                 }
                 ui.separator();
                 slider_perticle_count(ui, &mut uis);
@@ -178,11 +180,21 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
                 asteroid_distance: uis.satellite_orbit.asteroid_distance,
                 asteroid_speed: uis.satellite_orbit.asteroid_speed,
             },
-            InitialConditionType::EllipticalOrbit => InitialCondition::default(),
+            InitialConditionType::EllipticalOrbit => InitialCondition::EllipticalOrbit {
+                scale: uis.elliptical_orbit.scale,
+                central_mass: uis.elliptical_orbit.central_mass,
+                planetary_mass: uis.elliptical_orbit.planetary_mass,
+                planetary_speed: uis.elliptical_orbit.planetary_speed,
+                planetary_distance: uis.elliptical_orbit.planetary_distance,
+            },
         };
         uis.scale = uis.initial_condition.get_scale();
         if uis.initial_condition_type == InitialConditionType::SolarSystem {
-            uis.time_per_frame = 10000.0;
+            uis.time_per_frame = 10_000.0;
+            uis.max_fps = 1000;
+            uis.skip = 10;
+        } else if uis.initial_condition_type == InitialConditionType::EllipticalOrbit {
+            uis.time_per_frame = 100_000.0;
             uis.max_fps = 1000;
             uis.skip = 10;
         } else {
@@ -365,6 +377,36 @@ fn condition_satellite_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
         &mut uis.satellite_orbit.asteroid_speed,
         1e3,
         "Speed (m/s)",
+    );
+}
+
+fn condition_elliptical_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
+    dragvalue_normal(ui, &mut uis.elliptical_orbit.scale, 1e7, "Scale (m)");
+    label_normal(ui, "Central Body");
+    dragvalue_normal(
+        ui,
+        &mut uis.elliptical_orbit.central_mass,
+        1e20,
+        "Mass (kg)",
+    );
+    label_normal(ui, "Planetary Body");
+    dragvalue_normal(
+        ui,
+        &mut uis.elliptical_orbit.planetary_mass,
+        1e20,
+        "Mass (kg)",
+    );
+    dragvalue_normal(
+        ui,
+        &mut uis.elliptical_orbit.planetary_speed,
+        1e3,
+        "Initial Speed (m/s)",
+    );
+    dragvalue_normal(
+        ui,
+        &mut uis.elliptical_orbit.planetary_distance,
+        1e7,
+        "Initial Distance (m)",
     );
 }
 

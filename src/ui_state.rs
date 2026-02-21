@@ -48,6 +48,7 @@ pub struct UiState {
     pub spiral_disk: SpiralDiskParameters,
     pub solar_system: SolarSystemParameters,
     pub satellite_orbit: SatelliteOrbitParameters,
+    pub elliptical_orbit: EllipticalOrbitParameters,
 }
 
 impl Default for UiState {
@@ -79,6 +80,7 @@ impl Default for UiState {
             spiral_disk: SpiralDiskParameters::default(),
             solar_system: SolarSystemParameters::default(),
             satellite_orbit: SatelliteOrbitParameters::default(),
+            elliptical_orbit: EllipticalOrbitParameters::default(),
         }
     }
 }
@@ -250,6 +252,37 @@ impl Default for SatelliteOrbitParameters {
                 asteroid_mass,
                 asteroid_distance,
                 asteroid_speed,
+            }
+        } else {
+            panic!();
+        }
+    }
+}
+
+pub struct EllipticalOrbitParameters {
+    pub scale: f64,
+    pub central_mass: f64,
+    pub planetary_mass: f64,
+    pub planetary_speed: f64,
+    pub planetary_distance: f64,
+}
+
+impl Default for EllipticalOrbitParameters {
+    fn default() -> Self {
+        if let InitialCondition::EllipticalOrbit {
+            scale,
+            central_mass,
+            planetary_mass,
+            planetary_speed,
+            planetary_distance,
+        } = InitialConditionType::EllipticalOrbit.to_initial_condition()
+        {
+            Self {
+                scale,
+                central_mass,
+                planetary_mass,
+                planetary_speed,
+                planetary_distance,
             }
         } else {
             panic!();
