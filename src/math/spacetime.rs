@@ -8,40 +8,20 @@ pub fn fuzzy_compare(a: f64, b: f64) -> bool {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct Complex {
-    re: f64,
-    im: f64,
-}
-
-impl Complex {
-    pub fn new(re: f64, im: f64) -> Self {
-        Self { re, im }
-    }
-
-    pub fn sqrt(&self) -> Self {
-        // Assuming real positive part as per usage (norm >= 0, im=0).
-        Self {
-            re: self.re.sqrt(),
-            im: 0.0,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Spacetime {
-    w: f64,
-    x: f64,
-    y: f64,
-    z: f64,
+    pub t: f64,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
 }
 
 impl Spacetime {
-    pub fn new(w: f64, x: f64, y: f64, z: f64) -> Self {
-        Self { w, x, y, z }
+    pub fn new(t: f64, x: f64, y: f64, z: f64) -> Self {
+        Self { t, x, y, z }
     }
 
-    pub fn from_w(w: f64) -> Self {
-        Self::new(w, 0.0, 0.0, 0.0)
+    pub fn from_t(t: f64) -> Self {
+        Self::new(t, 0.0, 0.0, 0.0)
     }
 
     pub fn from_vector3(v: DVec3) -> Self {
@@ -58,54 +38,15 @@ impl Spacetime {
         Self::new(a[index], a[index + 1], a[index + 2], a[index + 3])
     }
 
-    pub fn w(&self) -> f64 {
-        self.w
-    }
-
-    pub fn x(&self) -> f64 {
-        self.x
-    }
-
-    pub fn y(&self) -> f64 {
-        self.y
-    }
-
-    pub fn z(&self) -> f64 {
-        self.z
-    }
-
-    pub fn set_w(&mut self, w: f64) {
-        self.w = w;
-    }
-
-    pub fn set_x(&mut self, x: f64) {
-        self.x = x;
-    }
-
-    pub fn set_y(&mut self, y: f64) {
-        self.y = y;
-    }
-
-    pub fn set_z(&mut self, z: f64) {
-        self.z = z;
-    }
-
-    pub fn set(&mut self, st: Spacetime) {
-        self.w = st.w;
-        self.x = st.x;
-        self.y = st.y;
-        self.z = st.z;
-    }
-
-    pub fn set_values(&mut self, w: f64, x: f64, y: f64, z: f64) {
-        self.w = w;
+    pub fn set_values(&mut self, t: f64, x: f64, y: f64, z: f64) {
+        self.t = t;
         self.x = x;
         self.y = y;
         self.z = z;
     }
 
-    pub fn set_w_only(&mut self, w: f64) {
-        self.w = w;
+    pub fn set_t_only(&mut self, t: f64) {
+        self.t = t;
         self.x = 0.0;
         self.y = 0.0;
         self.z = 0.0;
@@ -113,7 +54,7 @@ impl Spacetime {
 
     pub fn set_from_array(&mut self, a: &[f64]) {
         assert!(a.len() >= 4);
-        self.w = a[0];
+        self.t = a[0];
         self.x = a[1];
         self.y = a[2];
         self.z = a[3];
@@ -121,7 +62,7 @@ impl Spacetime {
 
     pub fn set_from_array_index(&mut self, a: &[f64], index: usize) {
         assert!(a.len() >= index + 4);
-        self.w = a[index];
+        self.t = a[index];
         self.x = a[index + 1];
         self.y = a[index + 2];
         self.z = a[index + 3];
@@ -129,7 +70,7 @@ impl Spacetime {
 
     pub const fn zero() -> Self {
         Self {
-            w: 0.0,
+            t: 0.0,
             x: 0.0,
             y: 0.0,
             z: 0.0,
@@ -138,7 +79,7 @@ impl Spacetime {
 
     pub const fn identity() -> Self {
         Self {
-            w: 1.0,
+            t: 1.0,
             x: 0.0,
             y: 0.0,
             z: 0.0,
@@ -147,7 +88,7 @@ impl Spacetime {
 
     pub fn get(&self, i: usize) -> f64 {
         match i {
-            0 => self.w,
+            0 => self.t,
             1 => self.x,
             2 => self.y,
             3 => self.z,
@@ -157,7 +98,7 @@ impl Spacetime {
 
     pub fn get_mut(&mut self, i: usize) -> &mut f64 {
         match i {
-            0 => &mut self.w,
+            0 => &mut self.t,
             1 => &mut self.x,
             2 => &mut self.y,
             3 => &mut self.z,
@@ -165,23 +106,25 @@ impl Spacetime {
         }
     }
 
+    /// signature (-+++)
     pub fn norm(&self) -> f64 {
-        self.w * self.w - self.x * self.x - self.y * self.y - self.z * self.z
+        self.x * self.x + self.y * self.y + self.z * self.z - self.t * self.t
     }
 
     pub fn conjugated(&self) -> Self {
-        Self::new(self.w, -self.x, -self.y, -self.z)
+        Self::new(-self.t, self.x, self.y, self.z)
     }
 
-    pub fn abs(&self) -> Complex {
-        Complex::new(self.norm(), 0.0).sqrt()
+    pub fn abs(&self) -> f64 {
+        self.norm().abs().sqrt()
     }
 
     pub fn arg(&self) -> f64 {
         let n = (self.x * self.x + self.y * self.y + self.z * self.z).sqrt();
-        (n / self.w).atanh()
+        (n / self.t).atanh()
     }
 
+    /// Exponential map of a bivector.
     pub fn exp(x: f64, y: f64, z: f64) -> Self {
         let n = (x * x + y * y + z * z).sqrt();
         if n == 0.0 {
@@ -191,7 +134,7 @@ impl Spacetime {
         Self::new(n.cosh(), x * a, y * a, z * a)
     }
 
-    pub fn exp_a(x: f64, y: f64, z: f64, a: f64) -> Self {
+    pub fn exp_versor(x: f64, y: f64, z: f64, a: f64) -> Self {
         let s = a.sinh();
         Self::new(a.cosh(), x * s, y * s, z * s)
     }
@@ -201,7 +144,8 @@ impl Spacetime {
         Self::new(a.cosh(), v.x * s, v.y * s, v.z * s)
     }
 
-    pub fn versor_angle(v: DVec3, speed_of_light_inv: f64) -> DVec3 {
+    /// Converting Velocity ​​to Rapidity Vector.
+    pub fn rapidity_vector(v: DVec3, speed_of_light_inv: f64) -> DVec3 {
         let speed = v.length_squared();
         if speed == 0.0 {
             return DVec3::ZERO;
@@ -211,7 +155,23 @@ impl Spacetime {
         DVec3::new(b * v.x, b * v.y, b * v.z)
     }
 
-    pub fn versor_angle_p(p: DVec3, m: f64, speed_of_light: f64) -> DVec3 {
+    /// Converting Momentum to Rapidity Vector.
+    ///
+    /// p = mvγ
+    /// {γ : Lorentz factor : 1 / sqrt(1 - v^2 / c^2)}
+    ///
+    /// p = mv / sqrt(1 - v^2 / c^2)
+    /// p^2 (1 -  v^2 / c^2) = m^2 v^2
+    /// m^2 v^2 + p^2 v^2 / c^2 = p^2
+    /// (m^2 + p^2 / c^2) v^2 = p^2
+    ///
+    /// v = p / sqrt(m^2 + p^2 / c^2 )
+    /// v -> c (p -> ∞, m -> ∞)
+    /// v = c (m = 0)
+    ///
+    /// v / c = p / sqrt(m^2 c^2 + p^2) = tanh(a) = pc / E
+    /// tanh(a) < 1 (p -> ∞)
+    pub fn rapidity_vector_from_momentum(p: DVec3, m: f64, speed_of_light: f64) -> DVec3 {
         let pn = p.normalize_or_zero();
         if pn == DVec3::ZERO {
             return DVec3::ZERO;
@@ -234,16 +194,16 @@ impl Spacetime {
     }
 
     pub fn lorentz_transformation(&mut self, g: Spacetime) {
-        let p = g.w;
+        let p = g.t;
         let q = g.x;
         let r = g.y;
         let s = g.z;
-        let w = self.w;
+        let w = self.t;
         let x = self.x;
         let y = self.y;
         let z = self.z;
 
-        self.w = (p * p + q * q + r * r + s * s) * w + 2.0 * p * (-q * x - r * y - s * z);
+        self.t = (p * p + q * q + r * r + s * s) * w + 2.0 * p * (-q * x - r * y - s * z);
         self.x = (p * p + q * q - r * r - s * s) * x + 2.0 * q * (-p * w + r * y + s * z);
         self.y = (p * p - q * q + r * r - s * s) * y + 2.0 * r * (-p * w + q * x + s * z);
         self.z = (p * p - q * q - r * r + s * s) * z + 2.0 * s * (-p * w + q * x + r * y);
@@ -271,7 +231,7 @@ impl Spacetime {
     }
 
     pub fn fuzzy_compare(&self, a: Spacetime) -> bool {
-        fuzzy_compare(self.w, a.w)
+        fuzzy_compare(self.t, a.t)
             && fuzzy_compare(self.x, a.x)
             && fuzzy_compare(self.y, a.y)
             && fuzzy_compare(self.z, a.z)
@@ -280,7 +240,7 @@ impl Spacetime {
 
 impl std::fmt::Display for Spacetime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}, {}, {}, {}", self.w, self.x, self.y, self.z)
+        write!(f, "{}, {}, {}, {}", self.t, self.x, self.y, self.z)
     }
 }
 
@@ -296,15 +256,15 @@ mod tests {
 
         let identity = Spacetime::identity();
         assert_eq!(identity, Spacetime::new(1.0, 0.0, 0.0, 0.0));
-        assert_eq!(identity.norm(), 1.0);
+        assert_eq!(identity.norm(), -1.0);
     }
 
     #[test]
     fn test_conjugated_and_norm() {
         let st = Spacetime::new(1.0, 2.0, 3.0, 4.0);
         let conj = st.conjugated();
-        assert_eq!(conj, Spacetime::new(1.0, -2.0, -3.0, -4.0));
-        assert_eq!(st.norm(), 1.0 - 4.0 - 9.0 - 16.0);
+        assert_eq!(conj, Spacetime::new(-1.0, 2.0, 3.0, 4.0));
+        assert_eq!(st.norm(), -1.0 + 4.0 + 9.0 + 16.0);
     }
 
     #[test]
@@ -323,21 +283,21 @@ mod tests {
         assert_eq!(exp_zero, Spacetime::identity());
 
         let a = 1.0;
-        let exp_a = Spacetime::exp_a(1.0, 0.0, 0.0, a); // Assuming unit vector in x
-        assert!(fuzzy_compare(exp_a.w(), a.cosh()));
-        assert!(fuzzy_compare(exp_a.x(), a.sinh()));
-        assert_eq!(exp_a.y(), 0.0);
-        assert_eq!(exp_a.z(), 0.0);
+        let exp_a = Spacetime::exp_versor(1.0, 0.0, 0.0, a); // Assuming unit vector in x
+        assert!(fuzzy_compare(exp_a.t, a.cosh()));
+        assert!(fuzzy_compare(exp_a.x, a.sinh()));
+        assert_eq!(exp_a.y, 0.0);
+        assert_eq!(exp_a.z, 0.0);
     }
 
     #[test]
     fn test_versor_angle() {
         let v_zero = DVec3::ZERO;
-        assert_eq!(Spacetime::versor_angle(v_zero, 1.0), DVec3::ZERO);
+        assert_eq!(Spacetime::rapidity_vector(v_zero, 1.0), DVec3::ZERO);
 
         let v = DVec3::new(1.0, 0.0, 0.0);
         let c_inv: f64 = 1.0 / 3.0e8; // Example
-        let versor = Spacetime::versor_angle(v, c_inv);
+        let versor = Spacetime::rapidity_vector(v, c_inv);
         let a = (v.length_squared() * c_inv).atanh();
         let b = a / v.length_squared();
         assert!(fuzzy_compare(versor.x, b * v.x));

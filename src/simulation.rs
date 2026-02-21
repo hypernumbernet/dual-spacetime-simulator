@@ -108,34 +108,6 @@ impl SimulationEngine for SimulationSpeedOfLightLimit {
 }
 
 impl SimulationEngine for SimulationLorentzTransformation {
-    // fn update_velocities(&mut self, delta_seconds: f64) {
-    //     let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
-    //     let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
-    //     let ls = self.scale / LIGHT_SPEED;
-    //     let time_g = G * delta_seconds;
-    //     self.particles
-    //         .par_iter_mut()
-    //         .enumerate()
-    //         .for_each(|(i, particle)| {
-    //             let mut acceleration = DVec3::ZERO;
-    //             for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
-    //                 if i == j {
-    //                     continue;
-    //                 }
-    //                 let diff = pos_j - particle.position;
-    //                 let r = diff.length();
-    //                 if r < EPSILON {
-    //                     continue;
-    //                 }
-    //                 let inv_r = 1.0 / r;
-    //                 let accel_magnitude = time_g * mass_j * inv_r * inv_r;
-    //                 let momentum_delta = diff * accel_magnitude;
-    //                 let angle = Spacetime::versor_angle(momentum_delta, ls);
-    //                 acceleration += angle;
-    //             }
-    //             particle.velocity += acceleration;
-    //         });
-    // }
     fn update_velocities(&mut self, delta_seconds: f64) {
         let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
@@ -164,10 +136,10 @@ impl SimulationEngine for SimulationLorentzTransformation {
         let ls = self.scale / LIGHT_SPEED;
         let ct = LIGHT_SPEED * delta_seconds / self.scale;
         self.particles.par_iter_mut().for_each(|particle| {
-            let mut st = Spacetime::from_w(ct);
+            let mut st = Spacetime::from_t(ct);
             st.lorentz_transformation_va(particle.velocity * ls);
-            let tau = ct / st.w();
-            particle.position += DVec3::new(st.x() * tau, st.y() * tau, st.z() * tau);
+            let tau = ct / st.t;
+            particle.position += DVec3::new(st.x * tau, st.y * tau, st.z * tau);
         });
     }
 }
