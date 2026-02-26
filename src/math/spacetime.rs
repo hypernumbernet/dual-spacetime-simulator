@@ -124,16 +124,6 @@ impl Spacetime {
         (n / self.t).atanh()
     }
 
-    /// Exponential map of a bivector.
-    pub fn exp(x: f64, y: f64, z: f64) -> Self {
-        let n = (x * x + y * y + z * z).sqrt();
-        if n == 0.0 {
-            return Self::identity();
-        }
-        let a = n.sinh() / n;
-        Self::new(n.cosh(), x * a, y * a, z * a)
-    }
-
     pub fn exp_versor(x: f64, y: f64, z: f64, a: f64) -> Self {
         let s = a.sinh();
         Self::new(a.cosh(), x * s, y * s, z * s)
@@ -142,45 +132,6 @@ impl Spacetime {
     pub fn exp_a_v(a: f64, v: DVec3) -> Self {
         let s = a.sinh();
         Self::new(a.cosh(), v.x * s, v.y * s, v.z * s)
-    }
-
-    /// Converting Velocity ​​to Rapidity Vector.
-    pub fn rapidity_vector(v: DVec3, speed_of_light_inv: f64) -> DVec3 {
-        let speed = v.length_squared();
-        if speed == 0.0 {
-            return DVec3::ZERO;
-        }
-        let a = (speed * speed_of_light_inv).atanh();
-        let b = a / speed;
-        DVec3::new(b * v.x, b * v.y, b * v.z)
-    }
-
-    /// Converting Momentum to Rapidity Vector.
-    ///
-    /// p = mvγ
-    /// {γ : Lorentz factor : 1 / sqrt(1 - v^2 / c^2)}
-    ///
-    /// p = mv / sqrt(1 - v^2 / c^2)
-    /// p^2 (1 -  v^2 / c^2) = m^2 v^2
-    /// m^2 v^2 + p^2 v^2 / c^2 = p^2
-    /// (m^2 + p^2 / c^2) v^2 = p^2
-    ///
-    /// v = p / sqrt(m^2 + p^2 / c^2 )
-    /// v -> c (p -> ∞, m -> ∞)
-    /// v = c (m = 0)
-    ///
-    /// v / c = p / sqrt(m^2 c^2 + p^2) = tanh(a) = pc / E
-    /// tanh(a) < 1 (p -> ∞)
-    pub fn rapidity_vector_from_momentum(p: DVec3, m: f64, speed_of_light: f64) -> DVec3 {
-        let pn = p.normalize_or_zero();
-        if pn == DVec3::ZERO {
-            return DVec3::ZERO;
-        }
-        let pr = pn.length_squared();
-        let l = pr / (m * m * speed_of_light * speed_of_light + pn).length_squared();
-        let a = l.atanh();
-        let b = a / pr;
-        DVec3::new(b * p.x, b * p.y, b * p.z)
     }
 
     pub fn velocities(versor_angle: DVec3, speed_of_light: f64) -> DVec3 {
@@ -244,8 +195,48 @@ impl std::fmt::Display for Spacetime {
     }
 }
 
+/// Converting Velocity ​​to Rapidity Vector.
+pub fn rapidity_vector(v: DVec3, speed_of_light_inv: f64) -> DVec3 {
+    let speed = v.length_squared();
+    if speed == 0.0 {
+        return DVec3::ZERO;
+    }
+    let a = (speed * speed_of_light_inv).atanh();
+    let b = a / speed;
+    DVec3::new(b * v.x, b * v.y, b * v.z)
+}
+
+/// Converting Momentum to Rapidity Vector.
+///
+/// p = mvγ
+/// {γ : Lorentz factor : 1 / sqrt(1 - v^2 / c^2)}
+///
+/// p = mv / sqrt(1 - v^2 / c^2)
+/// p^2 (1 -  v^2 / c^2) = m^2 v^2
+/// m^2 v^2 + p^2 v^2 / c^2 = p^2
+/// (m^2 + p^2 / c^2) v^2 = p^2
+///
+/// v = p / sqrt(m^2 + p^2 / c^2 )
+/// v -> c (p -> ∞, m -> ∞)
+/// v = c (m = 0)
+///
+/// v / c = p / sqrt(m^2 c^2 + p^2) = tanh(a) = pc / E
+/// tanh(a) < 1 (p -> ∞)
+pub fn rapidity_vector_from_momentum(p: DVec3, m: f64, speed_of_light: f64) -> DVec3 {
+    let pn = p.normalize_or_zero();
+    if pn == DVec3::ZERO {
+        return DVec3::ZERO;
+    }
+    let pr = pn.length_squared();
+    let l = pr / (m * m * speed_of_light * speed_of_light + pn).length_squared();
+    let a = l.atanh();
+    let b = a / pr;
+    DVec3::new(b * p.x, b * p.y, b * p.z)
+}
+
 #[cfg(test)]
 mod tests {
+    use super::rapidity_vector;
     use super::{DVec3, Spacetime, fuzzy_compare};
 
     #[test]
@@ -278,26 +269,13 @@ mod tests {
     }
 
     #[test]
-    fn test_exp() {
-        let exp_zero = Spacetime::exp(0.0, 0.0, 0.0);
-        assert_eq!(exp_zero, Spacetime::identity());
-
-        let a = 1.0;
-        let exp_a = Spacetime::exp_versor(1.0, 0.0, 0.0, a); // Assuming unit vector in x
-        assert!(fuzzy_compare(exp_a.t, a.cosh()));
-        assert!(fuzzy_compare(exp_a.x, a.sinh()));
-        assert_eq!(exp_a.y, 0.0);
-        assert_eq!(exp_a.z, 0.0);
-    }
-
-    #[test]
     fn test_versor_angle() {
         let v_zero = DVec3::ZERO;
-        assert_eq!(Spacetime::rapidity_vector(v_zero, 1.0), DVec3::ZERO);
+        assert_eq!(rapidity_vector(v_zero, 1.0), DVec3::ZERO);
 
         let v = DVec3::new(1.0, 0.0, 0.0);
         let c_inv: f64 = 1.0 / 3.0e8; // Example
-        let versor = Spacetime::rapidity_vector(v, c_inv);
+        let versor = rapidity_vector(v, c_inv);
         let a = (v.length_squared() * c_inv).atanh();
         let b = a / v.length_squared();
         assert!(fuzzy_compare(versor.x, b * v.x));

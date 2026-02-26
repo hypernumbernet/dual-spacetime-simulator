@@ -17,7 +17,7 @@ use crate::initial_condition::InitialCondition;
 use crate::integration::{Gui, GuiConfig};
 use crate::pipeline::ParticleRenderPipeline;
 use crate::simulation::{
-    SimulationEngine, SimulationLorentzTransformation, SimulationNormal,
+    LIGHT_SPEED, Particle, SimulationEngine, SimulationLorentzTransformation, SimulationNormal,
     SimulationSpeedOfLightLimit, SimulationState,
 };
 use crate::ui::draw_ui;
@@ -81,11 +81,15 @@ fn main() -> Result<(), EventLoopError> {
                     SimulationType::SpeedOfLightLimit => {
                         SimulationState::SpeedOfLightLimit(SimulationSpeedOfLightLimit {
                             particles: new_simulation_data.particles,
+                            scale: scale,
                         })
                     }
                     SimulationType::LorentzTransformation => {
                         SimulationState::LorentzTransformation(SimulationLorentzTransformation {
-                            particles: new_simulation_data.particles,
+                            particles: convert_velocity_to_lorentz(
+                                new_simulation_data.particles,
+                                scale,
+                            ),
                             scale: scale,
                         })
                     }
@@ -439,4 +443,17 @@ impl App {
         let pressed = *state == ElementState::Pressed;
         self.mouse_middle_down = pressed;
     }
+}
+
+fn convert_velocity_to_lorentz(particles: Vec<Particle>, scale: f64) -> Vec<Particle> {
+    let ls = scale / LIGHT_SPEED;
+    particles
+        .into_iter()
+        .map(|p| Particle {
+            position: p.position,
+            velocity: math::spacetime::rapidity_vector(p.velocity, ls),
+            mass: p.mass,
+            color: p.color,
+        })
+        .collect()
 }
