@@ -1,7 +1,7 @@
 use glam::DVec3;
 use rayon::prelude::*;
 
-use crate::math::spacetime::{Spacetime, rapidity_vector_from_momentum};
+use crate::math::spacetime::{Spacetime, rapidity_from_momentum};
 
 pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
 pub const LIGHT_SPEED: f64 = 299_792_458.0; // Speed of light in meters per second
@@ -122,7 +122,6 @@ impl SimulationEngine for SimulationLorentzTransformation {
             .enumerate()
             .for_each(|(i, particle)| {
                 let mass_i = particle.mass;
-                //Rapidity to be added
                 let mut acceleration = DVec3::ZERO;
                 for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
                     if i == j {
@@ -133,21 +132,19 @@ impl SimulationEngine for SimulationLorentzTransformation {
                     if r_squared < EPSILON {
                         continue;
                     }
-                    let momentum = time_g * mass_i * mass_j / (r_squared * r_squared.sqrt());
-                    let rapidity =
-                        rapidity_vector_from_momentum(momentum * diff.normalize(), mass_i, ls);
+                    let force = time_g * mass_i * mass_j / r_squared;
+                    let rapidity = rapidity_from_momentum(force * diff.normalize(), mass_i, ls);
                     acceleration += rapidity;
                 }
-                //particle.velocity += acceleration;
+                particle.velocity += acceleration;
             });
     }
 
     fn advance_time(&mut self, delta_seconds: f64) {
-        let lsi = self.scale / LIGHT_SPEED;
-        let ct = delta_seconds / lsi;
+        let ct = delta_seconds * LIGHT_SPEED / self.scale;
         self.particles.par_iter_mut().for_each(|particle| {
             let mut st = Spacetime::from_t(ct);
-            st.lorentz_transformation_va(particle.velocity * lsi);
+            st.lorentz_transformation_rapidity(particle.velocity);
             let tau = ct / st.t;
             particle.position += DVec3::new(st.x * tau, st.y * tau, st.z * tau);
         });

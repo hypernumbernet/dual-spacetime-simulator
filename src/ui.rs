@@ -196,7 +196,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
         } else if uis.initial_condition_type == InitialConditionType::EllipticalOrbit {
             uis.time_per_frame = 100_000.0;
             uis.max_fps = 1000;
-            uis.skip = 10;
+            uis.skip = 0;
         } else {
             uis.time_per_frame = 10.0;
             uis.max_fps = 60;

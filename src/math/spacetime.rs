@@ -129,7 +129,7 @@ impl Spacetime {
         Self::new(a.cosh(), x * s, y * s, z * s)
     }
 
-    pub fn exp_a_v(a: f64, v: DVec3) -> Self {
+    pub fn exp(a: f64, v: DVec3) -> Self {
         let s = a.sinh();
         Self::new(a.cosh(), v.x * s, v.y * s, v.z * s)
     }
@@ -144,20 +144,32 @@ impl Spacetime {
         DVec3::new(v * versor_angle.x, v * versor_angle.y, v * versor_angle.z)
     }
 
+    #[inline(always)]
     pub fn lorentz_transformation(&mut self, g: Spacetime) {
         let p = g.t;
         let q = g.x;
         let r = g.y;
         let s = g.z;
+
         let w = self.t;
         let x = self.x;
         let y = self.y;
         let z = self.z;
 
-        self.t = (p * p + q * q + r * r + s * s) * w + 2.0 * p * (-q * x - r * y - s * z);
-        self.x = (p * p + q * q - r * r - s * s) * x + 2.0 * q * (-p * w + r * y + s * z);
-        self.y = (p * p - q * q + r * r - s * s) * y + 2.0 * r * (-p * w + q * x + s * z);
-        self.z = (p * p - q * q - r * r + s * s) * z + 2.0 * s * (-p * w + q * x + r * y);
+        let pp = p * p;
+        let qq = q * q;
+        let rr = r * r;
+        let ss = s * s;
+
+        let p_w = p * w;
+        let q_x = q * x;
+        let r_y = r * y;
+        let s_z = s * z;
+
+        self.t = (pp + qq + rr + ss) * w + 2.0 * p * (q_x + r_y + s_z);
+        self.x = (pp + qq - rr - ss) * x + 2.0 * q * (p_w - r_y - s_z);
+        self.y = (pp - qq + rr - ss) * y + 2.0 * r * (p_w - q_x - s_z);
+        self.z = (pp - qq - rr + ss) * z + 2.0 * s * (p_w - q_x - r_y);
     }
 
     pub fn lorentz_transformation_v(&mut self, v: DVec3, speed_of_light_inv: f64) {
@@ -167,17 +179,17 @@ impl Spacetime {
         }
         let a = (l * speed_of_light_inv).atanh();
         let dir = v / l;
-        let g = Self::exp_a_v(-0.5 * a, dir);
+        let g = Self::exp(0.5 * a, dir);
         self.lorentz_transformation(g);
     }
 
-    pub fn lorentz_transformation_va(&mut self, versor_angle: DVec3) {
-        let a = versor_angle.length_squared();
+    pub fn lorentz_transformation_rapidity(&mut self, rapidity: DVec3) {
+        let a = rapidity.length_squared();
         if a == 0.0 {
             return;
         }
-        let dir = versor_angle / a;
-        let g = Self::exp_a_v(-0.5 * a, dir);
+        let dir = rapidity / a;
+        let g = Self::exp(0.5 * a, dir);
         self.lorentz_transformation(g);
     }
 
@@ -222,13 +234,13 @@ pub fn rapidity_vector(v: DVec3, speed_of_light_inv: f64) -> DVec3 {
 ///
 /// v / c = p / sqrt(m^2 c^2 + p^2) = tanh(a) = pc / E
 /// tanh(a) < 1 (p -> ∞)
-pub fn rapidity_vector_from_momentum(p: DVec3, m: f64, speed_of_light: f64) -> DVec3 {
-    let pn = p.normalize_or_zero();
-    if pn == DVec3::ZERO {
+pub fn rapidity_from_momentum(p: DVec3, m: f64, speed_of_light: f64) -> DVec3 {
+    let pn = p.length_squared();
+    if pn == 0.0 {
         return DVec3::ZERO;
     }
-    let pr = pn.length_squared();
-    let l = pr / (m * m * speed_of_light * speed_of_light + pn).length_squared();
+    let pr = pn.sqrt();
+    let l = pr / (m * m * speed_of_light * speed_of_light + pn).sqrt();
     let a = l.atanh();
     let b = a / pr;
     DVec3::new(b * p.x, b * p.y, b * p.z)

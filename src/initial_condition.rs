@@ -157,9 +157,9 @@ impl InitialConditionType {
             },
             InitialConditionType::EllipticalOrbit => InitialCondition::EllipticalOrbit {
                 scale: 1.5e11,
-                central_mass: 1.989e30,
+                central_mass: 1.989e32,
                 planetary_mass: 5.972e24,
-                planetary_speed: 2.0e4,
+                planetary_speed: 2.0e5,
                 planetary_distance: 2.0e11,
             },
         }
