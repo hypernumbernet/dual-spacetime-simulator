@@ -271,6 +271,12 @@ impl InitialCondition {
                 let correct = Correct::new(*scale);
                 let pos_max = radius * correct.m;
                 let speed_max = velocity_std * correct.m;
+                let mass_lower = mass_range.0 * correct.kg;
+                let mass_upper = if mass_lower >= mass_range.1 * correct.kg {
+                    mass_lower * 1.01
+                } else {
+                    mass_range.1 * correct.kg
+                };
                 let particles = (0..particle_count)
                     .map(|i| {
                         let pos = Self::position_in_sphere(DVec3::ZERO, pos_max, &mut rng);
@@ -279,8 +285,7 @@ impl InitialCondition {
                             y: rng.random_range(-speed_max..speed_max),
                             z: rng.random_range(-speed_max..speed_max),
                         };
-                        let mass =
-                            rng.random_range(mass_range.0 * correct.kg..mass_range.1 * correct.kg);
+                        let mass = rng.random_range(mass_lower..mass_upper);
                         let color = match i % 5 {
                             0 => [1.0, 0.3, 0.2, 1.0], // Red
                             1 => [0.2, 0.5, 1.0, 1.0], // Blue
@@ -308,6 +313,12 @@ impl InitialCondition {
                 let correct = Correct::new(*scale);
                 let pos_max = cube_size * 0.5 * correct.m;
                 let speed_max = velocity_std * correct.m;
+                let mass_lower = mass_range.0 * correct.kg;
+                let mass_upper = if mass_lower >= mass_range.1 * correct.kg {
+                    mass_lower * 1.01
+                } else {
+                    mass_range.1 * correct.kg
+                };
                 let particles = (0..particle_count)
                     .map(|i| {
                         let pos = DVec3 {
@@ -320,8 +331,7 @@ impl InitialCondition {
                             y: rng.random_range(-speed_max..speed_max),
                             z: rng.random_range(-speed_max..speed_max),
                         };
-                        let mass =
-                            rng.random_range(mass_range.0 * correct.kg..mass_range.1 * correct.kg);
+                        let mass = rng.random_range(mass_lower..mass_upper);
                         let color = match i % 5 {
                             0 => [1.0, 0.3, 0.2, 1.0], // Red
                             1 => [0.2, 0.5, 1.0, 1.0], // Blue
@@ -380,7 +390,8 @@ impl InitialCondition {
                 mass_fixed,
             } => {
                 let correct = Correct::new(*scale);
-                let radius = *disk_radius * correct.m;
+                let radius = (*disk_radius).abs() * correct.m;
+                let radius = if radius <= 0.1 { 0.1 } else { radius };
                 let mass = *mass_fixed * correct.kg;
                 let total_mass = particle_count as f64 * mass;
                 let normal = rand_distr::Normal::new(0.0, radius * 0.05).unwrap();
@@ -654,12 +665,7 @@ impl InitialCondition {
 
 impl Default for InitialCondition {
     fn default() -> Self {
-        InitialCondition::RandomSphere {
-            scale: 1e10,
-            radius: 1e10,
-            mass_range: (1e29, 1e31),
-            velocity_std: 1e6,
-        }
+        InitialConditionType::RandomSphere.to_initial_condition()
     }
 }
 
