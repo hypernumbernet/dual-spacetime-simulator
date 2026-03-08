@@ -1,4 +1,5 @@
 use crate::initial_condition::{InitialCondition, InitialConditionType};
+use crate::settings::AppSettings;
 use glam::DVec3;
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
@@ -49,6 +50,7 @@ pub struct UiState {
     pub solar_system: SolarSystemParameters,
     pub satellite_orbit: SatelliteOrbitParameters,
     pub elliptical_orbit: EllipticalOrbitParameters,
+    pub is_settings_window_open: bool,
 }
 
 impl Default for UiState {
@@ -81,6 +83,18 @@ impl Default for UiState {
             solar_system: SolarSystemParameters::default(),
             satellite_orbit: SatelliteOrbitParameters::default(),
             elliptical_orbit: EllipticalOrbitParameters::default(),
+            is_settings_window_open: false,
+        }
+    }
+}
+
+impl UiState {
+    pub fn apply_settings(&mut self, settings: &AppSettings) {
+        self.max_particle_count = settings.max_particle_count;
+        self.min_window_width = settings.window_min_width;
+        self.min_window_height = settings.window_min_height;
+        if self.particle_count > self.max_particle_count {
+            self.particle_count = self.max_particle_count;
         }
     }
 }

@@ -440,6 +440,8 @@ dependencies = [
  "rand_distr",
  "rayon",
  "satkit",
+ "serde",
+ "serde_json",
  "vulkano",
  "vulkano-shaders",
  "vulkano-util",

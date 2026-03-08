@@ -2,6 +2,7 @@ use crate::initial_condition::{InitialCondition, InitialConditionType};
 use crate::simulation::AU;
 use crate::ui_state::*;
 use crate::ui_styles::*;
+use crate::settings::AppSettings;
 use egui::{Button, ComboBox, Slider, vec2};
 use std::sync::{Arc, RwLock};
 
@@ -39,7 +40,7 @@ fn format_scale(scale_guage: f64, scale: f64) -> String {
     }
 }
 
-pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
+pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx: &egui::Context) {
     let mut uis = ui_state.write().unwrap();
     egui::Window::new("Control Panel")
         .resizable(false)
@@ -94,7 +95,46 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, ctx: &egui::Context) {
             ui.separator();
             label_normal(ui, "Skip drawing frames");
             ui.add(Slider::new(&mut uis.skip, 0..=1000));
+            ui.separator();
+            if ui
+                .add_sized(button_size, Button::new("Settings"))
+                .clicked()
+            {
+                uis.is_settings_window_open = !uis.is_settings_window_open;
+            }
         });
+
+    if uis.is_settings_window_open {
+        egui::Window::new("Settings")
+            .resizable(false)
+            .collapsible(true)
+            .default_width(uis.input_panel_width)
+            .show(ctx, |ui| {
+                dragvalue_normal(ui, &mut uis.min_window_width, 1.0, "Min Window Width");
+                dragvalue_normal(ui, &mut uis.min_window_height, 1.0, "Min Window Height");
+                dragvalue_normal(
+                    ui,
+                    &mut uis.max_particle_count,
+                    10.0,
+                    "Max Particle Count",
+                );
+                ui.separator();
+                let button_width = ui.available_width();
+                let button_height = ui.spacing().interact_size.y * 1.5;
+                let button_size = vec2(button_width, button_height);
+                if ui
+                    .add_sized(button_size, Button::new("Save Settings"))
+                    .clicked()
+                {
+                    settings.window_min_width = uis.min_window_width;
+                    settings.window_min_height = uis.min_window_height;
+                    settings.max_particle_count = uis.max_particle_count;
+                    if let Err(e) = settings.save() {
+                        eprintln!("Failed to save settings: {}", e);
+                    }
+                }
+            });
+    }
 
     if uis.is_initial_condition_window_open {
         egui::Window::new("Initial Condition")

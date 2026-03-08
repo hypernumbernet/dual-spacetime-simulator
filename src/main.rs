@@ -10,6 +10,7 @@ mod renderer;
 mod simulation;
 mod ui;
 mod ui_state;
+mod settings;
 mod ui_styles;
 mod utils;
 
@@ -22,6 +23,7 @@ use crate::simulation::{
 };
 use crate::ui::draw_ui;
 use crate::ui_state::{SimulationType, UiState};
+use crate::settings::AppSettings;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use vulkano_util::{
@@ -175,18 +177,22 @@ pub struct App {
     last_left_click_pos: Option<(f64, f64)>,
     last_right_click_time: Option<Instant>,
     last_right_click_pos: Option<(f64, f64)>,
+    settings: AppSettings,
 }
 
 impl Default for App {
     fn default() -> Self {
         let context = VulkanoContext::new(VulkanoConfig::default());
         let windows = VulkanoWindows::default();
+        let settings = AppSettings::load();
+        let mut ui_state = UiState::default();
+        ui_state.apply_settings(&settings);
         Self {
             context,
             windows,
             render_pipeline: None,
             gui: None,
-            ui_state: Arc::new(RwLock::new(UiState::default())),
+            ui_state: Arc::new(RwLock::new(ui_state)),
             simulation_state: Arc::new(RwLock::new(SimulationState::default())),
             positions: Vec::new(),
             colors: Vec::new(),
@@ -200,6 +206,7 @@ impl Default for App {
             last_left_click_pos: None,
             last_right_click_time: None,
             last_right_click_pos: None,
+            settings,
         }
     }
 }
@@ -266,7 +273,7 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 gui.immediate_ui(|gui| {
                     let ctx = gui.context();
-                    draw_ui(&self.ui_state, &ctx);
+                    draw_ui(&self.ui_state, &mut self.settings, &ctx);
                 });
                 match renderer.acquire(Some(Duration::from_millis(5000)), |_| {}) {
                     Ok(future) => {
