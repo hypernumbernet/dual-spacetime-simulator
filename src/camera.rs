@@ -3,6 +3,7 @@ use std::f32::EPSILON;
 use std::time::Instant;
 
 const ANIMATION_DURATION: f32 = 0.008;
+const MAX_PITCH_RAD: f32 = 87.0_f32 * std::f32::consts::PI / 180.0_f32;
 
 pub struct OrbitCamera {
     pub position: Vec3,
@@ -29,18 +30,20 @@ impl OrbitCamera {
     }
 
     pub fn revolve(&mut self, delta_yaw: f32, delta_pitch: f32) {
-        let relative = self.target - self.position;
+        let mut relative = self.target - self.position;
         if relative.length_squared() <= EPSILON {
             return;
         }
         let axis = self.up.cross(relative).normalize();
         let rotation = Quat::from_axis_angle(axis, -delta_pitch);
         self.up = rotation.mul_vec3(self.up);
-        let relative = rotation.mul_vec3(relative);
-        self.position = self.target - relative;
+        relative = rotation.mul_vec3(relative);
 
         let rotation = Quat::from_axis_angle(self.up, -delta_yaw);
-        let relative = rotation.mul_vec3(relative);
+        relative = rotation.mul_vec3(relative);
+        if self.lock_up {
+            relative = clamp_pitch(relative);
+        }
         self.position = self.target - relative;
         if self.lock_up {
             self.up = get_closest_perp_unit_to_y(self.position, self.target);
@@ -48,17 +51,20 @@ impl OrbitCamera {
     }
 
     pub fn look_around(&mut self, dx: f32, dy: f32) {
-        let relative = self.target - self.position;
+        let mut relative = self.target - self.position;
         if relative.length_squared() <= EPSILON {
             return;
         }
         let rotation = Quat::from_axis_angle(self.up, dx);
-        let relative = rotation.mul_vec3(relative);
+        relative = rotation.mul_vec3(relative);
         self.target = self.position + relative;
 
         let axis = self.up.cross(relative).normalize();
         let rotation = Quat::from_axis_angle(axis, dy);
-        let relative = rotation.mul_vec3(relative);
+        relative = rotation.mul_vec3(relative);
+        if self.lock_up {
+            relative = clamp_pitch(relative);
+        }
         self.target = self.position + relative;
         self.up = rotation.mul_vec3(self.up);
         if self.lock_up {
@@ -134,6 +140,39 @@ impl OrbitCamera {
             self.up = get_closest_perp_unit_to_y(self.position, self.target);
         }
     }
+}
+
+fn clamp_pitch(relative: Vec3) -> Vec3 {
+    if relative.length_squared() <= EPSILON {
+        return relative;
+    }
+    let len = relative.length();
+    let mut dir = relative / len;
+    let horiz_len = (dir.x * dir.x + dir.z * dir.z).sqrt();
+
+    if horiz_len <= EPSILON {
+        let pitch = if dir.y > 0.0 { MAX_PITCH_RAD } else { -MAX_PITCH_RAD };
+        let new_y = pitch.sin();
+        let new_h = pitch.cos();
+        dir = Vec3::new(new_h, new_y, 0.0);
+        return dir * len;
+    }
+
+    let pitch = dir.y.atan2(horiz_len);
+    if pitch.abs() <= MAX_PITCH_RAD {
+        return relative;
+    }
+
+    let clamped_pitch = pitch.clamp(-MAX_PITCH_RAD, MAX_PITCH_RAD);
+    let new_y = clamped_pitch.sin();
+    let new_h = clamped_pitch.cos();
+    let scale = new_h / horiz_len;
+
+    dir.x *= scale;
+    dir.z *= scale;
+    dir.y = new_y;
+
+    dir * len
 }
 
 fn get_closest_perp_unit_to_y(position: Vec3, target: Vec3) -> Vec3 {

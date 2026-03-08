@@ -89,7 +89,7 @@ impl Default for UiState {
             is_settings_window_open: false,
             start_maximized: false,
             link_point_size_to_scale: true,
-            lock_camera_up: false,
+            lock_camera_up: true,
         }
     }
 }

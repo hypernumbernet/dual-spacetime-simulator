@@ -22,7 +22,7 @@ impl Default for AppSettings {
             window_min_height: 300.0,
             start_maximized: false,
             link_point_size_to_scale: true,
-            lock_camera_up: false,
+            lock_camera_up: true,
         }
     }
 }
