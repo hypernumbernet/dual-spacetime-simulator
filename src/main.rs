@@ -263,6 +263,11 @@ impl ApplicationHandler for App {
         let Some(pipeline) = self.render_pipeline.as_mut() else {
             return;
         };
+        let lock_camera_up = {
+            let ui_state = self.ui_state.read().unwrap();
+            ui_state.lock_camera_up
+        };
+        pipeline.set_lock_camera_up(lock_camera_up);
         match &event {
             WindowEvent::Resized(_) => {
                 renderer.resize();

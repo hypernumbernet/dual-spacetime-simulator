@@ -137,6 +137,15 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                         uis.link_point_size_to_scale = v;
                     }
                 });
+                ui.horizontal(|ui| {
+                    let mut v = uis.lock_camera_up;
+                    if ui
+                        .add(Checkbox::new(&mut v, "Lock Camera Up/Down"))
+                        .changed()
+                    {
+                        uis.lock_camera_up = v;
+                    }
+                });
                 ui.separator();
                 let button_width = ui.available_width();
                 let button_height = ui.spacing().interact_size.y * 1.5;
@@ -150,6 +159,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     settings.max_particle_count = uis.max_particle_count;
                     settings.start_maximized = uis.start_maximized;
                     settings.link_point_size_to_scale = uis.link_point_size_to_scale;
+                    settings.lock_camera_up = uis.lock_camera_up;
                     if let Err(e) = settings.save() {
                         eprintln!("Failed to save settings: {}", e);
                     }

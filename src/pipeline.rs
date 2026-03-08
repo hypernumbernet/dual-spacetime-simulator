@@ -218,6 +218,10 @@ impl ParticleRenderPipeline {
         self.camera.update_animation();
     }
 
+    pub fn set_lock_camera_up(&mut self, lock: bool) {
+        self.camera.set_lock_up(lock);
+    }
+
     fn create_render_pass(device: Arc<Device>, format: Format) -> Arc<RenderPass> {
         vulkano::ordered_passes_renderpass!(
             device,

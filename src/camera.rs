@@ -8,6 +8,7 @@ pub struct OrbitCamera {
     pub position: Vec3,
     pub target: Vec3,
     pub up: Vec3,
+    lock_up: bool,
     animating_y_top: u32,
     animating_to_origin: u32,
     start_time: Option<Instant>,
@@ -20,6 +21,7 @@ impl OrbitCamera {
             position,
             target,
             up,
+            lock_up: false,
             animating_y_top: 0,
             animating_to_origin: 0,
             start_time: None,
@@ -40,6 +42,9 @@ impl OrbitCamera {
         let rotation = Quat::from_axis_angle(self.up, -delta_yaw);
         let relative = rotation.mul_vec3(relative);
         self.position = self.target - relative;
+        if self.lock_up {
+            self.up = get_closest_perp_unit_to_y(self.position, self.target);
+        }
     }
 
     pub fn look_around(&mut self, dx: f32, dy: f32) {
@@ -56,6 +61,9 @@ impl OrbitCamera {
         let relative = rotation.mul_vec3(relative);
         self.target = self.position + relative;
         self.up = rotation.mul_vec3(self.up);
+        if self.lock_up {
+            self.up = get_closest_perp_unit_to_y(self.position, self.target);
+        }
     }
 
     pub fn zoom(&mut self, zoom_factor: f32) {
@@ -69,6 +77,9 @@ impl OrbitCamera {
     }
 
     pub fn rotate(&mut self, delta_roll: f32) {
+        if self.lock_up {
+            return;
+        }
         let relative = self.target - self.position;
         if relative.length_squared() <= EPSILON {
             return;
@@ -114,6 +125,13 @@ impl OrbitCamera {
                     self.start_time = None;
                 }
             }
+        }
+    }
+
+    pub fn set_lock_up(&mut self, lock: bool) {
+        self.lock_up = lock;
+        if self.lock_up {
+            self.up = get_closest_perp_unit_to_y(self.position, self.target);
         }
     }
 }
