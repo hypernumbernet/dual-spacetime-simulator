@@ -128,6 +128,15 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                         uis.start_maximized = v;
                     }
                 });
+                ui.horizontal(|ui| {
+                    let mut v = uis.link_point_size_to_scale;
+                    if ui
+                        .add(Checkbox::new(&mut v, "Link Point Size to Scale"))
+                        .changed()
+                    {
+                        uis.link_point_size_to_scale = v;
+                    }
+                });
                 ui.separator();
                 let button_width = ui.available_width();
                 let button_height = ui.spacing().interact_size.y * 1.5;
@@ -140,6 +149,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     settings.window_min_height = uis.min_window_height;
                     settings.max_particle_count = uis.max_particle_count;
                     settings.start_maximized = uis.start_maximized;
+                    settings.link_point_size_to_scale = uis.link_point_size_to_scale;
                     if let Err(e) = settings.save() {
                         eprintln!("Failed to save settings: {}", e);
                     }

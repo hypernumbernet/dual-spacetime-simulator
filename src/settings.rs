@@ -9,6 +9,7 @@ pub struct AppSettings {
     pub window_min_width: f32,
     pub window_min_height: f32,
     pub start_maximized: bool,
+    pub link_point_size_to_scale: bool,
 }
 
 impl Default for AppSettings {
@@ -18,6 +19,7 @@ impl Default for AppSettings {
             window_min_width: 400.0,
             window_min_height: 300.0,
             start_maximized: false,
+            link_point_size_to_scale: true,
         }
     }
 }

@@ -354,6 +354,7 @@ impl ParticleRenderPipeline {
         image: Arc<ImageView>,
         gui: &mut Gui,
         scale: f64,
+        link_point_size_to_scale: bool,
     ) -> Box<dyn GpuFuture> {
         let mut builder = AutoCommandBufferBuilder::primary(
             self.command_buffer_allocator.clone(),
@@ -405,7 +406,12 @@ impl ParticleRenderPipeline {
         self.draw_axes(&mut secondary_builder, &viewport, &push_constants);
         let scale_factor = (scale / DEFAULT_SCALE_UI).powi(4) as f32;
         let view_proj = self.compute_mvp_particle(aspect_ratio, scale_factor);
-        let size_scale = dimensions[1] as f32 * SIZE_RATIO * scale_factor;
+        let point_scale_factor = if link_point_size_to_scale {
+            scale_factor
+        } else {
+            1.0
+        };
+        let size_scale = dimensions[1] as f32 * SIZE_RATIO * point_scale_factor;
         let push_constants = PushConstants {
             view_proj: view_proj.to_cols_array_2d(),
             size_scale: size_scale.into(),

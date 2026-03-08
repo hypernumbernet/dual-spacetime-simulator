@@ -282,9 +282,15 @@ impl ApplicationHandler for App {
                     Ok(future) => {
                         let ui_state = self.ui_state.read().unwrap();
                         let scale = ui_state.scale_gauge;
+                        let link_point_size_to_scale = ui_state.link_point_size_to_scale;
                         drop(ui_state);
-                        let after_future =
-                            pipeline.render(future, renderer.swapchain_image_view(), gui, scale);
+                        let after_future = pipeline.render(
+                            future,
+                            renderer.swapchain_image_view(),
+                            gui,
+                            scale,
+                            link_point_size_to_scale,
+                        );
                         renderer.present(after_future, true);
                     }
                     Err(vulkano::VulkanError::OutOfDate) => {
