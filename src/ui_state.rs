@@ -51,6 +51,7 @@ pub struct UiState {
     pub satellite_orbit: SatelliteOrbitParameters,
     pub elliptical_orbit: EllipticalOrbitParameters,
     pub is_settings_window_open: bool,
+    pub start_maximized: bool,
 }
 
 impl Default for UiState {
@@ -84,6 +85,7 @@ impl Default for UiState {
             satellite_orbit: SatelliteOrbitParameters::default(),
             elliptical_orbit: EllipticalOrbitParameters::default(),
             is_settings_window_open: false,
+            start_maximized: false,
         }
     }
 }
@@ -93,6 +95,7 @@ impl UiState {
         self.max_particle_count = settings.max_particle_count;
         self.min_window_width = settings.window_min_width;
         self.min_window_height = settings.window_min_height;
+        self.start_maximized = settings.start_maximized;
         if self.particle_count > self.max_particle_count {
             self.particle_count = self.max_particle_count;
         }

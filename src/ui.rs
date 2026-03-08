@@ -3,7 +3,7 @@ use crate::simulation::AU;
 use crate::ui_state::*;
 use crate::ui_styles::*;
 use crate::settings::AppSettings;
-use egui::{Button, ComboBox, Slider, vec2};
+use egui::{Button, Checkbox, ComboBox, Slider, vec2};
 use std::sync::{Arc, RwLock};
 
 fn format_simulation_time(simulation_time: f64) -> String {
@@ -119,6 +119,16 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     "Max Particle Count",
                 );
                 ui.separator();
+                ui.horizontal(|ui| {
+                    let mut v = uis.start_maximized;
+                    if ui
+                        .add(Checkbox::new(&mut v, "Start Maximized"))
+                        .changed()
+                    {
+                        uis.start_maximized = v;
+                    }
+                });
+                ui.separator();
                 let button_width = ui.available_width();
                 let button_height = ui.spacing().interact_size.y * 1.5;
                 let button_size = vec2(button_width, button_height);
@@ -129,6 +139,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     settings.window_min_width = uis.min_window_width;
                     settings.window_min_height = uis.min_window_height;
                     settings.max_particle_count = uis.max_particle_count;
+                    settings.start_maximized = uis.start_maximized;
                     if let Err(e) = settings.save() {
                         eprintln!("Failed to save settings: {}", e);
                     }

@@ -230,6 +230,9 @@ impl ApplicationHandler for App {
                 ci.min_image_count = ci.min_image_count.max(2);
             });
         let primary_renderer = self.windows.get_primary_renderer().unwrap();
+        if self.settings.start_maximized {
+            primary_renderer.window().set_maximized(true);
+        }
         let render_pipeline = ParticleRenderPipeline::new(
             self.context.graphics_queue().clone(),
             primary_renderer.swapchain_format(),

@@ -8,6 +8,7 @@ pub struct AppSettings {
     pub max_particle_count: u32,
     pub window_min_width: f32,
     pub window_min_height: f32,
+    pub start_maximized: bool,
 }
 
 impl Default for AppSettings {
@@ -16,6 +17,7 @@ impl Default for AppSettings {
             max_particle_count: 20_000,
             window_min_width: 400.0,
             window_min_height: 300.0,
+            start_maximized: false,
         }
     }
 }
