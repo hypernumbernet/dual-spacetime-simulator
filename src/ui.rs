@@ -3,7 +3,7 @@ use crate::simulation::AU;
 use crate::ui_state::*;
 use crate::ui_styles::*;
 use crate::settings::AppSettings;
-use egui::{Button, Checkbox, ComboBox, Slider, vec2};
+use egui::{Checkbox, ComboBox, Slider};
 use std::sync::{Arc, RwLock};
 
 fn format_simulation_time(simulation_time: f64) -> String {
@@ -60,20 +60,11 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 label_indicator(ui, &format_simulation_time(uis.simulation_time));
             });
             ui.separator();
-            let button_width = ui.available_width();
-            let button_height = ui.spacing().interact_size.y * 1.5;
-            let button_size = vec2(button_width, button_height);
-            if ui
-                .add_sized(button_size, Button::new("Start/Pause"))
-                .clicked()
-            {
+            if button_normal(ui, "Start/Pause").clicked() {
                 uis.is_running = !uis.is_running;
             }
             ui.separator();
-            if ui
-                .add_sized(button_size, Button::new("Initial Condition"))
-                .clicked()
-            {
+            if button_normal(ui, "Initial Condition").clicked() {
                 uis.is_initial_condition_window_open = !uis.is_initial_condition_window_open;
             }
             ui.separator();
@@ -96,10 +87,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
             label_normal(ui, "Skip drawing frames");
             ui.add(Slider::new(&mut uis.skip, 0..=1000));
             ui.separator();
-            if ui
-                .add_sized(button_size, Button::new("Settings"))
-                .clicked()
-            {
+            if button_normal(ui, "Settings").clicked() {
                 uis.is_settings_window_open = !uis.is_settings_window_open;
             }
         });
@@ -147,13 +135,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     }
                 });
                 ui.separator();
-                let button_width = ui.available_width();
-                let button_height = ui.spacing().interact_size.y * 1.5;
-                let button_size = vec2(button_width, button_height);
-                if ui
-                    .add_sized(button_size, Button::new("Save Settings"))
-                    .clicked()
-                {
+                if button_normal(ui, "Save Settings").clicked() {
                     settings.window_min_width = uis.min_window_width;
                     settings.window_min_height = uis.min_window_height;
                     settings.max_particle_count = uis.max_particle_count;
@@ -492,10 +474,7 @@ fn slider_perticle_count(ui: &mut egui::Ui, uis: &mut UiState) {
 }
 
 fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
-    let button_width = ui.available_width();
-    let button_height = ui.spacing().interact_size.y * 1.5;
-    let button_size = vec2(button_width, button_height);
-    if ui.add_sized(button_size, Button::new("Reset")).clicked() {
+    if button_normal(ui, "Reset").clicked() {
         uis.is_reset_requested = true;
         uis.is_resetting = true;
     }

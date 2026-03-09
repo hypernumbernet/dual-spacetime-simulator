@@ -1,4 +1,6 @@
 use egui::{Align, Color32, FontId, Frame, Layout, Margin, RichText, Stroke, TextStyle, Ui};
+use egui::{Button, vec2};
+use egui::Response;
 
 #[derive(Default, Clone)]
 pub struct LabelStyle {
@@ -144,4 +146,11 @@ pub fn selectable_value<T: PartialEq + std::fmt::Display>(
 ) {
     let display_text = format!("{}", selected);
     ui.selectable_value(current, selected, display_text.as_str());
+}
+
+pub fn button_normal(ui: &mut Ui, text: &str) -> Response {
+    let button_width = ui.available_width();
+    let button_height = ui.spacing().interact_size.y * 1.5;
+    let button_size = vec2(button_width, button_height);
+    ui.add_sized(button_size, Button::new(text))
 }
