@@ -72,28 +72,28 @@ struct PushConstants {
 mod vs_axes {
     vulkano_shaders::shader! {
         ty: "vertex",
-        path: "./src/shaders/axes_vertex.glsl"
+        path: "./src/shaders/axes_vertex.vert"
     }
 }
 
 mod fs_axes {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "./src/shaders/axes_fragment.glsl"
+        path: "./src/shaders/axes_fragment.frag"
     }
 }
 
 mod vs_particles {
     vulkano_shaders::shader! {
         ty: "vertex",
-        path: "./src/shaders/particles_vertex.glsl"
+        path: "./src/shaders/particles_vertex.vert"
     }
 }
 
 mod fs_particles {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "./src/shaders/particles_fragment.glsl"
+        path: "./src/shaders/particles_fragment.frag"
     }
 }
 
