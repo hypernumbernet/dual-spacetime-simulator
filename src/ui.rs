@@ -87,6 +87,13 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
             label_normal(ui, "Skip drawing frames");
             ui.add(Slider::new(&mut uis.skip, 0..=1000));
             ui.separator();
+            ui.horizontal(|ui| {
+                let mut v = uis.show_grid;
+                if ui.add(Checkbox::new(&mut v, "Show Grid")).changed() {
+                    uis.show_grid = v;
+                }
+            });
+            ui.separator();
             if button_normal(ui, "Settings").clicked() {
                 uis.is_settings_window_open = !uis.is_settings_window_open;
             }

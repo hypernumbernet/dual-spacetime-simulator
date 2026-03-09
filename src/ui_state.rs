@@ -54,6 +54,7 @@ pub struct UiState {
     pub start_maximized: bool,
     pub link_point_size_to_scale: bool,
     pub lock_camera_up: bool,
+    pub show_grid: bool,
 }
 
 impl Default for UiState {
@@ -90,6 +91,7 @@ impl Default for UiState {
             start_maximized: false,
             link_point_size_to_scale: true,
             lock_camera_up: true,
+            show_grid: true,
         }
     }
 }

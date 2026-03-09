@@ -359,6 +359,7 @@ impl ParticleRenderPipeline {
         gui: &mut Gui,
         scale: f64,
         link_point_size_to_scale: bool,
+        show_grid: bool,
     ) -> Box<dyn GpuFuture> {
         let mut builder = AutoCommandBufferBuilder::primary(
             self.command_buffer_allocator.clone(),
@@ -403,11 +404,13 @@ impl ParticleRenderPipeline {
             depth_range: 0.0..=1.0,
         };
         let aspect_ratio = dimensions[0] as f32 / dimensions[1] as f32;
-        let view_proj = self.compute_mvp_axes(aspect_ratio);
-        let push_constants = AxesPushConstants {
-            view_proj: view_proj.to_cols_array_2d(),
-        };
-        self.draw_axes(&mut secondary_builder, &viewport, &push_constants);
+        if show_grid {
+            let view_proj = self.compute_mvp_axes(aspect_ratio);
+            let push_constants = AxesPushConstants {
+                view_proj: view_proj.to_cols_array_2d(),
+            };
+            self.draw_axes(&mut secondary_builder, &viewport, &push_constants);
+        }
         let scale_factor = (scale / DEFAULT_SCALE_UI).powi(4) as f32;
         let view_proj = self.compute_mvp_particle(aspect_ratio, scale_factor);
         let point_scale_factor = if link_point_size_to_scale {
