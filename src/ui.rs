@@ -42,6 +42,58 @@ fn format_scale(scale_guage: f64, scale: f64) -> String {
 
 pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx: &egui::Context) {
     let mut uis = ui_state.write().unwrap();
+    egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+        egui::menu::bar(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("Quit").clicked() {
+                    uis.request_exit = true;
+                    ui.close_menu();
+                }
+            });
+
+            ui.menu_button("Simulation", |ui| {
+                if ui
+                    .button(if uis.is_running { "Pause" } else { "Start" })
+                    .clicked()
+                {
+                    uis.is_running = !uis.is_running;
+                    ui.close_menu();
+                }
+                if ui.button("Reset").clicked() {
+                    uis.is_reset_requested = true;
+                    uis.is_resetting = true;
+                    ui.close_menu();
+                }
+            });
+
+            ui.menu_button("Window", |ui| {
+                if ui
+                    .checkbox(&mut uis.is_initial_condition_window_open, "Initial Condition")
+                    .clicked()
+                {
+                    ui.close_menu();
+                }
+                if ui
+                    .checkbox(&mut uis.is_settings_window_open, "Settings")
+                    .clicked()
+                {
+                    ui.close_menu();
+                }
+            });
+
+            ui.menu_button("View", |ui| {
+                if ui.checkbox(&mut uis.show_grid, "Show Grid").clicked() {
+                    ui.close_menu();
+                }
+            });
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(format!("Frame {}", uis.frame));
+                ui.separator();
+                ui.label(format!("FPS {}", uis.fps));
+            });
+        });
+    });
     egui::Window::new("Control Panel")
         .resizable(false)
         .collapsible(true)

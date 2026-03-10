@@ -7,23 +7,23 @@ mod integration;
 mod math;
 mod pipeline;
 mod renderer;
+mod settings;
 mod simulation;
 mod ui;
 mod ui_state;
-mod settings;
 mod ui_styles;
 mod utils;
 
 use crate::initial_condition::InitialCondition;
 use crate::integration::{Gui, GuiConfig};
 use crate::pipeline::ParticleRenderPipeline;
+use crate::settings::AppSettings;
 use crate::simulation::{
     LIGHT_SPEED, Particle, SimulationEngine, SimulationLorentzTransformation, SimulationNormal,
     SimulationSpeedOfLightLimit, SimulationState,
 };
 use crate::ui::draw_ui;
 use crate::ui_state::{SimulationType, UiState};
-use crate::settings::AppSettings;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use vulkano_util::{
@@ -263,6 +263,14 @@ impl ApplicationHandler for App {
         let Some(pipeline) = self.render_pipeline.as_mut() else {
             return;
         };
+        {
+            let mut ui_state = self.ui_state.write().unwrap();
+            if ui_state.request_exit {
+                ui_state.request_exit = false;
+                event_loop.exit();
+                return;
+            }
+        }
         let lock_camera_up = {
             let ui_state = self.ui_state.read().unwrap();
             ui_state.lock_camera_up
