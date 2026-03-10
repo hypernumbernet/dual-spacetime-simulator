@@ -20,22 +20,6 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 }
             });
 
-            ui.menu_button("Simulation", |ui| {
-                ui.set_min_width(MENU_POPUP_WIDTH);
-                if ui
-                    .button(if uis.is_running { "Pause" } else { "Start" })
-                    .clicked()
-                {
-                    uis.is_running = !uis.is_running;
-                    ui.close_menu();
-                }
-                if ui.button("Reset").clicked() {
-                    uis.is_reset_requested = true;
-                    uis.is_resetting = true;
-                    ui.close_menu();
-                }
-            });
-
             ui.menu_button("Panel", |ui| {
                 ui.set_min_width(MENU_POPUP_WIDTH);
                 if ui
@@ -64,6 +48,22 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
             ui.menu_button("View", |ui| {
                 ui.set_min_width(MENU_POPUP_WIDTH);
                 if ui.checkbox(&mut uis.show_grid, "Show Grid").clicked() {
+                    ui.close_menu();
+                }
+            });
+
+            ui.menu_button("Simulation", |ui| {
+                ui.set_min_width(MENU_POPUP_WIDTH);
+                if ui
+                    .button(if uis.is_running { "Pause" } else { "Start" })
+                    .clicked()
+                {
+                    uis.is_running = !uis.is_running;
+                    ui.close_menu();
+                }
+                if ui.button("Reset").clicked() {
+                    uis.is_reset_requested = true;
+                    uis.is_resetting = true;
                     ui.close_menu();
                 }
             });
