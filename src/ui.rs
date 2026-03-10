@@ -1,57 +1,27 @@
 use crate::initial_condition::{InitialCondition, InitialConditionType};
+use crate::settings::AppSettings;
 use crate::simulation::AU;
 use crate::ui_state::*;
 use crate::ui_styles::*;
-use crate::settings::AppSettings;
 use egui::{Checkbox, ComboBox, Slider};
 use std::sync::{Arc, RwLock};
 
-fn format_simulation_time(simulation_time: f64) -> String {
-    let sign = if simulation_time < 0.0 { "-" } else { "" };
-    let total_seconds = simulation_time.abs();
-    let days = (total_seconds / 86400.0).floor() as i64;
-    let remaining_seconds = total_seconds % 86400.0;
-    let hours = (remaining_seconds / 3600.0).floor() as i64;
-    let minutes = ((remaining_seconds % 3600.0) / 60.0).floor() as i64;
-    let seconds = (remaining_seconds % 60.0).floor() as i64;
-    format!(
-        "{}{} {:02}:{:02}:{:02}",
-        sign, days, hours, minutes, seconds
-    )
-}
-
-fn format_scale(scale_guage: f64, scale: f64) -> String {
-    let scale_inv = DEFAULT_SCALE_UI / scale_guage;
-    let pow10 = scale_inv.powi(4) * scale;
-    if pow10 >= AU * 1e6 {
-        format!("{:.3e} au", pow10 / AU)
-    } else if pow10 >= AU {
-        format!("{:.3} au", pow10 / AU)
-    } else if pow10 >= 1e9 {
-        format!("{:.3e} km", pow10 / 1e3)
-    } else if pow10 >= 1e3 {
-        format!("{:.3} km", pow10 / 1e3)
-    } else if pow10 < 1e-9 {
-        format!("{:.6} nm", pow10 * 1e9)
-    } else if pow10 < 1e-3 {
-        format!("{:.6} mm", pow10 * 1e3)
-    } else {
-        format!("{:.3} m", pow10)
-    }
-}
+const MENU_POPUP_WIDTH: f32 = 180.0;
 
 pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx: &egui::Context) {
     let mut uis = ui_state.write().unwrap();
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::menu::bar(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if ui.button("Quit").clicked() {
+                ui.set_min_width(MENU_POPUP_WIDTH);
+                if ui.button("Exit").clicked() {
                     uis.request_exit = true;
                     ui.close_menu();
                 }
             });
 
             ui.menu_button("Simulation", |ui| {
+                ui.set_min_width(MENU_POPUP_WIDTH);
                 if ui
                     .button(if uis.is_running { "Pause" } else { "Start" })
                     .clicked()
@@ -66,15 +36,25 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 }
             });
 
-            ui.menu_button("Window", |ui| {
+            ui.menu_button("Panel", |ui| {
+                ui.set_min_width(MENU_POPUP_WIDTH);
                 if ui
-                    .checkbox(&mut uis.is_initial_condition_window_open, "Initial Condition")
+                    .checkbox(&mut uis.is_simulation_panel_open, "Simulation")
                     .clicked()
                 {
                     ui.close_menu();
                 }
                 if ui
-                    .checkbox(&mut uis.is_settings_window_open, "Settings")
+                    .checkbox(
+                        &mut uis.is_initial_condition_panel_open,
+                        "Initial Condition",
+                    )
+                    .clicked()
+                {
+                    ui.close_menu();
+                }
+                if ui
+                    .checkbox(&mut uis.is_settings_panel_open, "Settings")
                     .clicked()
                 {
                     ui.close_menu();
@@ -82,6 +62,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
             });
 
             ui.menu_button("View", |ui| {
+                ui.set_min_width(MENU_POPUP_WIDTH);
                 if ui.checkbox(&mut uis.show_grid, "Show Grid").clicked() {
                     ui.close_menu();
                 }
@@ -94,64 +75,63 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
             });
         });
     });
-    egui::Window::new("Control Panel")
-        .resizable(false)
-        .collapsible(true)
-        .default_width(uis.input_panel_width)
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                label_normal(ui, "FPS");
-                label_indicator(ui, &uis.fps.to_string());
-            });
-            ui.horizontal(|ui| {
-                label_normal(ui, "Frame");
-                label_indicator(ui, &uis.frame.to_string());
-            });
-            ui.horizontal(|ui| {
-                label_normal(ui, "Time");
-                label_indicator(ui, &format_simulation_time(uis.simulation_time));
-            });
-            ui.separator();
-            if button_normal(ui, "Start/Pause").clicked() {
-                uis.is_running = !uis.is_running;
-            }
-            ui.separator();
-            if button_normal(ui, "Initial Condition").clicked() {
-                uis.is_initial_condition_window_open = !uis.is_initial_condition_window_open;
-            }
-            ui.separator();
-            dragvalue_normal(ui, &mut uis.time_per_frame, 1.0, "Time(sec)/Frame");
-            ui.separator();
-            ui.horizontal(|ui| {
-                label_normal(ui, "Scale");
-                label_indicator(ui, format_scale(uis.scale_gauge, uis.scale).as_str());
-            });
-            slider_pure(
-                ui,
-                &mut uis.scale_gauge,
-                DEFAULT_SCALE_UI * 0.2..=DEFAULT_SCALE_UI * 3.0,
-            );
-            ui.separator();
-            ui.style_mut().spacing.slider_width = 160.0;
-            label_normal(ui, "Max FPS");
-            ui.add(Slider::new(&mut uis.max_fps, 1..=1000));
-            ui.separator();
-            label_normal(ui, "Skip drawing frames");
-            ui.add(Slider::new(&mut uis.skip, 0..=1000));
-            ui.separator();
-            ui.horizontal(|ui| {
-                let mut v = uis.show_grid;
-                if ui.add(Checkbox::new(&mut v, "Show Grid")).changed() {
-                    uis.show_grid = v;
-                }
-            });
-            ui.separator();
-            if button_normal(ui, "Settings").clicked() {
-                uis.is_settings_window_open = !uis.is_settings_window_open;
-            }
-        });
 
-    if uis.is_settings_window_open {
+    if uis.is_simulation_panel_open {
+        egui::Window::new("Simulation")
+            .resizable(false)
+            .collapsible(true)
+            .default_width(uis.input_panel_width)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    label_normal(ui, "FPS");
+                    label_indicator(ui, &uis.fps.to_string());
+                });
+                ui.horizontal(|ui| {
+                    label_normal(ui, "Frame");
+                    label_indicator(ui, &uis.frame.to_string());
+                });
+                ui.horizontal(|ui| {
+                    label_normal(ui, "Time");
+                    label_indicator(ui, &format_simulation_time(uis.simulation_time));
+                });
+                ui.separator();
+                if button_normal(ui, "Start/Pause").clicked() {
+                    uis.is_running = !uis.is_running;
+                }
+                ui.separator();
+                if button_normal(ui, "Initial Condition").clicked() {
+                    uis.is_initial_condition_panel_open = !uis.is_initial_condition_panel_open;
+                }
+                ui.separator();
+                dragvalue_normal(ui, &mut uis.time_per_frame, 1.0, "Time(sec)/Frame");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    label_normal(ui, "Scale");
+                    label_indicator(ui, format_scale(uis.scale_gauge, uis.scale).as_str());
+                });
+                slider_pure(
+                    ui,
+                    &mut uis.scale_gauge,
+                    DEFAULT_SCALE_UI * 0.2..=DEFAULT_SCALE_UI * 3.0,
+                );
+                ui.separator();
+                ui.style_mut().spacing.slider_width = 160.0;
+                label_normal(ui, "Max FPS");
+                ui.add(Slider::new(&mut uis.max_fps, 1..=1000));
+                ui.separator();
+                label_normal(ui, "Skip drawing frames");
+                ui.add(Slider::new(&mut uis.skip, 0..=1000));
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let mut v = uis.show_grid;
+                    if ui.add(Checkbox::new(&mut v, "Show Grid")).changed() {
+                        uis.show_grid = v;
+                    }
+                });
+            });
+    }
+
+    if uis.is_settings_panel_open {
         egui::Window::new("Settings")
             .resizable(false)
             .collapsible(true)
@@ -159,19 +139,11 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
             .show(ctx, |ui| {
                 dragvalue_normal(ui, &mut uis.min_window_width, 1.0, "Min Window Width");
                 dragvalue_normal(ui, &mut uis.min_window_height, 1.0, "Min Window Height");
-                dragvalue_normal(
-                    ui,
-                    &mut uis.max_particle_count,
-                    10.0,
-                    "Max Particle Count",
-                );
+                dragvalue_normal(ui, &mut uis.max_particle_count, 10.0, "Max Particle Count");
                 ui.separator();
                 ui.horizontal(|ui| {
                     let mut v = uis.start_maximized;
-                    if ui
-                        .add(Checkbox::new(&mut v, "Start Maximized"))
-                        .changed()
-                    {
+                    if ui.add(Checkbox::new(&mut v, "Start Maximized")).changed() {
                         uis.start_maximized = v;
                     }
                 });
@@ -208,7 +180,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
             });
     }
 
-    if uis.is_initial_condition_window_open {
+    if uis.is_initial_condition_panel_open {
         egui::Window::new("Initial Condition")
             .resizable(false)
             .collapsible(true)
@@ -315,6 +287,40 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
             uis.skip = 0;
         }
         uis.scale_gauge = DEFAULT_SCALE_UI;
+    }
+}
+
+fn format_simulation_time(simulation_time: f64) -> String {
+    let sign = if simulation_time < 0.0 { "-" } else { "" };
+    let total_seconds = simulation_time.abs();
+    let days = (total_seconds / 86400.0).floor() as i64;
+    let remaining_seconds = total_seconds % 86400.0;
+    let hours = (remaining_seconds / 3600.0).floor() as i64;
+    let minutes = ((remaining_seconds % 3600.0) / 60.0).floor() as i64;
+    let seconds = (remaining_seconds % 60.0).floor() as i64;
+    format!(
+        "{}{} {:02}:{:02}:{:02}",
+        sign, days, hours, minutes, seconds
+    )
+}
+
+fn format_scale(scale_guage: f64, scale: f64) -> String {
+    let scale_inv = DEFAULT_SCALE_UI / scale_guage;
+    let pow10 = scale_inv.powi(4) * scale;
+    if pow10 >= AU * 1e6 {
+        format!("{:.3e} au", pow10 / AU)
+    } else if pow10 >= AU {
+        format!("{:.3} au", pow10 / AU)
+    } else if pow10 >= 1e9 {
+        format!("{:.3e} km", pow10 / 1e3)
+    } else if pow10 >= 1e3 {
+        format!("{:.3} km", pow10 / 1e3)
+    } else if pow10 < 1e-9 {
+        format!("{:.6} nm", pow10 * 1e9)
+    } else if pow10 < 1e-3 {
+        format!("{:.6} mm", pow10 * 1e3)
+    } else {
+        format!("{:.3} m", pow10)
     }
 }
 
