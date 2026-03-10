@@ -16,6 +16,7 @@ mod utils;
 
 use crate::initial_condition::InitialCondition;
 use crate::integration::{Gui, GuiConfig};
+use crate::math::graph;
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::{
@@ -23,7 +24,7 @@ use crate::simulation::{
     SimulationSpeedOfLightLimit, SimulationState,
 };
 use crate::ui::draw_ui;
-use crate::ui_state::{SimulationType, UiState};
+use crate::ui_state::{MathGraphSurfaceFunction, SimulationType, UiState};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use vulkano_util::{
@@ -364,6 +365,30 @@ impl ApplicationHandler for App {
         renderer.window().request_redraw();
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
+        }
+        let render_math_graph = {
+            let ui_state = self.ui_state.read().unwrap();
+            ui_state.is_math_graph_panel_open
+        };
+        if render_math_graph {
+            if let Ok(ui_state) = self.ui_state.try_read() {
+                let settings = ui_state.math_graph;
+                drop(ui_state);
+                let (positions, colors) = graph::generate_surface_points(
+                    settings.surface_function,
+                    settings.x_min,
+                    settings.x_max,
+                    settings.y_min,
+                    settings.y_max,
+                    settings.grid_resolution,
+                );
+                self.positions = positions;
+                self.colors = colors;
+                if let Some(pipeline) = self.render_pipeline.as_mut() {
+                    pipeline.set_particles(&self.positions, &self.colors);
+                }
+            }
+            return;
         }
         if *self.need_redraw.read().unwrap() == false {
             return;

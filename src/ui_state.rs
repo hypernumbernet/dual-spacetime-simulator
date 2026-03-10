@@ -22,6 +22,65 @@ impl std::fmt::Display for SimulationType {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum MathGraphType {
+    Surface,
+    PointCloud,
+    VectorField,
+}
+
+impl std::fmt::Display for MathGraphType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            MathGraphType::Surface => "Surface",
+            MathGraphType::PointCloud => "Point Cloud",
+            MathGraphType::VectorField => "Vector Field",
+        };
+        write!(f, "{}", text)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum MathGraphSurfaceFunction {
+    SinCos,
+    Paraboloid,
+}
+
+impl std::fmt::Display for MathGraphSurfaceFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            MathGraphSurfaceFunction::SinCos => "z = sin(x) * cos(y)",
+            MathGraphSurfaceFunction::Paraboloid => "z = x^2 + y^2",
+        };
+        write!(f, "{}", text)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MathGraphSettings {
+    pub graph_type: MathGraphType,
+    pub surface_function: MathGraphSurfaceFunction,
+    pub x_min: f64,
+    pub x_max: f64,
+    pub y_min: f64,
+    pub y_max: f64,
+    pub grid_resolution: u32,
+}
+
+impl Default for MathGraphSettings {
+    fn default() -> Self {
+        Self {
+            graph_type: MathGraphType::Surface,
+            surface_function: MathGraphSurfaceFunction::SinCos,
+            x_min: -10.0,
+            x_max: 10.0,
+            y_min: -10.0,
+            y_max: 10.0,
+            grid_resolution: 64,
+        }
+    }
+}
+
 pub struct UiState {
     pub input_panel_width: f32,
     pub min_window_width: f32,
@@ -52,11 +111,13 @@ pub struct UiState {
     pub is_simulation_panel_open: bool,
     pub is_initial_condition_panel_open: bool,
     pub is_settings_panel_open: bool,
+    pub is_math_graph_panel_open: bool,
     pub start_maximized: bool,
     pub link_point_size_to_scale: bool,
     pub lock_camera_up: bool,
     pub show_grid: bool,
     pub request_exit: bool,
+    pub math_graph: MathGraphSettings,
 }
 
 impl Default for UiState {
@@ -91,11 +152,13 @@ impl Default for UiState {
             is_simulation_panel_open: true,
             is_initial_condition_panel_open: false,
             is_settings_panel_open: false,
+            is_math_graph_panel_open: false,
             start_maximized: false,
             link_point_size_to_scale: true,
             lock_camera_up: true,
             show_grid: true,
             request_exit: false,
+            math_graph: MathGraphSettings::default(),
         }
     }
 }

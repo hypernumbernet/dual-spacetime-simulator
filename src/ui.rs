@@ -43,6 +43,12 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 {
                     ui.close_menu();
                 }
+                if ui
+                    .checkbox(&mut uis.is_math_graph_panel_open, "Math 3D Graph")
+                    .clicked()
+                {
+                    ui.close_menu();
+                }
             });
 
             ui.menu_button("View", |ui| {
@@ -220,6 +226,78 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 } else {
                     label_normal(ui, "Resetting...");
                 }
+            });
+    }
+
+    if uis.is_math_graph_panel_open {
+        egui::Window::new("Math 3D Graph")
+            .resizable(false)
+            .collapsible(true)
+            .default_width(uis.input_panel_width)
+            .show(ctx, |ui| {
+                label_normal(ui, "Graph Type");
+                let id = ui.make_persistent_id("math_graph_type_combobox");
+                ComboBox::from_id_salt(id)
+                    .selected_text(format!("{}", uis.math_graph.graph_type))
+                    .width(ui.available_width())
+                    .show_ui(ui, |ui| {
+                        selectable_value(
+                            ui,
+                            &mut uis.math_graph.graph_type,
+                            MathGraphType::Surface,
+                        );
+                        selectable_value(
+                            ui,
+                            &mut uis.math_graph.graph_type,
+                            MathGraphType::PointCloud,
+                        );
+                        selectable_value(
+                            ui,
+                            &mut uis.math_graph.graph_type,
+                            MathGraphType::VectorField,
+                        );
+                    });
+
+                ui.separator();
+
+                if matches!(uis.math_graph.graph_type, MathGraphType::Surface) {
+                    label_normal(ui, "Surface Function");
+                    let id = ui.make_persistent_id("math_graph_surface_function_combobox");
+                    ComboBox::from_id_salt(id)
+                        .selected_text(format!("{}", uis.math_graph.surface_function))
+                        .width(ui.available_width())
+                        .show_ui(ui, |ui| {
+                            selectable_value(
+                                ui,
+                                &mut uis.math_graph.surface_function,
+                                MathGraphSurfaceFunction::SinCos,
+                            );
+                            selectable_value(
+                                ui,
+                                &mut uis.math_graph.surface_function,
+                                MathGraphSurfaceFunction::Paraboloid,
+                            );
+                        });
+                }
+
+                ui.separator();
+
+                label_normal(ui, "X Range");
+                dragvalue_normal(ui, &mut uis.math_graph.x_min, 0.5, "Min");
+                dragvalue_normal(ui, &mut uis.math_graph.x_max, 0.5, "Max");
+
+                label_normal(ui, "Y Range");
+                dragvalue_normal(ui, &mut uis.math_graph.y_min, 0.5, "Min");
+                dragvalue_normal(ui, &mut uis.math_graph.y_max, 0.5, "Max");
+
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    label_normal(ui, "Grid Resolution");
+                    let mut res = uis.math_graph.grid_resolution as i32;
+                    ui.add(Slider::new(&mut res, 8..=256));
+                    uis.math_graph.grid_resolution = res.max(8) as u32;
+                });
             });
     }
     if uis.is_resetting && uis.is_reset_requested {
