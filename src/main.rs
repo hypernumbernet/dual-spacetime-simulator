@@ -297,6 +297,7 @@ impl ApplicationHandler for App {
                         let scale = ui_state.scale_gauge;
                         let link_point_size_to_scale = ui_state.link_point_size_to_scale;
                         let show_grid = ui_state.show_grid;
+                        let app_mode = ui_state.app_mode;
                         drop(ui_state);
                         let after_future = pipeline.render(
                             future,
@@ -305,6 +306,7 @@ impl ApplicationHandler for App {
                             scale,
                             link_point_size_to_scale,
                             show_grid,
+                            app_mode,
                         );
                         renderer.present(after_future, true);
                     }

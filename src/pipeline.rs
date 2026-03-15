@@ -360,6 +360,7 @@ impl ParticleRenderPipeline {
         scale: f64,
         link_point_size_to_scale: bool,
         show_grid: bool,
+        app_mode: AppMode,
     ) -> Box<dyn GpuFuture> {
         let mut builder = AutoCommandBufferBuilder::primary(
             self.command_buffer_allocator.clone(),
@@ -423,7 +424,9 @@ impl ParticleRenderPipeline {
             view_proj: view_proj.to_cols_array_2d(),
             size_scale: size_scale.into(),
         };
-        self.draw_particles(&mut secondary_builder, &viewport, &push_constants);
+        if app_mode == AppMode::Simulation {
+            self.draw_particles(&mut secondary_builder, &viewport, &push_constants);
+        }
         let cb = secondary_builder.build().unwrap();
         builder.execute_commands(cb).unwrap();
         builder

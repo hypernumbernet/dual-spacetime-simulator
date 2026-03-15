@@ -5,6 +5,18 @@ use glam::DVec3;
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
+pub enum AppMode {
+    Simulation,
+    Graph3D,
+}
+
+impl Default for AppMode {
+    fn default() -> Self {
+        AppMode::Simulation
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SimulationType {
     Normal,
     SpeedOfLightLimit,
@@ -39,6 +51,7 @@ pub struct UiState {
     pub is_reset_requested: bool,
     pub is_resetting: bool,
     pub skip: u32,
+    pub app_mode: AppMode,
     pub initial_condition_type: InitialConditionType,
     pub initial_condition: InitialCondition,
     pub simulation_type: SimulationType,
@@ -78,6 +91,7 @@ impl Default for UiState {
             is_reset_requested: false,
             is_resetting: false,
             skip: 0,
+            app_mode: AppMode::default(),
             initial_condition_type: InitialConditionType::default(),
             initial_condition: InitialCondition::default(),
             simulation_type: SimulationType::Normal,

@@ -20,6 +20,31 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 }
             });
 
+            ui.menu_button("Mode", |ui| {
+                ui.set_min_width(MENU_POPUP_WIDTH);
+                if ui
+                    .selectable_label(
+                        uis.app_mode == crate::ui_state::AppMode::Simulation,
+                        "Simulation Mode",
+                    )
+                    .clicked()
+                {
+                    uis.app_mode = crate::ui_state::AppMode::Simulation;
+                    ui.close_menu();
+                }
+                if ui
+                    .selectable_label(
+                        uis.app_mode == crate::ui_state::AppMode::Graph3D,
+                        "3D Graph Mode",
+                    )
+                    .clicked()
+                {
+                    uis.app_mode = crate::ui_state::AppMode::Graph3D;
+                    uis.is_running = false; // 3Dグラフモードではシミュレーションを停止
+                    ui.close_menu();
+                }
+            });
+
             ui.menu_button("Panel", |ui| {
                 ui.set_min_width(MENU_POPUP_WIDTH);
                 if ui
