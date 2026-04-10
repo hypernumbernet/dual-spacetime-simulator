@@ -112,15 +112,9 @@ pub fn draw_ui(
         });
     });
 
-    // Graph3Dモード選択時は3D Graphパネルを優先的に開く（次ステップの完全切替準備）
-    // Note: This block runs after warning dialog is handled, ensuring panels update post-reset
-    if uis.app_mode == AppMode::Graph3D && !uis.is_graph3d_panel_open {
-        uis.is_graph3d_panel_open = true;
-        uis.is_simulation_panel_open = false;
-        uis.is_initial_condition_panel_open = false;
-        uis.is_settings_panel_open = false;
-        uis.reset_graph_params();
-    }
+    // AppMode変更時にパネル状態を同期（Graph3D→Simulation時はSimulationパネルを開きGraph3Dを閉じる）
+    // Note: This runs every frame after menu/warning handling, ensuring panels stay consistent with current mode
+    uis.sync_panels_to_app_mode();
 
     // Warning dialog for switching to Graph3D (resets simulation data)
     if uis.show_graph3d_warning {
@@ -138,7 +132,6 @@ pub fn draw_ui(
                         uis.is_reset_requested = true;
                         uis.is_resetting = true;
                         uis.show_graph3d_warning = false;
-                        uis.reset_graph_params();
                         simulation_manager.read().unwrap().switch_mode(uis.app_mode);
                     }
                     if ui.button("Cancel").clicked() {

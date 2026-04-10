@@ -174,6 +174,24 @@ impl UiState {
         self.graph_phi = 1.0;
         self.is_graph_update_requested = false;
     }
+
+    /// AppModeに応じてパネル開閉状態を同期する
+    /// Graph3D → Simulation 切替時にSimulationパネルを開きGraph3Dパネルを閉じる
+    pub fn sync_panels_to_app_mode(&mut self) {
+        match self.app_mode {
+            AppMode::Simulation => {
+                self.is_simulation_panel_open = true;
+                self.is_graph3d_panel_open = false;
+            }
+            AppMode::Graph3D => {
+                self.is_graph3d_panel_open = true;
+                self.is_simulation_panel_open = false;
+                self.is_initial_condition_panel_open = false;
+                self.is_settings_panel_open = false;
+                self.reset_graph_params();
+            }
+        }
+    }
 }
 
 pub struct RandomSphereParameters {
