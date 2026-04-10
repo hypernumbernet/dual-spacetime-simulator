@@ -1,31 +1,31 @@
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BivectorBoost {
-    pub iI: f64,
-    pub iJ: f64,
-    pub iK: f64,
+    pub i: f64,
+    pub j: f64,
+    pub k: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BivectorRotation {
-    pub I: f64,
-    pub J: f64,
-    pub K: f64,
+    pub i: f64,
+    pub j: f64,
+    pub k: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExpBoost {
     pub scalar: f64,
-    pub iI: f64,
-    pub iJ: f64,
-    pub iK: f64,
+    pub i: f64,
+    pub j: f64,
+    pub k: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExpRotation {
     pub scalar: f64,
-    pub I: f64,
-    pub J: f64,
-    pub K: f64,
+    pub i: f64,
+    pub j: f64,
+    pub k: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -45,19 +45,19 @@ pub struct VersorRotation {
 }
 
 impl BivectorBoost {
-    pub fn new(iI: f64, iJ: f64, iK: f64) -> Self {
-        Self { iI, iJ, iK }
+    pub fn new(i: f64, j: f64, k: f64) -> Self {
+        Self { i, j, k }
     }
 
     pub fn norm(&self) -> f64 {
-        self.iI
-            .mul_add(self.iI, self.iJ.mul_add(self.iJ, self.iK * self.iK))
+        self.i
+            .mul_add(self.i, self.j.mul_add(self.j, self.k * self.k))
             .sqrt()
     }
 
     pub fn norm_squared(&self) -> f64 {
-        self.iI
-            .mul_add(self.iI, self.iJ.mul_add(self.iJ, self.iK * self.iK))
+        self.i
+            .mul_add(self.i, self.j.mul_add(self.j, self.k * self.k))
     }
 
     pub fn exp(&self) -> ExpBoost {
@@ -67,37 +67,37 @@ impl BivectorBoost {
         } else {
             let scalar = phi.cosh();
             let ratio = phi.sinh() / phi;
-            let iI = self.iI * ratio;
-            let iJ = self.iJ * ratio;
-            let iK = self.iK * ratio;
-            ExpBoost::new(scalar, iI, iJ, iK)
+            let i = self.i * ratio;
+            let j = self.j * ratio;
+            let k = self.k * ratio;
+            ExpBoost::new(scalar, i, j, k)
         }
     }
 
     pub fn from_velocity(vx: f64, vy: f64, vz: f64) -> Self {
         let phi = (vx * vx + vy * vy + vz * vz).sqrt().atanh();
-        let iI = phi * vx / (vx * vx + vy * vy + vz * vz).sqrt();
-        let iJ = phi * vy / (vx * vx + vy * vy + vz * vz).sqrt();
-        let iK = phi * vz / (vx * vx + vy * vy + vz * vz).sqrt();
-        Self { iI, iJ, iK }
+        let i = phi * vx / (vx * vx + vy * vy + vz * vz).sqrt();
+        let j = phi * vy / (vx * vx + vy * vy + vz * vz).sqrt();
+        let k = phi * vz / (vx * vx + vy * vy + vz * vz).sqrt();
+        Self { i, j, k }
     }
 }
 
 impl BivectorRotation {
-    pub fn new(I: f64, J: f64, K: f64) -> Self {
-        Self { I, J, K }
+    pub fn new(i: f64, j: f64, k: f64) -> Self {
+        Self { i, j, k }
     }
 }
 
 impl ExpBoost {
-    pub fn new(scalar: f64, iI: f64, iJ: f64, iK: f64) -> Self {
-        Self { scalar, iI, iJ, iK }
+    pub fn new(scalar: f64, i: f64, j: f64, k: f64) -> Self {
+        Self { scalar, i, j, k }
     }
 }
 
 impl ExpRotation {
-    pub fn new(scalar: f64, I: f64, J: f64, K: f64) -> Self {
-        Self { scalar, I, J, K }
+    pub fn new(scalar: f64, i: f64, j: f64, k: f64) -> Self {
+        Self { scalar, i, j, k }
     }
 }
 
