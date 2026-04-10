@@ -1,7 +1,10 @@
 use glam::DVec3;
 use rayon::prelude::*;
+use std::sync::{Arc, RwLock};
 
+use crate::initial_condition::InitialCondition;
 use crate::math::spacetime::{Spacetime, rapidity_from_momentum};
+use crate::ui_state::{AppMode, SimulationType};
 
 pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
 pub const LIGHT_SPEED: f64 = 299_792_458.0; // Speed of light in meters per second
@@ -206,5 +209,106 @@ impl SimulationState {
 impl Default for SimulationState {
     fn default() -> Self {
         Self::Normal(SimulationNormal::default())
+    }
+}
+
+pub struct SimulationManager {
+    pub state: Arc<RwLock<SimulationState>>,
+}
+
+impl SimulationManager {
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(RwLock::new(SimulationState::default())),
+        }
+    }
+
+    /// SimulationTypeとInitialConditionからSimulationStateを作成
+    pub fn create_simulation(
+        initial_condition: InitialCondition,
+        simulation_type: SimulationType,
+        particle_count: u32,
+        scale: f64,
+    ) -> SimulationState {
+        let normal = initial_condition.generate_particles(particle_count);
+        match simulation_type {
+            SimulationType::Normal => SimulationState::Normal(SimulationNormal {
+                particles: normal.particles,
+            }),
+            SimulationType::SpeedOfLightLimit => {
+                SimulationState::SpeedOfLightLimit(SimulationSpeedOfLightLimit {
+                    particles: normal.particles,
+                    scale,
+                })
+            }
+            SimulationType::LorentzTransformation => {
+                SimulationState::LorentzTransformation(SimulationLorentzTransformation {
+                    particles: Self::convert_to_lorentz(normal.particles, scale),
+                    scale,
+                })
+            }
+        }
+    }
+
+    /// 速度をrapidityに変換（Lorentzモード用）
+    pub fn convert_to_lorentz(particles: Vec<Particle>, scale: f64) -> Vec<Particle> {
+        let ls = scale / LIGHT_SPEED;
+        particles
+            .into_iter()
+            .map(|p| Particle {
+                position: p.position,
+                velocity: crate::math::spacetime::rapidity_vector(p.velocity, ls),
+                mass: p.mass,
+                color: p.color,
+            })
+            .collect()
+    }
+
+    /// リセット処理（UIから呼ばれる）
+    pub fn reset(
+        &self,
+        initial_condition: InitialCondition,
+        simulation_type: SimulationType,
+        particle_count: u32,
+        scale: f64,
+    ) {
+        let new_state = Self::create_simulation(
+            initial_condition,
+            simulation_type,
+            particle_count,
+            scale,
+        );
+        let mut state_guard = self.state.write().unwrap();
+        *state_guard = new_state;
+    }
+
+    /// モード切替（AppMode変更時。Graph3D時はシミュレーションを停止準備）
+    pub fn switch_mode(&self, mode: AppMode) {
+        if mode == AppMode::Graph3D {
+            // Graph3Dモードではシミュレーションを一時停止（将来拡張用placeholder）
+            // ここでGraph専用の状態に切り替える余地を残す
+            let _state = self.state.write().unwrap();
+            // GraphStateなどに変換する拡張ポイント
+        }
+        // Simulationモードでは何もしない（既存状態を維持）
+    }
+
+    /// 1フレーム分の物理更新（advance_time + update_velocities）
+    pub fn advance(&self, time_per_frame: f64) {
+        let mut sim = self.state.write().unwrap();
+        sim.advance_time(time_per_frame);
+        sim.update_velocities(time_per_frame);
+    }
+
+    /// particles()の委譲（RwLock経由で安全に取得）
+    pub fn particles(&self) -> Vec<Particle> {
+        let state = self.state.read().unwrap();
+        state.particles().clone()
+    }
+}
+
+impl Default for SimulationManager {
+    fn default() -> Self {
+        Self::new()
     }
 }

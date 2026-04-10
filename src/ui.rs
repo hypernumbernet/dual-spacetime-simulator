@@ -1,6 +1,6 @@
 use crate::initial_condition::{InitialCondition, InitialConditionType};
 use crate::settings::AppSettings;
-use crate::simulation::AU;
+use crate::simulation::{AU, SimulationManager};
 use crate::ui_state::*;
 use crate::ui_styles::*;
 use egui::{Checkbox, ComboBox, Slider};
@@ -8,7 +8,12 @@ use std::sync::{Arc, RwLock};
 
 const MENU_POPUP_WIDTH: f32 = 180.0;
 
-pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx: &egui::Context) {
+pub fn draw_ui(
+    ui_state: &Arc<RwLock<UiState>>,
+    simulation_manager: &Arc<RwLock<SimulationManager>>,
+    settings: &mut AppSettings,
+    ctx: &egui::Context,
+) {
     let mut uis = ui_state.write().unwrap();
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::menu::bar(ui, |ui| {
@@ -30,6 +35,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     .clicked()
                 {
                     uis.app_mode = crate::ui_state::AppMode::Simulation;
+                    simulation_manager.read().unwrap().switch_mode(uis.app_mode);
                     ui.close_menu();
                 }
                 if ui
@@ -41,6 +47,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 {
                     uis.app_mode = crate::ui_state::AppMode::Graph3D;
                     uis.is_running = false; // 3Dグラフモードではシミュレーションを停止
+                    simulation_manager.read().unwrap().switch_mode(uis.app_mode);
                     ui.close_menu();
                 }
             });

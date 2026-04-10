@@ -19,11 +19,10 @@ use crate::integration::{Gui, GuiConfig};
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::{
-    LIGHT_SPEED, Particle, SimulationEngine, SimulationLorentzTransformation, SimulationNormal,
-    SimulationSpeedOfLightLimit, SimulationState,
+    SimulationManager,
 };
 use crate::ui::draw_ui;
-use crate::ui_state::{SimulationType, UiState};
+use crate::ui_state::UiState;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use vulkano_util::{
@@ -45,7 +44,8 @@ fn main() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new()?;
     let mut app = App::default();
     let ui_state_clone = Arc::clone(&app.ui_state);
-    let simulation_state_clone = Arc::clone(&app.simulation_state);
+    let simulation_manager_clone = Arc::clone(&app.simulation_manager);
+    let simulation_manager_for_reset = Arc::clone(&simulation_manager_clone); // for reset in background
     let need_redraw = Arc::clone(&app.need_redraw);
     let skip_redraw = Arc::clone(&app.skip_redraw);
     let mut last_advance = Instant::now();
@@ -56,7 +56,7 @@ fn main() -> Result<(), EventLoopError> {
         .build()
         .unwrap();
     std::thread::spawn(move || {
-        let simulation_state = simulation_state_clone;
+        let simulation_manager = simulation_manager_for_reset;  // renamed for clarity in reset/advance calls
         loop {
             if *need_redraw.read().unwrap() {
                 std::thread::sleep(Duration::from_millis(16));
@@ -74,31 +74,12 @@ fn main() -> Result<(), EventLoopError> {
             let scale = ui_state.scale;
             drop(ui_state);
             if is_reset_requested {
-                let new_simulation_data =
-                    selected_initial_condition.generate_particles(particle_count);
-                let new_simulation_state = match simulation_type {
-                    SimulationType::Normal => SimulationState::Normal(SimulationNormal {
-                        particles: new_simulation_data.particles,
-                    }),
-                    SimulationType::SpeedOfLightLimit => {
-                        SimulationState::SpeedOfLightLimit(SimulationSpeedOfLightLimit {
-                            particles: new_simulation_data.particles,
-                            scale: scale,
-                        })
-                    }
-                    SimulationType::LorentzTransformation => {
-                        SimulationState::LorentzTransformation(SimulationLorentzTransformation {
-                            particles: convert_velocity_to_lorentz(
-                                new_simulation_data.particles,
-                                scale,
-                            ),
-                            scale: scale,
-                        })
-                    }
-                };
-                let mut sim = simulation_state.write().unwrap();
-                *sim = new_simulation_state;
-                drop(sim);
+                simulation_manager.read().unwrap().reset(
+                    selected_initial_condition,
+                    simulation_type,
+                    particle_count,
+                    scale,
+                );
                 let mut ui_state = ui_state_clone.write().unwrap();
                 ui_state.frame = 1;
                 ui_state.simulation_time = 0.0;
@@ -131,9 +112,7 @@ fn main() -> Result<(), EventLoopError> {
                 continue;
             }
             thread_pool.install(|| {
-                let mut sim = simulation_state.write().unwrap();
-                sim.advance_time(time_per_frame);
-                sim.update_velocities(time_per_frame);
+                simulation_manager.read().unwrap().advance(time_per_frame);
             });
             if *skip_redraw.read().unwrap() < 1 {
                 let mut sr = skip_redraw.write().unwrap();
@@ -164,7 +143,7 @@ pub struct App {
     render_pipeline: Option<ParticleRenderPipeline>,
     gui: Option<Gui>,
     ui_state: Arc<RwLock<UiState>>,
-    simulation_state: Arc<RwLock<SimulationState>>,
+    simulation_manager: Arc<RwLock<SimulationManager>>,
     positions: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
     need_redraw: Arc<RwLock<bool>>,
@@ -193,7 +172,7 @@ impl Default for App {
             render_pipeline: None,
             gui: None,
             ui_state: Arc::new(RwLock::new(ui_state)),
-            simulation_state: Arc::new(RwLock::new(SimulationState::default())),
+            simulation_manager: Arc::new(RwLock::new(SimulationManager::default())),
             positions: Vec::new(),
             colors: Vec::new(),
             need_redraw: Arc::new(RwLock::new(true)),
@@ -247,8 +226,16 @@ impl ApplicationHandler for App {
             primary_renderer.swapchain_format(),
             GuiConfig::default(),
         ));
-        let sim = InitialCondition::default().generate_particles(ui_state.particle_count);
-        *self.simulation_state.write().unwrap() = SimulationState::Normal(sim);
+        let initial_condition = InitialCondition::default();
+        let particle_count = ui_state.particle_count;
+        let scale = ui_state.scale;
+        let sim_type = ui_state.simulation_type;
+        self.simulation_manager.write().unwrap().reset(
+            initial_condition,
+            sim_type,
+            particle_count,
+            scale,
+        );
         self.skip_redraw.write().unwrap().clone_from(&ui_state.skip);
     }
 
@@ -289,7 +276,7 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 gui.immediate_ui(|gui| {
                     let ctx = gui.context();
-                    draw_ui(&self.ui_state, &mut self.settings, &ctx);
+                    draw_ui(&self.ui_state, &self.simulation_manager, &mut self.settings, &ctx);
                 });
                 match renderer.acquire(Some(Duration::from_millis(5000)), |_| {}) {
                     Ok(future) => {
@@ -370,9 +357,9 @@ impl ApplicationHandler for App {
         if *self.need_redraw.read().unwrap() == false {
             return;
         }
-        if let Ok(sim) = self.simulation_state.try_read() {
-            self.positions = sim
-                .particles()
+        if let Ok(manager) = self.simulation_manager.try_read() {
+            let particles = manager.particles();
+            self.positions = particles
                 .iter()
                 .map(|p| {
                     [
@@ -382,7 +369,7 @@ impl ApplicationHandler for App {
                     ]
                 })
                 .collect();
-            self.colors = sim.particles().iter().map(|p| p.color).collect();
+            self.colors = particles.iter().map(|p| p.color).collect();
             self.need_redraw.write().unwrap().clone_from(&false);
             if let Some(pipeline) = self.render_pipeline.as_mut() {
                 pipeline.set_particles(&self.positions, &self.colors);
@@ -476,17 +463,4 @@ impl App {
         let pressed = *state == ElementState::Pressed;
         self.mouse_middle_down = pressed;
     }
-}
-
-fn convert_velocity_to_lorentz(particles: Vec<Particle>, scale: f64) -> Vec<Particle> {
-    let ls = scale / LIGHT_SPEED;
-    particles
-        .into_iter()
-        .map(|p| Particle {
-            position: p.position,
-            velocity: math::spacetime::rapidity_vector(p.velocity, ls),
-            mass: p.mass,
-            color: p.color,
-        })
-        .collect()
 }
