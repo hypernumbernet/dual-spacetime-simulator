@@ -99,6 +99,7 @@ pub struct UiState {
     pub graph_velocity_scale: f64,
     pub graph_phi: f64,
     pub is_graph_update_requested: bool,
+    pub show_graph3d_warning: bool,
 }
 
 impl Default for UiState {
@@ -146,6 +147,7 @@ impl Default for UiState {
             graph_velocity_scale: 1.0,
             graph_phi: 1.0,
             is_graph_update_requested: false,
+            show_graph3d_warning: false,
         }
     }
 }

@@ -45,9 +45,7 @@ pub fn draw_ui(
                     )
                     .clicked()
                 {
-                    uis.app_mode = crate::ui_state::AppMode::Graph3D;
-                    uis.is_running = false; // 3Dグラフモードではシミュレーションを停止
-                    simulation_manager.read().unwrap().switch_mode(uis.app_mode);
+                    uis.show_graph3d_warning = true;
                     ui.close_menu();
                 }
             });
@@ -115,12 +113,39 @@ pub fn draw_ui(
     });
 
     // Graph3Dモード選択時は3D Graphパネルを優先的に開く（次ステップの完全切替準備）
+    // Note: This block runs after warning dialog is handled, ensuring panels update post-reset
     if uis.app_mode == AppMode::Graph3D && !uis.is_graph3d_panel_open {
         uis.is_graph3d_panel_open = true;
         uis.is_simulation_panel_open = false;
         uis.is_initial_condition_panel_open = false;
         uis.is_settings_panel_open = false;
         uis.reset_graph_params();
+    }
+
+    // Warning dialog for switching to Graph3D (resets simulation data)
+    if uis.show_graph3d_warning {
+        egui::Window::new("Mode Switch Confirmation")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Switching to 3D Graph Mode will reset the current Simulation data to defaults. Continue?");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() {
+                        uis.app_mode = AppMode::Graph3D;
+                        uis.is_running = false;
+                        uis.is_reset_requested = true;
+                        uis.is_resetting = true;
+                        uis.show_graph3d_warning = false;
+                        uis.reset_graph_params();
+                        simulation_manager.read().unwrap().switch_mode(uis.app_mode);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        uis.show_graph3d_warning = false;
+                    }
+                });
+            });
     }
 
     if uis.is_simulation_panel_open {
@@ -269,6 +294,7 @@ pub fn draw_ui(
                 }
             });
     }
+    // Reset flow (handles both manual Reset and Graph3D warning OK)
     if uis.is_resetting && uis.is_reset_requested {
         uis.is_resetting = false;
         uis.initial_condition = match uis.initial_condition_type {
@@ -679,7 +705,7 @@ fn condition_bivector_viz(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Visualizes spacetime algebra planes.");
 }
 
-fn condition_quaternion_proj(ui: &mut egui::Ui, uis: &mut UiState) {
+fn condition_quaternion_proj(ui: &mut egui::Ui, _uis: &mut UiState) {
     label_normal(ui, "TetraQuaternion Projection (biquaternion.rs)");
     label_normal(ui, "16D algebra projected to 3D coefficients.");
     ui.separator();
