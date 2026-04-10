@@ -34,6 +34,28 @@ impl std::fmt::Display for SimulationType {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum GraphType {
+    LightCone,
+    RapidityField,
+    BoostExponent,
+    BivectorVisualization,
+    QuaternionProjection,
+}
+
+impl std::fmt::Display for GraphType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            GraphType::LightCone => "Light Cone Slice",
+            GraphType::RapidityField => "Rapidity Field",
+            GraphType::BoostExponent => "Boost Exponent",
+            GraphType::BivectorVisualization => "Bivector Visualization",
+            GraphType::QuaternionProjection => "Quaternion Projection",
+        };
+        write!(f, "{}", text)
+    }
+}
+
 pub struct UiState {
     pub input_panel_width: f32,
     pub min_window_width: f32,
@@ -65,11 +87,18 @@ pub struct UiState {
     pub is_simulation_panel_open: bool,
     pub is_initial_condition_panel_open: bool,
     pub is_settings_panel_open: bool,
+    pub is_graph3d_panel_open: bool,
     pub start_maximized: bool,
     pub link_point_size_to_scale: bool,
     pub lock_camera_up: bool,
     pub show_grid: bool,
     pub request_exit: bool,
+    pub graph_type: GraphType,
+    pub graph_sample_count: u32,
+    pub graph_t_slice: f64,
+    pub graph_velocity_scale: f64,
+    pub graph_phi: f64,
+    pub is_graph_update_requested: bool,
 }
 
 impl Default for UiState {
@@ -105,11 +134,18 @@ impl Default for UiState {
             is_simulation_panel_open: true,
             is_initial_condition_panel_open: false,
             is_settings_panel_open: false,
+            is_graph3d_panel_open: false,
             start_maximized: false,
             link_point_size_to_scale: true,
             lock_camera_up: true,
             show_grid: true,
             request_exit: false,
+            graph_type: GraphType::LightCone,
+            graph_sample_count: 1000,
+            graph_t_slice: 0.0,
+            graph_velocity_scale: 1.0,
+            graph_phi: 1.0,
+            is_graph_update_requested: false,
         }
     }
 }
@@ -125,6 +161,16 @@ impl UiState {
         if self.particle_count > self.max_particle_count {
             self.particle_count = self.max_particle_count;
         }
+    }
+
+    /// Graph3Dパネルのパラメータをリセット（モード切替時などに使用）
+    pub fn reset_graph_params(&mut self) {
+        self.graph_type = GraphType::LightCone;
+        self.graph_sample_count = 1000;
+        self.graph_t_slice = 0.0;
+        self.graph_velocity_scale = 1.0;
+        self.graph_phi = 1.0;
+        self.is_graph_update_requested = false;
     }
 }
 

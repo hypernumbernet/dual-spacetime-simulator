@@ -285,10 +285,11 @@ impl SimulationManager {
     /// モード切替（AppMode変更時。Graph3D時はシミュレーションを停止準備）
     pub fn switch_mode(&self, mode: AppMode) {
         if mode == AppMode::Graph3D {
-            // Graph3Dモードではシミュレーションを一時停止（将来拡張用placeholder）
-            // ここでGraph専用の状態に切り替える余地を残す
+            // Graph3Dモードではシミュレーションを一時停止
+            // 将来: GraphStateやGraphManagerに切り替え、ui_state.is_graph_update_requested
+            // からデータを読み、custom particlesやlinesをset_particles()で渡す
             let _state = self.state.write().unwrap();
-            // GraphStateなどに変換する拡張ポイント
+            // TODO: pub fn set_graph_data(&self, points: Vec<[f32;3]>, colors: Vec<[f32;4]>) 追加
         }
         // Simulationモードでは何もしない（既存状態を維持）
     }

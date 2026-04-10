@@ -1,4 +1,4 @@
-use crate::camera::OrbitCamera;
+﻿use crate::camera::OrbitCamera;
 use crate::integration::Gui;
 use crate::ui_state::*;
 use glam::{Mat4, Vec3};
@@ -426,6 +426,12 @@ impl ParticleRenderPipeline {
         };
         if app_mode == AppMode::Simulation {
             self.draw_particles(&mut secondary_builder, &viewport, &push_constants);
+        } else if app_mode == AppMode::Graph3D {
+            // Graph3Dモード: 将来ここでcustom graph points/lines/surfacesを描画
+            // ui_state.is_graph_update_requested でトリガし、set_custom_graph_data()経由で
+            // 数学モジュール（spacetime.rs, bivector.rs, biquaternion.rs）からサンプリングした
+            // 点群・ベクトル場・超曲面をParticleRenderPipelineで可視化
+            // 例: LightCone slice, Rapidity vectors, Boost exp map など
         }
         let cb = secondary_builder.build().unwrap();
         builder.execute_commands(cb).unwrap();

@@ -75,6 +75,12 @@ pub fn draw_ui(
                 {
                     ui.close_menu();
                 }
+                if ui
+                    .checkbox(&mut uis.is_graph3d_panel_open, "3D Graph")
+                    .clicked()
+                {
+                    ui.close_menu();
+                }
             });
 
             ui.menu_button("View", |ui| {
@@ -107,6 +113,15 @@ pub fn draw_ui(
             });
         });
     });
+
+    // Graph3Dモード選択時は3D Graphパネルを優先的に開く（次ステップの完全切替準備）
+    if uis.app_mode == AppMode::Graph3D && !uis.is_graph3d_panel_open {
+        uis.is_graph3d_panel_open = true;
+        uis.is_simulation_panel_open = false;
+        uis.is_initial_condition_panel_open = false;
+        uis.is_settings_panel_open = false;
+        uis.reset_graph_params();
+    }
 
     if uis.is_simulation_panel_open {
         egui::Window::new("Simulation")
@@ -319,6 +334,45 @@ pub fn draw_ui(
             uis.skip = 0;
         }
         uis.scale_gauge = DEFAULT_SCALE_UI;
+    }
+
+    // Graph3Dパネル (モード切替時に優先表示予定)
+    if uis.is_graph3d_panel_open {
+        egui::Window::new("3D Graph")
+            .resizable(false)
+            .collapsible(true)
+            .default_width(uis.input_panel_width)
+            .show(ctx, |ui| {
+                combobox_graph_type(ui, &mut uis);
+                ui.separator();
+
+                match uis.graph_type {
+                    GraphType::LightCone => {
+                        condition_light_cone(ui, &mut uis);
+                    }
+                    GraphType::RapidityField => {
+                        condition_rapidity_field(ui, &mut uis);
+                    }
+                    GraphType::BoostExponent => {
+                        condition_boost_exponent(ui, &mut uis);
+                    }
+                    GraphType::BivectorVisualization => {
+                        condition_bivector_viz(ui, &mut uis);
+                    }
+                    GraphType::QuaternionProjection => {
+                        condition_quaternion_proj(ui, &mut uis);
+                    }
+                }
+
+                ui.separator();
+                if button_normal(ui, "Update Graph").clicked() {
+                    uis.is_graph_update_requested = true;
+                    // 将来: simulation_managerやpipelineにグラフデータを通知
+                }
+                ui.separator();
+                label_normal(ui, "Sample Count");
+                ui.add(Slider::new(&mut uis.graph_sample_count, 100..=5000));
+            });
     }
 }
 
@@ -575,4 +629,59 @@ fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
         uis.is_reset_requested = true;
         uis.is_resetting = true;
     }
+}
+
+fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Graph Type");
+    let id = ui.make_persistent_id("graph_type_combobox");
+    ComboBox::from_id_salt(id)
+        .selected_text(format!("{}", uis.graph_type))
+        .width(ui.available_width())
+        .show_ui(ui, |ui| {
+            selectable_value(ui, &mut uis.graph_type, GraphType::LightCone);
+            selectable_value(ui, &mut uis.graph_type, GraphType::RapidityField);
+            selectable_value(ui, &mut uis.graph_type, GraphType::BoostExponent);
+            selectable_value(ui, &mut uis.graph_type, GraphType::BivectorVisualization);
+            selectable_value(ui, &mut uis.graph_type, GraphType::QuaternionProjection);
+        });
+}
+
+fn condition_light_cone(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Minkowski Light Cone Slice");
+    dragvalue_normal(ui, &mut uis.graph_t_slice, 0.1, "t slice");
+    label_normal(ui, "Visualizes hyperboloid x²+y²+z² = t²");
+    ui.separator();
+    label_normal(ui, "Use Update Graph to sample points in 3D view.");
+}
+
+fn condition_rapidity_field(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Rapidity Vector Field (from spacetime.rs)");
+    dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.1, "Velocity Scale");
+    label_normal(ui, "Maps v -> rapidity η = artanh(|v|)");
+    ui.separator();
+    label_normal(ui, "Grid of boosted directions shown as vectors.");
+}
+
+fn condition_boost_exponent(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "BivectorBoost::exp (bivector.rs)");
+    dragvalue_normal(ui, &mut uis.graph_phi, 0.1, "Rapidity φ");
+    dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.1, "Direction Scale");
+    label_normal(ui, "Exponential map of boost bivector.");
+    ui.separator();
+    label_normal(ui, "Shows scalar + vector components in 3D.");
+}
+
+fn condition_bivector_viz(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Bivector Visualization");
+    dragvalue_normal(ui, &mut uis.graph_phi, 0.1, "Magnitude");
+    label_normal(ui, "Planes and rotation axes from bivectors.");
+    ui.separator();
+    label_normal(ui, "Visualizes spacetime algebra planes.");
+}
+
+fn condition_quaternion_proj(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "TetraQuaternion Projection (biquaternion.rs)");
+    label_normal(ui, "16D algebra projected to 3D coefficients.");
+    ui.separator();
+    label_normal(ui, "Multiplication table basis visualized.");
 }
