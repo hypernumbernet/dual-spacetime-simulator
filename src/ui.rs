@@ -43,6 +43,17 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     uis.is_running = false;
                     ui.close_menu();
                 }
+                if ui
+                    .selectable_label(
+                        uis.app_mode == crate::ui_state::AppMode::GpuTree,
+                        "GPU Tree (HPG 2025)",
+                    )
+                    .clicked()
+                {
+                    uis.app_mode = crate::ui_state::AppMode::GpuTree;
+                    uis.is_running = false;
+                    ui.close_menu();
+                }
             });
 
             ui.menu_button("Panel", |ui| {
@@ -73,6 +84,14 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 if available.contains(&PanelKind::Graph3D) {
                     if ui
                         .checkbox(&mut uis.is_graph3d_panel_open, PanelKind::Graph3D.label())
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
+                }
+                if available.contains(&PanelKind::GpuTree) {
+                    if ui
+                        .checkbox(&mut uis.is_gpu_tree_panel_open, PanelKind::GpuTree.label())
                         .clicked()
                     {
                         ui.close_menu();
@@ -372,6 +391,24 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 ui.separator();
                 label_normal(ui, "Sample Count");
                 ui.add(Slider::new(&mut uis.graph_sample_count, 100..=5000));
+            });
+    }
+
+    if uis.app_mode == AppMode::GpuTree && uis.is_gpu_tree_panel_open {
+        egui::Window::new("GPU Tree")
+            .resizable(false)
+            .collapsible(true)
+            .default_width(uis.input_panel_width)
+            .show(ctx, |ui| {
+                label_normal(
+                    ui,
+                    "Real-Time GPU Tree Generation (HPG 2025)",
+                );
+                ui.separator();
+                label_normal(
+                    ui,
+                    "GPU pipeline and parameters are not wired yet.",
+                );
             });
     }
 }

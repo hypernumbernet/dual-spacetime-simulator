@@ -359,10 +359,21 @@ impl ApplicationHandler for App {
             pipeline.update_animation();
         }
         let app_mode = self.ui_state.read().unwrap().app_mode;
-        if self.prev_app_mode == AppMode::Graph3D && app_mode != AppMode::Graph3D {
+        let prev = self.prev_app_mode;
+        if prev == AppMode::Graph3D && app_mode != AppMode::Graph3D {
             if let Some(pipeline) = self.render_pipeline.as_mut() {
                 pipeline.set_graph_lines(&[]);
             }
+        }
+        if app_mode == AppMode::GpuTree {
+            if prev != AppMode::GpuTree {
+                if let Some(pipeline) = self.render_pipeline.as_mut() {
+                    pipeline.set_particles(&[], &[]);
+                    pipeline.set_graph_lines(&[]);
+                }
+            }
+            self.prev_app_mode = app_mode;
+            return;
         }
         self.prev_app_mode = app_mode;
 

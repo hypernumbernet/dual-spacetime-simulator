@@ -106,6 +106,8 @@ pub struct ParticleRenderPipeline {
     axes_buffer: Subbuffer<[AxesVertex]>,
     graph_lines_buffer: Option<Subbuffer<[AxesVertex]>>,
     particle_buffer: Subbuffer<[ParticleVertex]>,
+    /// `vkCmdDraw` に渡す頂点数。バッファは Vulkano の都合で最低 1 頂点必要なため、0 のときはダミー 1 頂点を確保し本値は 0 のまま。
+    particle_draw_vertex_count: u32,
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     camera: OrbitCamera,
@@ -133,6 +135,7 @@ impl ParticleRenderPipeline {
         )
         .into();
         let camera = OrbitCamera::new(INITIAL_POSITION, INITIAL_TARGET);
+        let particle_draw_vertex_count = particle_buffer.len() as u32;
         Self {
             queue,
             render_pass,
@@ -142,6 +145,7 @@ impl ParticleRenderPipeline {
             axes_buffer,
             graph_lines_buffer: None,
             particle_buffer,
+            particle_draw_vertex_count,
             memory_allocator: allocator.clone(),
             command_buffer_allocator,
             camera,
@@ -150,7 +154,7 @@ impl ParticleRenderPipeline {
     }
 
     pub fn set_particles(&mut self, positions: &[[f32; 3]], colors: &[[f32; 4]]) {
-        let verts: Vec<ParticleVertex> = positions
+        let mut verts: Vec<ParticleVertex> = positions
             .iter()
             .zip(colors.iter())
             .map(|(p, c)| ParticleVertex {
@@ -158,6 +162,13 @@ impl ParticleRenderPipeline {
                 color: *c,
             })
             .collect();
+        let draw_n = verts.len() as u32;
+        if verts.is_empty() {
+            verts.push(ParticleVertex {
+                position: [0.0, 0.0, 0.0],
+                color: [0.0, 0.0, 0.0, 0.0],
+            });
+        }
         let new_buf = Buffer::from_iter(
             self.memory_allocator.clone(),
             BufferCreateInfo {
@@ -173,6 +184,7 @@ impl ParticleRenderPipeline {
         )
         .unwrap();
         self.particle_buffer = new_buf;
+        self.particle_draw_vertex_count = draw_n;
     }
 
     /// 3D Graph の線分（`LineList`）。空スライスで GPU 上のグラフ線を消去する。
@@ -471,9 +483,10 @@ impl ParticleRenderPipeline {
                 }
             }
         }
-        if app_mode == AppMode::Simulation {
-            self.draw_particles(&mut secondary_builder, &viewport, &push_constants);
-        } else if app_mode == AppMode::Graph3D {
+        if matches!(
+            app_mode,
+            AppMode::Simulation | AppMode::Graph3D | AppMode::GpuTree
+        ) {
             self.draw_particles(&mut secondary_builder, &viewport, &push_constants);
         }
         let cb = secondary_builder.build().unwrap();
@@ -634,6 +647,9 @@ impl ParticleRenderPipeline {
         viewport: &Viewport,
         push_constants: &PushConstants,
     ) {
+        if self.particle_draw_vertex_count == 0 {
+            return;
+        }
         builder
             .bind_pipeline_graphics(self.pipeline_particles.clone())
             .unwrap()
@@ -649,7 +665,7 @@ impl ParticleRenderPipeline {
             .unwrap();
         unsafe {
             builder
-                .draw(self.particle_buffer.len() as u32, 1, 0, 0)
+                .draw(self.particle_draw_vertex_count, 1, 0, 0)
                 .unwrap();
         }
     }

@@ -8,6 +8,8 @@ pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 pub enum AppMode {
     Simulation,
     Graph3D,
+    /// Real-Time GPU Tree Generation (HPG 2025) 向け。GPU 上で木を生成・描画するモード（実装は段階的に追加）。
+    GpuTree,
 }
 
 impl Default for AppMode {
@@ -22,6 +24,7 @@ pub enum PanelKind {
     InitialCondition,
     Settings,
     Graph3D,
+    GpuTree,
 }
 
 impl PanelKind {
@@ -31,6 +34,7 @@ impl PanelKind {
             PanelKind::InitialCondition => "Initial Condition",
             PanelKind::Settings => "Settings",
             PanelKind::Graph3D => "3D Graph",
+            PanelKind::GpuTree => "GPU Tree",
         }
     }
 }
@@ -42,6 +46,8 @@ const PANELS_SIMULATION: &[PanelKind] = &[
 ];
 
 const PANELS_GRAPH3D: &[PanelKind] = &[PanelKind::Graph3D, PanelKind::Settings];
+
+const PANELS_GPU_TREE: &[PanelKind] = &[PanelKind::GpuTree, PanelKind::Settings];
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SimulationType {
@@ -116,6 +122,7 @@ pub struct UiState {
     pub is_initial_condition_panel_open: bool,
     pub is_settings_panel_open: bool,
     pub is_graph3d_panel_open: bool,
+    pub is_gpu_tree_panel_open: bool,
     pub start_maximized: bool,
     pub link_point_size_to_scale: bool,
     pub lock_camera_up: bool,
@@ -163,6 +170,7 @@ impl Default for UiState {
             is_initial_condition_panel_open: false,
             is_settings_panel_open: false,
             is_graph3d_panel_open: false,
+            is_gpu_tree_panel_open: false,
             start_maximized: false,
             link_point_size_to_scale: true,
             lock_camera_up: true,
@@ -206,11 +214,19 @@ impl UiState {
             AppMode::Graph3D => {
                 self.is_simulation_panel_open = false;
                 self.is_initial_condition_panel_open = false;
+                self.is_gpu_tree_panel_open = false;
                 self.is_graph3d_panel_open = true;
                 self.reset_graph_params();
             }
+            AppMode::GpuTree => {
+                self.is_simulation_panel_open = false;
+                self.is_initial_condition_panel_open = false;
+                self.is_graph3d_panel_open = false;
+                self.is_gpu_tree_panel_open = true;
+            }
             AppMode::Simulation => {
                 self.is_graph3d_panel_open = false;
+                self.is_gpu_tree_panel_open = false;
                 self.is_simulation_panel_open = true;
             }
         }
@@ -220,6 +236,7 @@ impl UiState {
         match self.app_mode {
             AppMode::Simulation => PANELS_SIMULATION,
             AppMode::Graph3D => PANELS_GRAPH3D,
+            AppMode::GpuTree => PANELS_GPU_TREE,
         }
     }
 }
