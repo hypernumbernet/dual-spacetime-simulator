@@ -407,8 +407,12 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 ui.separator();
                 label_normal(
                     ui,
-                    "GPU pipeline and parameters are not wired yet.",
+                    "CPU oak-like trees on every xz grid crossing (step 0.5, same as axis floor).",
                 );
+                ui.label("Weber-Penn spline branches + leaves per tree.");
+                ui.label("Switch to GpuTree mode in Mode menu to view.");
+                ui.separator();
+                ui.label("Next: GPU work graphs + full parameters.");
             });
     }
 }

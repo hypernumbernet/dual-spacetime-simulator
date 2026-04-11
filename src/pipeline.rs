@@ -1,5 +1,6 @@
 ﻿use crate::camera::OrbitCamera;
 use crate::integration::Gui;
+use crate::tree::{AXIS_XZ_GRID_EXTENT, AXIS_XZ_GRID_LINE_COUNT};
 use crate::ui_state::*;
 use glam::{Mat4, Vec3};
 use std::sync::Arc;
@@ -106,8 +107,10 @@ pub struct ParticleRenderPipeline {
     axes_buffer: Subbuffer<[AxesVertex]>,
     graph_lines_buffer: Option<Subbuffer<[AxesVertex]>>,
     particle_buffer: Subbuffer<[ParticleVertex]>,
+    tree_buffer: Option<Subbuffer<[AxesVertex]>>,
     /// `vkCmdDraw` に渡す頂点数。バッファは Vulkano の都合で最低 1 頂点必要なため、0 のときはダミー 1 頂点を確保し本値は 0 のまま。
     particle_draw_vertex_count: u32,
+    tree_draw_vertex_count: u32,
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     camera: OrbitCamera,
@@ -145,7 +148,9 @@ impl ParticleRenderPipeline {
             axes_buffer,
             graph_lines_buffer: None,
             particle_buffer,
+            tree_buffer: None,
             particle_draw_vertex_count,
+            tree_draw_vertex_count: 0,
             memory_allocator: allocator.clone(),
             command_buffer_allocator,
             camera,
@@ -215,6 +220,38 @@ impl ParticleRenderPipeline {
         )
         .unwrap();
         self.graph_lines_buffer = Some(new_buf);
+    }
+
+    /// HPG2025 Tree 用。AxesVertex (position + color) で中心線 + 葉をLineList描画。
+    pub fn set_tree_vertices(&mut self, vertices: Vec<([f32; 3], [f32; 4])>) {
+        if vertices.is_empty() {
+            self.tree_buffer = None;
+            self.tree_draw_vertex_count = 0;
+            return;
+        }
+        let verts: Vec<AxesVertex> = vertices
+            .iter()
+            .map(|(p, c)| AxesVertex {
+                position: *p,
+                color: *c,
+            })
+            .collect();
+        let new_buf = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::VERTEX_BUFFER | BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            verts,
+        )
+        .unwrap();
+        self.tree_buffer = Some(new_buf);
+        self.tree_draw_vertex_count = (vertices.len() as u32) / 2 * 2; // LineList用偶数
     }
 
     pub fn revolve_camera(&mut self, delta_yaw: f64, delta_pitch: f64) {
@@ -483,6 +520,21 @@ impl ParticleRenderPipeline {
                 }
             }
         }
+        if app_mode == AppMode::GpuTree {
+            if let Some(ref buf) = self.tree_buffer {
+                if self.tree_draw_vertex_count > 0 {
+                    let tree_push = AxesPushConstants {
+                        view_proj: view_proj.to_cols_array_2d(),
+                    };
+                    self.draw_tree(
+                        &mut secondary_builder,
+                        &viewport,
+                        &tree_push,
+                        buf.clone(),
+                    );
+                }
+            }
+        }
         if matches!(
             app_mode,
             AppMode::Simulation | AppMode::Graph3D | AppMode::GpuTree
@@ -512,8 +564,8 @@ impl ParticleRenderPipeline {
 
     fn create_axes_buffer(allocator: &Arc<StandardMemoryAllocator>) -> Subbuffer<[AxesVertex]> {
         let mut vertices: Vec<AxesVertex> = Vec::new();
-        let range = 2.0;
-        let num_lines = 9;
+        let range = AXIS_XZ_GRID_EXTENT;
+        let num_lines = AXIS_XZ_GRID_LINE_COUNT;
         let step = (2.0 * range) / ((num_lines - 1) as f32);
         for i in 0..num_lines {
             let pos = -range + i as f32 * step;
@@ -611,6 +663,33 @@ impl ParticleRenderPipeline {
         unsafe {
             builder
                 .draw(buffer.len() as u32, 1, 0, 0)
+                .unwrap();
+        }
+    }
+
+    fn draw_tree(
+        &self,
+        builder: &mut AutoCommandBufferBuilder<SecondaryAutoCommandBuffer>,
+        viewport: &Viewport,
+        push_constants: &AxesPushConstants,
+        buffer: Subbuffer<[AxesVertex]>,
+    ) {
+        builder
+            .bind_pipeline_graphics(self.pipeline_axes.clone())
+            .unwrap()
+            .set_viewport(0, [viewport.clone()].into_iter().collect())
+            .unwrap()
+            .bind_vertex_buffers(0, buffer.clone())
+            .unwrap()
+            .push_constants(
+                self.pipeline_axes.layout().clone(),
+                0,
+                push_constants.clone(),
+            )
+            .unwrap();
+        unsafe {
+            builder
+                .draw(self.tree_draw_vertex_count, 1, 0, 0)
                 .unwrap();
         }
     }

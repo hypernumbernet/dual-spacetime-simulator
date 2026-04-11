@@ -10,6 +10,7 @@ mod pipeline;
 mod renderer;
 mod settings;
 mod simulation;
+mod tree;
 mod ui;
 mod ui_state;
 mod ui_styles;
@@ -20,6 +21,7 @@ use crate::integration::{Gui, GuiConfig};
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
+use crate::tree::Tree;
 use crate::ui::draw_ui;
 use crate::ui_state::{AppMode, UiState};
 use std::sync::{Arc, RwLock};
@@ -370,9 +372,14 @@ impl ApplicationHandler for App {
                 if let Some(pipeline) = self.render_pipeline.as_mut() {
                     pipeline.set_particles(&[], &[]);
                     pipeline.set_graph_lines(&[]);
+                    let verts = Tree::generate_forest_vertices_on_axis_xz_grid(
+                        crate::tree::TreeParams::default(),
+                    );
+                    pipeline.set_tree_vertices(verts);
                 }
             }
             self.prev_app_mode = app_mode;
+            // GpuTree モードではシミュレーション/Graph更新をスキップ
             return;
         }
         self.prev_app_mode = app_mode;
