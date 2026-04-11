@@ -370,10 +370,6 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 }
 
                 ui.separator();
-                if button_normal(ui, "Update Graph").clicked() {
-                    uis.is_graph_update_requested = true;
-                }
-                ui.separator();
                 label_normal(ui, "Sample Count");
                 ui.add(Slider::new(&mut uis.graph_sample_count, 100..=5000));
             });
@@ -655,7 +651,7 @@ fn condition_light_cone(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.graph_t_slice, 0.1, "t slice");
     label_normal(ui, "Visualizes hyperboloid x²+y²+z² = t²");
     ui.separator();
-    label_normal(ui, "Use Update Graph to sample points in 3D view.");
+    label_normal(ui, "Points update automatically when parameters change.");
 }
 
 fn condition_rapidity_field(ui: &mut egui::Ui, uis: &mut UiState) {
@@ -663,7 +659,7 @@ fn condition_rapidity_field(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.1, "Velocity Scale");
     label_normal(ui, "Maps v -> rapidity η = artanh(|v|)");
     ui.separator();
-    label_normal(ui, "Grid of boosted directions shown as vectors.");
+    label_normal(ui, "Boost bivector (i,j,k) from sampled velocities; updates live.");
 }
 
 fn condition_boost_exponent(ui: &mut egui::Ui, uis: &mut UiState) {
@@ -672,7 +668,7 @@ fn condition_boost_exponent(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.1, "Direction Scale");
     label_normal(ui, "Exponential map of boost bivector.");
     ui.separator();
-    label_normal(ui, "Shows scalar + vector components in 3D.");
+    label_normal(ui, "Vector part of exp(boost); scalar shades color; updates live.");
 }
 
 fn condition_bivector_viz(ui: &mut egui::Ui, uis: &mut UiState) {
@@ -680,12 +676,12 @@ fn condition_bivector_viz(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.graph_phi, 0.1, "Magnitude");
     label_normal(ui, "Planes and rotation axes from bivectors.");
     ui.separator();
-    label_normal(ui, "Visualizes spacetime algebra planes.");
+    label_normal(ui, "Sampled boost directions scaled by magnitude; updates live.");
 }
 
 fn condition_quaternion_proj(ui: &mut egui::Ui, _uis: &mut UiState) {
     label_normal(ui, "TetraQuaternion Projection (biquaternion.rs)");
     label_normal(ui, "16D algebra projected to 3D coefficients.");
     ui.separator();
-    label_normal(ui, "Multiplication table basis visualized.");
+    label_normal(ui, "I,J,K coeffs of basis products; updates live.");
 }

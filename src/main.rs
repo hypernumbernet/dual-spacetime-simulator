@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod camera;
+mod graph3d;
 mod initial_condition;
 mod integration;
 mod math;
@@ -156,6 +157,7 @@ pub struct App {
     last_right_click_time: Option<Instant>,
     last_right_click_pos: Option<(f64, f64)>,
     settings: AppSettings,
+    last_graph3d_fingerprint: u64,
 }
 
 impl Default for App {
@@ -185,6 +187,7 @@ impl Default for App {
             last_right_click_time: None,
             last_right_click_pos: None,
             settings,
+            last_graph3d_fingerprint: u64::MAX,
         }
     }
 }
@@ -353,6 +356,34 @@ impl ApplicationHandler for App {
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
         }
+        let app_mode = self.ui_state.read().unwrap().app_mode;
+        if app_mode == AppMode::Graph3D {
+            let uis = self.ui_state.read().unwrap();
+            let fp = crate::graph3d::graph_params_fingerprint(
+                uis.graph_type,
+                uis.graph_sample_count,
+                uis.graph_t_slice,
+                uis.graph_velocity_scale,
+                uis.graph_phi,
+            );
+            let (gt, n, t, vs, phi) = (
+                uis.graph_type,
+                uis.graph_sample_count,
+                uis.graph_t_slice,
+                uis.graph_velocity_scale,
+                uis.graph_phi,
+            );
+            drop(uis);
+            if fp != self.last_graph3d_fingerprint {
+                let (pos, col) = crate::graph3d::build_points(gt, n, t, vs, phi);
+                if let Some(pipeline) = self.render_pipeline.as_mut() {
+                    pipeline.set_particles(&pos, &col);
+                }
+                self.last_graph3d_fingerprint = fp;
+            }
+            return;
+        }
+        self.last_graph3d_fingerprint = u64::MAX;
         if *self.need_redraw.read().unwrap() == false {
             return;
         }

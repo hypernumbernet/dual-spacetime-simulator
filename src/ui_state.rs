@@ -126,7 +126,6 @@ pub struct UiState {
     pub graph_t_slice: f64,
     pub graph_velocity_scale: f64,
     pub graph_phi: f64,
-    pub is_graph_update_requested: bool,
 }
 
 impl Default for UiState {
@@ -174,7 +173,6 @@ impl Default for UiState {
             graph_t_slice: 0.0,
             graph_velocity_scale: 1.0,
             graph_phi: 1.0,
-            is_graph_update_requested: false,
         }
     }
 }
@@ -198,7 +196,6 @@ impl UiState {
         self.graph_t_slice = 0.0;
         self.graph_velocity_scale = 1.0;
         self.graph_phi = 1.0;
-        self.is_graph_update_requested = false;
     }
 
     pub fn apply_panel_defaults_on_app_mode_change(&mut self, from: AppMode, to: AppMode) {
