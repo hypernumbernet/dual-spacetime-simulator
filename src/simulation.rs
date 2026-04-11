@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::initial_condition::InitialCondition;
 use crate::math::spacetime::{Spacetime, rapidity_from_momentum};
-use crate::ui_state::{AppMode, SimulationType};
+use crate::ui_state::SimulationType;
 
 pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
 pub const LIGHT_SPEED: f64 = 299_792_458.0; // Speed of light in meters per second
@@ -273,12 +273,6 @@ impl SimulationManager {
             Self::create_simulation(initial_condition, simulation_type, particle_count, scale);
         let mut state_guard = self.state.write().unwrap();
         *state_guard = new_state;
-    }
-
-    pub fn switch_mode(&self, mode: AppMode) {
-        if mode == AppMode::Graph3D {
-            let _state = self.state.write().unwrap();
-        }
     }
 
     pub fn advance(&self, time_per_frame: f64) {

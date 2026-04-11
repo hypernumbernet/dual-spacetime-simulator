@@ -18,11 +18,9 @@ use crate::initial_condition::InitialCondition;
 use crate::integration::{Gui, GuiConfig};
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
-use crate::simulation::{
-    SimulationManager,
-};
+use crate::simulation::SimulationManager;
 use crate::ui::draw_ui;
-use crate::ui_state::UiState;
+use crate::ui_state::{AppMode, UiState};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use vulkano_util::{
@@ -56,7 +54,7 @@ fn main() -> Result<(), EventLoopError> {
         .build()
         .unwrap();
     std::thread::spawn(move || {
-        let simulation_manager = simulation_manager_for_reset;  // renamed for clarity in reset/advance calls
+        let simulation_manager = simulation_manager_for_reset; // renamed for clarity in reset/advance calls
         loop {
             if *need_redraw.read().unwrap() {
                 std::thread::sleep(Duration::from_millis(16));
@@ -64,6 +62,7 @@ fn main() -> Result<(), EventLoopError> {
             }
             let ui_state = ui_state_clone.read().unwrap();
             let is_running = ui_state.is_running;
+            let app_mode = ui_state.app_mode;
             let max_fps = ui_state.max_fps;
             let time_per_frame = ui_state.time_per_frame;
             let is_reset_requested = ui_state.is_reset_requested;
@@ -102,7 +101,7 @@ fn main() -> Result<(), EventLoopError> {
                 drop(ui_state);
                 last_fps = now;
             }
-            if !is_running {
+            if !is_running || app_mode != AppMode::Simulation {
                 std::thread::sleep(Duration::from_millis(16));
                 continue;
             }
@@ -276,7 +275,7 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 gui.immediate_ui(|gui| {
                     let ctx = gui.context();
-                    draw_ui(&self.ui_state, &self.simulation_manager, &mut self.settings, &ctx);
+                    draw_ui(&self.ui_state, &mut self.settings, &ctx);
                 });
                 match renderer.acquire(Some(Duration::from_millis(5000)), |_| {}) {
                     Ok(future) => {
