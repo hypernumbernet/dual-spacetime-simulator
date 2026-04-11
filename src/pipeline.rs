@@ -104,6 +104,7 @@ pub struct ParticleRenderPipeline {
     pipeline_particles: Arc<GraphicsPipeline>,
     subpass: Subpass,
     axes_buffer: Subbuffer<[AxesVertex]>,
+    graph_lines_buffer: Option<Subbuffer<[AxesVertex]>>,
     particle_buffer: Subbuffer<[ParticleVertex]>,
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
@@ -139,6 +140,7 @@ impl ParticleRenderPipeline {
             pipeline_particles,
             subpass,
             axes_buffer,
+            graph_lines_buffer: None,
             particle_buffer,
             memory_allocator: allocator.clone(),
             command_buffer_allocator,
@@ -171,6 +173,36 @@ impl ParticleRenderPipeline {
         )
         .unwrap();
         self.particle_buffer = new_buf;
+    }
+
+    /// 3D Graph の線分（`LineList`）。空スライスで GPU 上のグラフ線を消去する。
+    pub fn set_graph_lines(&mut self, vertices: &[([f32; 3], [f32; 4])]) {
+        if vertices.is_empty() {
+            self.graph_lines_buffer = None;
+            return;
+        }
+        let verts: Vec<AxesVertex> = vertices
+            .iter()
+            .map(|(p, c)| AxesVertex {
+                position: *p,
+                color: *c,
+            })
+            .collect();
+        let new_buf = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::VERTEX_BUFFER | BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            verts,
+        )
+        .unwrap();
+        self.graph_lines_buffer = Some(new_buf);
     }
 
     pub fn revolve_camera(&mut self, delta_yaw: f64, delta_pitch: f64) {
@@ -424,6 +456,21 @@ impl ParticleRenderPipeline {
             view_proj: view_proj.to_cols_array_2d(),
             size_scale: size_scale.into(),
         };
+        if app_mode == AppMode::Graph3D {
+            if let Some(ref buf) = self.graph_lines_buffer {
+                if buf.len() > 0 {
+                    let line_push = AxesPushConstants {
+                        view_proj: view_proj.to_cols_array_2d(),
+                    };
+                    self.draw_graph_lines(
+                        &mut secondary_builder,
+                        &viewport,
+                        &line_push,
+                        buf.clone(),
+                    );
+                }
+            }
+        }
         if app_mode == AppMode::Simulation {
             self.draw_particles(&mut secondary_builder, &viewport, &push_constants);
         } else if app_mode == AppMode::Graph3D {
@@ -526,6 +573,33 @@ impl ParticleRenderPipeline {
             particles,
         )
         .unwrap()
+    }
+
+    fn draw_graph_lines(
+        &self,
+        builder: &mut AutoCommandBufferBuilder<SecondaryAutoCommandBuffer>,
+        viewport: &Viewport,
+        push_constants: &AxesPushConstants,
+        buffer: Subbuffer<[AxesVertex]>,
+    ) {
+        builder
+            .bind_pipeline_graphics(self.pipeline_axes.clone())
+            .unwrap()
+            .set_viewport(0, [viewport.clone()].into_iter().collect())
+            .unwrap()
+            .bind_vertex_buffers(0, buffer.clone())
+            .unwrap()
+            .push_constants(
+                self.pipeline_axes.layout().clone(),
+                0,
+                push_constants.clone(),
+            )
+            .unwrap();
+        unsafe {
+            builder
+                .draw(buffer.len() as u32, 1, 0, 0)
+                .unwrap();
+        }
     }
 
     fn draw_axes(

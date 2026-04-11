@@ -150,3 +150,35 @@ pub fn build_points(
 
     (positions, colors)
 }
+
+/// `LineList` 用の頂点列（連続する 2 頂点が 1 線分）。`GraphType::LightCone` のみ非空。
+pub fn build_graph_line_vertices(
+    graph_type: GraphType,
+    graph_sample_count: u32,
+    graph_t_slice: f64,
+    _graph_velocity_scale: f64,
+    _graph_phi: f64,
+) -> Vec<([f32; 3], [f32; 4])> {
+    match graph_type {
+        GraphType::LightCone => build_light_cone_line_vertices(graph_sample_count, graph_t_slice),
+        _ => Vec::new(),
+    }
+}
+
+fn build_light_cone_line_vertices(graph_sample_count: u32, graph_t_slice: f64) -> Vec<([f32; 3], [f32; 4])> {
+    let n = clamp_samples(graph_sample_count);
+    let r = graph_t_slice.abs();
+    let origin = [0.0_f32, 0.0, 0.0];
+    let mut out = Vec::with_capacity(n * 2);
+    for i in 0..n {
+        let d = fibonacci_unit_direction(i, n);
+        let end = [(d[0] * r) as f32, (d[1] * r) as f32, (d[2] * r) as f32];
+        let cr = (0.5 + 0.5 * d[0]) as f32;
+        let cg = (0.5 + 0.5 * d[1]) as f32;
+        let cb = (0.5 + 0.5 * d[2]) as f32;
+        let c = [cr, cg, cb, 1.0];
+        out.push((origin, c));
+        out.push((end, c));
+    }
+    out
+}

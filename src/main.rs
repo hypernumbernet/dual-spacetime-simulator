@@ -158,6 +158,7 @@ pub struct App {
     last_right_click_pos: Option<(f64, f64)>,
     settings: AppSettings,
     last_graph3d_fingerprint: u64,
+    prev_app_mode: AppMode,
 }
 
 impl Default for App {
@@ -188,6 +189,7 @@ impl Default for App {
             last_right_click_pos: None,
             settings,
             last_graph3d_fingerprint: u64::MAX,
+            prev_app_mode: AppMode::default(),
         }
     }
 }
@@ -357,6 +359,13 @@ impl ApplicationHandler for App {
             pipeline.update_animation();
         }
         let app_mode = self.ui_state.read().unwrap().app_mode;
+        if self.prev_app_mode == AppMode::Graph3D && app_mode != AppMode::Graph3D {
+            if let Some(pipeline) = self.render_pipeline.as_mut() {
+                pipeline.set_graph_lines(&[]);
+            }
+        }
+        self.prev_app_mode = app_mode;
+
         if app_mode == AppMode::Graph3D {
             let uis = self.ui_state.read().unwrap();
             let fp = crate::graph3d::graph_params_fingerprint(
@@ -376,8 +385,10 @@ impl ApplicationHandler for App {
             drop(uis);
             if fp != self.last_graph3d_fingerprint {
                 let (pos, col) = crate::graph3d::build_points(gt, n, t, vs, phi);
+                let line_verts = crate::graph3d::build_graph_line_vertices(gt, n, t, vs, phi);
                 if let Some(pipeline) = self.render_pipeline.as_mut() {
                     pipeline.set_particles(&pos, &col);
+                    pipeline.set_graph_lines(&line_verts);
                 }
                 self.last_graph3d_fingerprint = fp;
             }
