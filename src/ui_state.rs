@@ -16,6 +16,33 @@ impl Default for AppMode {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PanelKind {
+    Simulation,
+    InitialCondition,
+    Settings,
+    Graph3D,
+}
+
+impl PanelKind {
+    pub const fn label(self) -> &'static str {
+        match self {
+            PanelKind::Simulation => "Simulation",
+            PanelKind::InitialCondition => "Initial Condition",
+            PanelKind::Settings => "Settings",
+            PanelKind::Graph3D => "3D Graph",
+        }
+    }
+}
+
+const PANELS_SIMULATION: &[PanelKind] = &[
+    PanelKind::Simulation,
+    PanelKind::InitialCondition,
+    PanelKind::Settings,
+];
+
+const PANELS_GRAPH3D: &[PanelKind] = &[PanelKind::Graph3D];
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SimulationType {
     Normal,
@@ -190,10 +217,10 @@ impl UiState {
         }
     }
 
-    pub fn get_available_panels(&self) -> Vec<&'static str> {
+    pub fn get_available_panels(&self) -> &'static [PanelKind] {
         match self.app_mode {
-            AppMode::Simulation => vec!["Simulation", "Initial Condition", "Settings"],
-            AppMode::Graph3D => vec!["3D Graph"],
+            AppMode::Simulation => PANELS_SIMULATION,
+            AppMode::Graph3D => PANELS_GRAPH3D,
         }
     }
 }

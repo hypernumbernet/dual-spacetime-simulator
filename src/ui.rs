@@ -53,36 +53,45 @@ pub fn draw_ui(
             ui.menu_button("Panel", |ui| {
                 ui.set_min_width(MENU_POPUP_WIDTH);
                 let available = uis.get_available_panels();
-                if available.contains(&"Simulation") {
-                    if ui
-                        .checkbox(&mut uis.is_simulation_panel_open, "Simulation")
-                        .clicked()
-                    {
-                        ui.close_menu();
-                    }
-                }
-                if available.contains(&"Initial Condition") {
+                if available.contains(&PanelKind::Simulation) {
                     if ui
                         .checkbox(
-                            &mut uis.is_initial_condition_panel_open,
-                            "Initial Condition",
+                            &mut uis.is_simulation_panel_open,
+                            PanelKind::Simulation.label(),
                         )
                         .clicked()
                     {
                         ui.close_menu();
                     }
                 }
-                if available.contains(&"Settings") {
+                if available.contains(&PanelKind::InitialCondition) {
                     if ui
-                        .checkbox(&mut uis.is_settings_panel_open, "Settings")
+                        .checkbox(
+                            &mut uis.is_initial_condition_panel_open,
+                            PanelKind::InitialCondition.label(),
+                        )
                         .clicked()
                     {
                         ui.close_menu();
                     }
                 }
-                if available.contains(&"3D Graph") {
+                if available.contains(&PanelKind::Settings) {
                     if ui
-                        .checkbox(&mut uis.is_graph3d_panel_open, "3D Graph")
+                        .checkbox(
+                            &mut uis.is_settings_panel_open,
+                            PanelKind::Settings.label(),
+                        )
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
+                }
+                if available.contains(&PanelKind::Graph3D) {
+                    if ui
+                        .checkbox(
+                            &mut uis.is_graph3d_panel_open,
+                            PanelKind::Graph3D.label(),
+                        )
                         .clicked()
                     {
                         ui.close_menu();
