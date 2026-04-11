@@ -1,5 +1,6 @@
-use glam::{Quat, Vec3};
+use glam::{FloatExt, Quat, Vec3};
 use rand::{Rng, SeedableRng};
+use std::f32::consts::TAU;
 
 /// xz 平面の座標軸補助グリッドと同じ設定（`pipeline::create_axes_buffer` と同期）
 pub const AXIS_XZ_GRID_EXTENT: f32 = 2.0;
@@ -77,8 +78,6 @@ pub struct Branch {
 
 pub struct Tree {
     pub root: Branch,
-    pub bounds_min: Vec3,
-    pub bounds_max: Vec3,
 }
 
 impl Tree {
@@ -106,20 +105,24 @@ impl Tree {
             children: vec![],
         };
 
-        Self::grow_branch(&mut root, &params, &mut rng, &mut bounds_min, &mut bounds_max);
+        Self::grow_branch(
+            &mut root,
+            &params,
+            &mut rng,
+            &mut bounds_min,
+            &mut bounds_max,
+        );
 
         // バウンズ更新 (rootも)
         Self::update_bounds(&root, &mut bounds_min, &mut bounds_max);
 
-        Tree {
-            root,
-            bounds_min,
-            bounds_max,
-        }
+        Tree { root }
     }
 
     /// 軸グリッド線（0.5 間隔）の xz 交点すべてに 1 本ずつ木を置き、描画頂点を連結する。
-    pub fn generate_forest_vertices_on_axis_xz_grid(params: TreeParams) -> Vec<([f32; 3], [f32; 4])> {
+    pub fn generate_forest_vertices_on_axis_xz_grid(
+        params: TreeParams,
+    ) -> Vec<([f32; 3], [f32; 4])> {
         let n = AXIS_XZ_GRID_LINE_COUNT;
         let step = (2.0 * AXIS_XZ_GRID_EXTENT) / ((n - 1) as f32);
         let mut out = Vec::new();
@@ -157,16 +160,28 @@ impl Tree {
         }
     }
 
-    /// TreeParams の fingerprint (ui_state と同期)
-    pub fn params_fingerprint(params: TreeParams) -> u64 {
-        let mut hash = 0u64;
-        hash = hash.wrapping_add(params.seed as u64);
-        hash = hash.wrapping_mul(31).wrapping_add((params.trunk_height * 100.0) as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(params.max_depth as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(params.branch_factor as u64);
-        hash = hash.wrapping_mul(31).wrapping_add((params.branch_angle * 100.0) as u64);
-        hash = hash.wrapping_mul(31).wrapping_add((params.tropism * 100.0) as u64);
-        hash
+    /// 軸グリッド線（0.5 間隔）の xz 交点すべてに 1 本ずつ木を置き、Tubeメッシュを連結する。
+    pub fn generate_forest_tube_vertices_on_axis_xz_grid(
+        params: TreeParams,
+    ) -> Vec<([f32; 3], [f32; 3], [f32; 4])> {
+        let n = AXIS_XZ_GRID_LINE_COUNT;
+        let step = (2.0 * AXIS_XZ_GRID_EXTENT) / ((n - 1) as f32);
+        let mut out = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                let x = -AXIS_XZ_GRID_EXTENT + i as f32 * step;
+                let z = -AXIS_XZ_GRID_EXTENT + j as f32 * step;
+                let base = Vec3::new(x, 0.0, z);
+                let mut p = params;
+                p.seed = params
+                    .seed
+                    .wrapping_add((i as u32).wrapping_mul(1_000_003))
+                    .wrapping_add((j as u32).wrapping_mul(97));
+                let tree = Tree::generate(p);
+                out.extend(tree.generate_tube_vertices_at(base));
+            }
+        }
+        out
     }
 
     fn grow_branch(
@@ -180,7 +195,11 @@ impl Tree {
             return;
         }
 
-        let num_children = if branch.depth == 0 { 4 } else { params.branch_factor as usize };
+        let num_children = if branch.depth == 0 {
+            4
+        } else {
+            params.branch_factor as usize
+        };
         let attach_step = 1.0 / (num_children as f32 + 1.0);
 
         for i in 0..num_children {
@@ -203,7 +222,9 @@ impl Tree {
             let rot = Quat::from_axis_angle(binormal, angle);
             let child_dir = rot * tangent;
 
-            let child_length = branch.spline.p1.distance(branch.spline.p0) * 0.6 * (0.7f32).powi(branch.depth as i32);
+            let child_length = branch.spline.p1.distance(branch.spline.p0)
+                * 0.6
+                * (0.7f32).powi(branch.depth as i32);
             let child_p1 = attach_pos + child_dir * child_length;
 
             let child_m0 = child_dir * child_length * 0.5;
@@ -237,7 +258,117 @@ impl Tree {
         }
     }
 
-    /// 描画用頂点生成 (AxesVertex互換で中心線 + 色)
+    /// 指定base位置にTubeメッシュを生成（Forest対応）。
+    pub fn generate_tube_vertices_at(&self, base: Vec3) -> Vec<([f32; 3], [f32; 3], [f32; 4])> {
+        let mut verts = Vec::new();
+        Self::collect_tube_vertices(&self.root, base, &mut verts);
+        verts
+    }
+
+    fn collect_tube_vertices(
+        branch: &Branch,
+        base: Vec3,
+        verts: &mut Vec<([f32; 3], [f32; 3], [f32; 4])>,
+    ) {
+        let segments = 8; // セグメント数 (精度と性能のバランス)
+        let sides = 8; // 円周の分割数 (ポリゴン数に影響)
+        let color = if branch.depth == 0 {
+            [0.55, 0.35, 0.15, 1.0] // 幹: 濃い茶
+        } else if branch.depth < 3 {
+            [0.45, 0.28, 0.12, 1.0]
+        } else {
+            [0.1, 0.7, 0.15, 1.0] // 葉: 緑 (葉は薄く)
+        };
+
+        let radius_start = branch.radius_base;
+        let radius_end = branch.radius_tip;
+
+        for i in 0..segments {
+            let t0 = i as f32 / segments as f32;
+            let t1 = (i + 1) as f32 / segments as f32;
+
+            let p0 = branch.spline.eval(t0) + base;
+            let p1 = branch.spline.eval(t1) + base;
+            let tangent0 = branch.spline.eval_tangent(t0);
+            let tangent1 = branch.spline.eval_tangent(t1);
+
+            let r0 = radius_start.lerp(radius_end, t0);
+            let r1 = radius_start.lerp(radius_end, t1);
+
+            // フレーム計算 (接線から法線・副法線)
+            let up = Vec3::Y;
+            let binormal0 = if tangent0.cross(up).length() > 0.01 {
+                tangent0.cross(up).normalize()
+            } else {
+                Vec3::X
+            };
+            let normal0 = binormal0.cross(tangent0).normalize();
+
+            let binormal1 = if tangent1.cross(up).length() > 0.01 {
+                tangent1.cross(up).normalize()
+            } else {
+                Vec3::X
+            };
+            let normal1 = binormal1.cross(tangent1).normalize();
+
+            // 各リングの頂点 (sides数)
+            for s in 0..=sides {
+                let angle = (s as f32 / sides as f32) * TAU;
+                let cos_a = angle.cos();
+                let sin_a = angle.sin();
+
+                // リング0
+                let offset0 = normal0 * cos_a + binormal0 * sin_a;
+                let pos0 = p0 + offset0 * r0;
+                let n0 = offset0.normalize(); // 近似法線
+                let y0 = -pos0.y; // 表示Y反転
+                verts.push(([pos0.x, y0, pos0.z], [n0.x, -n0.y, n0.z], color)); // normalもY反転
+
+                // リング1
+                let offset1 = normal1 * cos_a + binormal1 * sin_a;
+                let pos1 = p1 + offset1 * r1;
+                let n1 = offset1.normalize();
+                let y1 = -pos1.y;
+                verts.push(([pos1.x, y1, pos1.z], [n1.x, -n1.y, n1.z], color));
+            }
+        }
+
+        // 子枝 (再帰)
+        for child in &branch.children {
+            Self::collect_tube_vertices(child, base, verts);
+        }
+
+        // 葉 (簡易: 末端に小さなTube or 残す)
+        if branch.children.is_empty() && branch.depth >= 3 {
+            // 葉は薄いTubeとして簡易表現 (またはスキップして性能重視)
+            let tip = branch.spline.eval(1.0) + base;
+            let leaf_r = 0.03f32;
+            let leaf_color = [0.1, 0.8, 0.2, 1.0];
+            let leaf_tangent = branch.spline.eval_tangent(1.0);
+            let leaf_binormal = if leaf_tangent.cross(Vec3::Y).length() > 0.01 {
+                leaf_tangent.cross(Vec3::Y).normalize()
+            } else {
+                Vec3::X
+            };
+            let leaf_normal = leaf_binormal.cross(leaf_tangent).normalize();
+
+            for s in 0..=sides {
+                let angle = (s as f32 / sides as f32) * TAU;
+                let cos_a = angle.cos();
+                let sin_a = angle.sin();
+                let offset = leaf_normal * cos_a + leaf_binormal * sin_a;
+                let pos = tip + offset * leaf_r;
+                let n = offset.normalize();
+                let y = -pos.y;
+                verts.push(([pos.x, y, pos.z], [n.x, -n.y, n.z], leaf_color));
+                // 2回pushで簡易Quad (実際はleaf_tipをもう1頂点)
+                let tip_y = -tip.y;
+                verts.push(([tip.x, tip_y, tip.z], [0.0, 1.0, 0.0], leaf_color));
+            }
+        }
+    }
+
+    /// 旧LineList互換 (後方互換/テスト用)
     #[allow(dead_code)]
     pub fn generate_vertices(&self) -> Vec<([f32; 3], [f32; 4])> {
         self.generate_vertices_at(Vec3::ZERO)

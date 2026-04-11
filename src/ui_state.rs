@@ -94,6 +94,23 @@ impl std::fmt::Display for GpuTreeLayout {
     }
 }
 
+/// GpuTree の描画モード: 線分 (LineList) または ポリゴンチューブ (TriangleList with normals/lighting)
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GpuTreeRenderMode {
+    Lines,
+    Polygons,
+}
+
+impl std::fmt::Display for GpuTreeRenderMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            GpuTreeRenderMode::Lines => "Lines",
+            GpuTreeRenderMode::Polygons => "Polygons",
+        };
+        write!(f, "{}", text)
+    }
+}
+
 impl std::fmt::Display for GraphType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
@@ -152,6 +169,7 @@ pub struct UiState {
     pub graph_velocity_scale: f64,
     pub graph_phi: f64,
     pub gpu_tree_layout: GpuTreeLayout,
+    pub gpu_tree_render_mode: GpuTreeRenderMode,
     pub gpu_tree_params: TreeParams,
     pub last_gpu_tree_fingerprint: u64,
 }
@@ -202,7 +220,8 @@ impl Default for UiState {
             graph_t_slice: 0.0,
             graph_velocity_scale: 1.0,
             graph_phi: 1.0,
-            gpu_tree_layout: GpuTreeLayout::ForestOnGrid,
+            gpu_tree_layout: GpuTreeLayout::Single,
+            gpu_tree_render_mode: GpuTreeRenderMode::Polygons,
             gpu_tree_params: TreeParams::default(),
             last_gpu_tree_fingerprint: 0,
         }
@@ -231,7 +250,8 @@ impl UiState {
     }
 
     pub fn reset_gpu_tree_params(&mut self) {
-        self.gpu_tree_layout = GpuTreeLayout::ForestOnGrid;
+        self.gpu_tree_layout = GpuTreeLayout::Single;
+        self.gpu_tree_render_mode = GpuTreeRenderMode::Polygons;
         self.gpu_tree_params = TreeParams::default();
         self.last_gpu_tree_fingerprint = 0;
     }
@@ -240,13 +260,29 @@ impl UiState {
     pub fn gpu_tree_fingerprint(&self) -> u64 {
         let mut hash = 0u64;
         hash = hash.wrapping_add(self.gpu_tree_layout as u64);
+        hash = hash.wrapping_add((self.gpu_tree_render_mode as u64) * 17); // render modeも検知
         // TreeParams の主要フィールドを簡易ハッシュ化
-        hash = hash.wrapping_mul(31).wrapping_add(self.gpu_tree_params.seed as u64);
-        hash = hash.wrapping_mul(31).wrapping_add((self.gpu_tree_params.trunk_height * 100.0) as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(self.gpu_tree_params.max_depth as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(self.gpu_tree_params.branch_factor as u64);
-        hash = hash.wrapping_mul(31).wrapping_add((self.gpu_tree_params.branch_angle * 100.0) as u64);
-        hash = hash.wrapping_mul(31).wrapping_add((self.gpu_tree_params.tropism * 100.0) as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(self.gpu_tree_params.seed as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add((self.gpu_tree_params.trunk_height * 100.0) as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add((self.gpu_tree_params.trunk_radius_base * 1000.0) as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(self.gpu_tree_params.max_depth as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(self.gpu_tree_params.branch_factor as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add((self.gpu_tree_params.branch_angle * 100.0) as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add((self.gpu_tree_params.tropism * 100.0) as u64);
         hash
     }
 

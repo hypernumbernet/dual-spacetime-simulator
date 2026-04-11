@@ -23,7 +23,8 @@ use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
 use crate::tree::Tree;
 use crate::ui::draw_ui;
-use crate::ui_state::{AppMode, UiState};
+use crate::ui_state::{AppMode, GpuTreeLayout, GpuTreeRenderMode, UiState};
+use glam::Vec3;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use vulkano_util::{
@@ -293,6 +294,11 @@ impl ApplicationHandler for App {
                         let link_point_size_to_scale = ui_state.link_point_size_to_scale;
                         let show_grid = ui_state.show_grid;
                         let app_mode = ui_state.app_mode;
+                        let gpu_tree_render_mode = if app_mode == AppMode::GpuTree {
+                            ui_state.gpu_tree_render_mode
+                        } else {
+                            GpuTreeRenderMode::Polygons
+                        };
                         drop(ui_state);
                         let after_future = pipeline.render(
                             future,
@@ -302,6 +308,7 @@ impl ApplicationHandler for App {
                             link_point_size_to_scale,
                             show_grid,
                             app_mode,
+                            gpu_tree_render_mode,
                         );
                         renderer.present(after_future, true);
                     }
@@ -373,6 +380,7 @@ impl ApplicationHandler for App {
             let uis = self.ui_state.read().unwrap();
             let fp = uis.gpu_tree_fingerprint();
             let layout = uis.gpu_tree_layout;
+            let render_mode = uis.gpu_tree_render_mode;
             let params = uis.gpu_tree_params;
             drop(uis);
 
@@ -381,8 +389,26 @@ impl ApplicationHandler for App {
                 if let Some(pipeline) = self.render_pipeline.as_mut() {
                     pipeline.set_particles(&[], &[]);
                     pipeline.set_graph_lines(&[]);
-                    let verts = Tree::generate_vertices_for_layout(layout, params);
-                    pipeline.set_tree_vertices(verts);
+                    match render_mode {
+                        GpuTreeRenderMode::Lines => {
+                            // 線描画: generate_vertices_for_layout で LineList 互換頂点 (AxesVertex)
+                            let line_verts = Tree::generate_vertices_for_layout(layout, params);
+                            pipeline.set_graph_lines(&line_verts);
+                        }
+                        GpuTreeRenderMode::Polygons => {
+                            // ポリゴン描画: Tubeメッシュ (TreeVertex, TriangleList + lighting)
+                            let tube_verts = match layout {
+                                GpuTreeLayout::Single => {
+                                    let tree = Tree::generate(params);
+                                    tree.generate_tube_vertices_at(Vec3::ZERO)
+                                }
+                                GpuTreeLayout::ForestOnGrid => {
+                                    Tree::generate_forest_tube_vertices_on_axis_xz_grid(params)
+                                }
+                            };
+                            pipeline.set_tree_vertices(tube_verts);
+                        }
+                    }
                 }
                 self.last_gpu_tree_fingerprint = fp;
             }

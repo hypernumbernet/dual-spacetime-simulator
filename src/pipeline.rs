@@ -58,6 +58,17 @@ struct ParticleVertex {
 }
 
 #[repr(C)]
+#[derive(BufferContents, Vertex, Clone, Copy)]
+struct TreeVertex {
+    #[format(R32G32B32_SFLOAT)]
+    position: [f32; 3],
+    #[format(R32G32B32_SFLOAT)]
+    normal: [f32; 3],
+    #[format(R32G32B32A32_SFLOAT)]
+    color: [f32; 4],
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, BufferContents)]
 struct AxesPushConstants {
     view_proj: [[f32; 4]; 4],
@@ -98,23 +109,37 @@ mod fs_particles {
     }
 }
 
+mod vs_tree {
+    vulkano_shaders::shader! {
+        ty: "vertex",
+        path: "./src/shaders/tree_vertex.vert"
+    }
+}
+
+mod fs_tree {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "./src/shaders/tree_fragment.frag"
+    }
+}
+
 pub struct ParticleRenderPipeline {
     queue: Arc<Queue>,
     render_pass: Arc<RenderPass>,
     pipeline_axes: Arc<GraphicsPipeline>,
     pipeline_particles: Arc<GraphicsPipeline>,
+    pipeline_tree: Arc<GraphicsPipeline>,
     subpass: Subpass,
     axes_buffer: Subbuffer<[AxesVertex]>,
     graph_lines_buffer: Option<Subbuffer<[AxesVertex]>>,
     particle_buffer: Subbuffer<[ParticleVertex]>,
-    tree_buffer: Option<Subbuffer<[AxesVertex]>>,
+    tree_buffer: Option<Subbuffer<[TreeVertex]>>,
     /// `vkCmdDraw` に渡す頂点数。バッファは Vulkano の都合で最低 1 頂点必要なため、0 のときはダミー 1 頂点を確保し本値は 0 のまま。
     particle_draw_vertex_count: u32,
     tree_draw_vertex_count: u32,
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     camera: OrbitCamera,
-    // aspect_ratio: f32,
 }
 
 impl ParticleRenderPipeline {
@@ -124,7 +149,7 @@ impl ParticleRenderPipeline {
         allocator: &Arc<StandardMemoryAllocator>,
     ) -> Self {
         let render_pass = Self::create_render_pass(queue.device().clone(), image_format);
-        let (pipeline_axes, pipeline_particles, subpass) =
+        let (pipeline_axes, pipeline_particles, pipeline_tree, subpass) =
             Self::create_pipeline(queue.device().clone(), render_pass.clone());
         let axes_buffer = Self::create_axes_buffer(allocator);
         let particle_buffer = Self::create_particle_buffer(allocator);
@@ -144,6 +169,7 @@ impl ParticleRenderPipeline {
             render_pass,
             pipeline_axes,
             pipeline_particles,
+            pipeline_tree,
             subpass,
             axes_buffer,
             graph_lines_buffer: None,
@@ -154,7 +180,6 @@ impl ParticleRenderPipeline {
             memory_allocator: allocator.clone(),
             command_buffer_allocator,
             camera,
-            // aspect_ratio: 1.0,
         }
     }
 
@@ -222,17 +247,19 @@ impl ParticleRenderPipeline {
         self.graph_lines_buffer = Some(new_buf);
     }
 
-    /// HPG2025 Tree 用。AxesVertex (position + color) で中心線 + 葉をLineList描画。
-    pub fn set_tree_vertices(&mut self, vertices: Vec<([f32; 3], [f32; 4])>) {
+    /// Polygons (Tube) モード専用。TreeVertex (position + normal + color) でTriangleListを描画。
+    /// Linesモードはset_graph_linesを使用 (LineList)。
+    pub fn set_tree_vertices(&mut self, vertices: Vec<([f32; 3], [f32; 3], [f32; 4])>) {
         if vertices.is_empty() {
             self.tree_buffer = None;
             self.tree_draw_vertex_count = 0;
             return;
         }
-        let verts: Vec<AxesVertex> = vertices
+        let verts: Vec<TreeVertex> = vertices
             .iter()
-            .map(|(p, c)| AxesVertex {
+            .map(|(p, n, c)| TreeVertex {
                 position: *p,
+                normal: *n,
                 color: *c,
             })
             .collect();
@@ -247,11 +274,11 @@ impl ParticleRenderPipeline {
                     | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                 ..Default::default()
             },
-            verts,
+            verts.clone(),
         )
         .unwrap();
         self.tree_buffer = Some(new_buf);
-        self.tree_draw_vertex_count = (vertices.len() as u32) / 2 * 2; // LineList用偶数
+        self.tree_draw_vertex_count = verts.len() as u32;
     }
 
     pub fn revolve_camera(&mut self, delta_yaw: f64, delta_pitch: f64) {
@@ -329,7 +356,12 @@ impl ParticleRenderPipeline {
     fn create_pipeline(
         device: Arc<Device>,
         render_pass: Arc<RenderPass>,
-    ) -> (Arc<GraphicsPipeline>, Arc<GraphicsPipeline>, Subpass) {
+    ) -> (
+        Arc<GraphicsPipeline>,
+        Arc<GraphicsPipeline>,
+        Arc<GraphicsPipeline>,
+        Subpass,
+    ) {
         let subpass = Subpass::from(render_pass, 0).unwrap();
         let vs_axes = vs_axes::load(device.clone())
             .expect("failed to create shader module")
@@ -430,7 +462,55 @@ impl ParticleRenderPipeline {
             },
         )
         .unwrap();
-        (pipeline_axes, pipeline_particles, subpass)
+
+        let vs_tree = vs_tree::load(device.clone())
+            .expect("failed to create shader module")
+            .entry_point("main")
+            .unwrap();
+        let fs_tree = fs_tree::load(device.clone())
+            .expect("failed to create shader module")
+            .entry_point("main")
+            .unwrap();
+        let vertex_input_state_tree = TreeVertex::per_vertex().definition(&vs_tree).unwrap();
+        let tree_stages = [
+            PipelineShaderStageCreateInfo::new(vs_tree),
+            PipelineShaderStageCreateInfo::new(fs_tree),
+        ];
+        let tree_layout = PipelineLayout::new(
+            device.clone(),
+            PipelineDescriptorSetLayoutCreateInfo::from_stages(&tree_stages)
+                .into_pipeline_layout_create_info(device.clone())
+                .unwrap(),
+        )
+        .unwrap();
+        let pipeline_tree = GraphicsPipeline::new(
+            device.clone(),
+            None,
+            GraphicsPipelineCreateInfo {
+                stages: tree_stages.into_iter().collect(),
+                vertex_input_state: Some(vertex_input_state_tree),
+                input_assembly_state: Some(InputAssemblyState {
+                    topology: PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                }),
+                viewport_state: Some(ViewportState::default()),
+                rasterization_state: Some(RasterizationState {
+                    cull_mode: vulkano::pipeline::graphics::rasterization::CullMode::Back,
+                    ..Default::default()
+                }),
+                multisample_state: Some(MultisampleState::default()),
+                color_blend_state: Some(ColorBlendState::with_attachment_states(
+                    subpass.num_color_attachments(),
+                    ColorBlendAttachmentState::default(),
+                )),
+                dynamic_state: [DynamicState::Viewport].into_iter().collect(),
+                subpass: Some(subpass.clone().into()),
+                ..GraphicsPipelineCreateInfo::layout(tree_layout)
+            },
+        )
+        .unwrap();
+
+        (pipeline_axes, pipeline_particles, pipeline_tree, subpass)
     }
 
     pub fn render(
@@ -442,6 +522,7 @@ impl ParticleRenderPipeline {
         link_point_size_to_scale: bool,
         show_grid: bool,
         app_mode: AppMode,
+        gpu_tree_render_mode: GpuTreeRenderMode,
     ) -> Box<dyn GpuFuture> {
         let mut builder = AutoCommandBufferBuilder::primary(
             self.command_buffer_allocator.clone(),
@@ -521,17 +602,33 @@ impl ParticleRenderPipeline {
             }
         }
         if app_mode == AppMode::GpuTree {
-            if let Some(ref buf) = self.tree_buffer {
-                if self.tree_draw_vertex_count > 0 {
-                    let tree_push = AxesPushConstants {
-                        view_proj: view_proj.to_cols_array_2d(),
-                    };
-                    self.draw_tree(
-                        &mut secondary_builder,
-                        &viewport,
-                        &tree_push,
-                        buf.clone(),
-                    );
+            match gpu_tree_render_mode {
+                GpuTreeRenderMode::Lines => {
+                    // Linesモード: graph_lines_buffer (LineList) を draw_graph_lines で描画
+                    if let Some(ref buf) = self.graph_lines_buffer {
+                        if buf.len() > 0 {
+                            let line_push = AxesPushConstants {
+                                view_proj: view_proj.to_cols_array_2d(),
+                            };
+                            self.draw_graph_lines(
+                                &mut secondary_builder,
+                                &viewport,
+                                &line_push,
+                                buf.clone(),
+                            );
+                        }
+                    }
+                }
+                GpuTreeRenderMode::Polygons => {
+                    // Polygonsモード: tree_buffer (TriangleList + normals) を draw_tree で描画
+                    if let Some(ref buf) = self.tree_buffer {
+                        if self.tree_draw_vertex_count > 0 {
+                            let tree_push = AxesPushConstants {
+                                view_proj: view_proj.to_cols_array_2d(),
+                            };
+                            self.draw_tree(&mut secondary_builder, &viewport, &tree_push, buf.clone());
+                        }
+                    }
                 }
             }
         }
@@ -661,9 +758,7 @@ impl ParticleRenderPipeline {
             )
             .unwrap();
         unsafe {
-            builder
-                .draw(buffer.len() as u32, 1, 0, 0)
-                .unwrap();
+            builder.draw(buffer.len() as u32, 1, 0, 0).unwrap();
         }
     }
 
@@ -672,25 +767,23 @@ impl ParticleRenderPipeline {
         builder: &mut AutoCommandBufferBuilder<SecondaryAutoCommandBuffer>,
         viewport: &Viewport,
         push_constants: &AxesPushConstants,
-        buffer: Subbuffer<[AxesVertex]>,
+        buffer: Subbuffer<[TreeVertex]>,
     ) {
         builder
-            .bind_pipeline_graphics(self.pipeline_axes.clone())
+            .bind_pipeline_graphics(self.pipeline_tree.clone())
             .unwrap()
             .set_viewport(0, [viewport.clone()].into_iter().collect())
             .unwrap()
             .bind_vertex_buffers(0, buffer.clone())
             .unwrap()
             .push_constants(
-                self.pipeline_axes.layout().clone(),
+                self.pipeline_tree.layout().clone(),
                 0,
                 push_constants.clone(),
             )
             .unwrap();
         unsafe {
-            builder
-                .draw(self.tree_draw_vertex_count, 1, 0, 0)
-                .unwrap();
+            builder.draw(self.tree_draw_vertex_count, 1, 0, 0).unwrap();
         }
     }
 

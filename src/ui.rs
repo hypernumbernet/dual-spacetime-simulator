@@ -423,6 +423,23 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     });
                 ui.separator();
 
+                // Render mode toggle: Lines (LineList) vs Polygons (Tube mesh with lighting)
+                ComboBox::from_label("Render Mode")
+                    .selected_text(uis.gpu_tree_render_mode.to_string())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut uis.gpu_tree_render_mode,
+                            GpuTreeRenderMode::Lines,
+                            GpuTreeRenderMode::Lines.to_string(),
+                        );
+                        ui.selectable_value(
+                            &mut uis.gpu_tree_render_mode,
+                            GpuTreeRenderMode::Polygons,
+                            GpuTreeRenderMode::Polygons.to_string(),
+                        );
+                    });
+                ui.separator();
+
                 label_normal(ui, "Tree Parameters");
                 ui.add(Slider::new(&mut uis.gpu_tree_params.trunk_height, 0.3..=2.0).text("Trunk Height"));
                 ui.add(Slider::new(&mut uis.gpu_tree_params.trunk_radius_base, 0.02..=0.2).text("Trunk Radius"));
