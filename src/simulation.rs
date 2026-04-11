@@ -285,7 +285,7 @@ impl SimulationManager {
     /// モード切替（AppMode変更時。Graph3D時はシミュレーションを停止準備）
     pub fn switch_mode(&self, mode: AppMode) {
         if mode == AppMode::Graph3D {
-            // Graph3Dモードではシミュレーションを一時停止
+            // Graph3Dモードではシミュレーションを一時停止（is_running=falseによりバックグラウンドスレッドが止まる）
             // 将来: GraphStateやGraphManagerに切り替え、ui_state.is_graph_update_requested
             // からデータを読み、custom particlesやlinesをset_particles()で渡す
             let _state = self.state.write().unwrap();

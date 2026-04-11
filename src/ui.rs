@@ -52,35 +52,45 @@ pub fn draw_ui(
 
             ui.menu_button("Panel", |ui| {
                 ui.set_min_width(MENU_POPUP_WIDTH);
-                if ui
-                    .checkbox(&mut uis.is_simulation_panel_open, "Simulation")
-                    .clicked()
-                {
-                    ui.close_menu();
+                let available = uis.get_available_panels();
+                if available.contains(&"Simulation") {
+                    if ui
+                        .checkbox(&mut uis.is_simulation_panel_open, "Simulation")
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
                 }
-                if ui
-                    .checkbox(
-                        &mut uis.is_initial_condition_panel_open,
-                        "Initial Condition",
-                    )
-                    .clicked()
-                {
-                    ui.close_menu();
+                if available.contains(&"Initial Condition") {
+                    if ui
+                        .checkbox(
+                            &mut uis.is_initial_condition_panel_open,
+                            "Initial Condition",
+                        )
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
                 }
-                if ui
-                    .checkbox(&mut uis.is_settings_panel_open, "Settings")
-                    .clicked()
-                {
-                    ui.close_menu();
+                if available.contains(&"Settings") {
+                    if ui
+                        .checkbox(&mut uis.is_settings_panel_open, "Settings")
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
                 }
-                if ui
-                    .checkbox(&mut uis.is_graph3d_panel_open, "3D Graph")
-                    .clicked()
-                {
-                    ui.close_menu();
+                if available.contains(&"3D Graph") {
+                    if ui
+                        .checkbox(&mut uis.is_graph3d_panel_open, "3D Graph")
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
                 }
             });
 
+            // Viewメニューは両モードで共通
             ui.menu_button("View", |ui| {
                 ui.set_min_width(MENU_POPUP_WIDTH);
                 if ui.checkbox(&mut uis.show_grid, "Show Grid").clicked() {
@@ -88,21 +98,27 @@ pub fn draw_ui(
                 }
             });
 
-            ui.menu_button("Simulation", |ui| {
-                ui.set_min_width(MENU_POPUP_WIDTH);
-                if ui
-                    .button(if uis.is_running { "Pause" } else { "Start" })
-                    .clicked()
-                {
-                    uis.is_running = !uis.is_running;
-                    ui.close_menu();
-                }
-                if ui.button("Reset").clicked() {
-                    uis.is_reset_requested = true;
-                    uis.is_resetting = true;
-                    ui.close_menu();
-                }
-            });
+            // SimulationメニューはSimulationモードのみ表示（Graph3Dでは無関係指示を防止）
+            if uis.is_simulation_mode() {
+                ui.menu_button("Simulation", |ui| {
+                    ui.set_min_width(MENU_POPUP_WIDTH);
+                    if ui
+                        .button(if uis.is_running { "Pause" } else { "Start" })
+                        .clicked()
+                    {
+                        uis.is_running = !uis.is_running;
+                        ui.close_menu();
+                    }
+                    if ui.button("Reset").clicked() {
+                        uis.is_reset_requested = true;
+                        uis.is_resetting = true;
+                        ui.close_menu();
+                    }
+                });
+            } else if uis.is_graph3d_mode() {
+                // Graph3DモードではGraph関連操作をPanelに統合するため、専用メニューは非表示
+                // 将来Graph専用メニューを追加する場合はここに実装
+            }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(format!("Frame {}", uis.frame));
@@ -141,7 +157,8 @@ pub fn draw_ui(
             });
     }
 
-    if uis.is_simulation_panel_open {
+    // SimulationパネルはSimulationモードのみ表示（モード無関係指示防止）
+    if uis.is_simulation_mode() && uis.is_simulation_panel_open {
         egui::Window::new("Simulation")
             .resizable(false)
             .collapsible(true)
@@ -196,7 +213,8 @@ pub fn draw_ui(
             });
     }
 
-    if uis.is_settings_panel_open {
+    // SettingsパネルはSimulationモードのみ表示
+    if uis.is_simulation_mode() && uis.is_settings_panel_open {
         egui::Window::new("Settings")
             .resizable(false)
             .collapsible(true)
@@ -245,7 +263,8 @@ pub fn draw_ui(
             });
     }
 
-    if uis.is_initial_condition_panel_open {
+    // Initial ConditionパネルはSimulationモードのみ表示
+    if uis.is_simulation_mode() && uis.is_initial_condition_panel_open {
         egui::Window::new("Initial Condition")
             .resizable(false)
             .collapsible(true)
@@ -288,6 +307,7 @@ pub fn draw_ui(
             });
     }
     // Reset flow (handles both manual Reset and Graph3D warning OK)
+    // Graph3DモードでもResetは許可（初期化用）
     if uis.is_resetting && uis.is_reset_requested {
         uis.is_resetting = false;
         uis.initial_condition = match uis.initial_condition_type {
@@ -355,8 +375,8 @@ pub fn draw_ui(
         uis.scale_gauge = DEFAULT_SCALE_UI;
     }
 
-    // Graph3Dパネル (モード切替時に優先表示予定)
-    if uis.is_graph3d_panel_open {
+    // Graph3DパネルはGraph3Dモードのみ表示
+    if uis.is_graph3d_mode() && uis.is_graph3d_panel_open {
         egui::Window::new("3D Graph")
             .resizable(false)
             .collapsible(true)

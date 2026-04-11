@@ -192,6 +192,24 @@ impl UiState {
             }
         }
     }
+
+    /// 現在のAppModeがSimulationかどうかを返す
+    pub fn is_simulation_mode(&self) -> bool {
+        matches!(self.app_mode, AppMode::Simulation)
+    }
+
+    /// 現在のAppModeがGraph3Dかどうかを返す
+    pub fn is_graph3d_mode(&self) -> bool {
+        matches!(self.app_mode, AppMode::Graph3D)
+    }
+
+    /// モードに応じて許可されるパネルを返す（メニュー/パネル表示制御用）
+    pub fn get_available_panels(&self) -> Vec<&'static str> {
+        match self.app_mode {
+            AppMode::Simulation => vec!["Simulation", "Initial Condition", "Settings"],
+            AppMode::Graph3D => vec!["3D Graph"],
+        }
+    }
 }
 
 pub struct RandomSphereParameters {
