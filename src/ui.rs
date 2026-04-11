@@ -75,23 +75,17 @@ pub fn draw_ui(
                         ui.close_menu();
                     }
                 }
-                if available.contains(&PanelKind::Settings) {
+                if available.contains(&PanelKind::Graph3D) {
                     if ui
-                        .checkbox(
-                            &mut uis.is_settings_panel_open,
-                            PanelKind::Settings.label(),
-                        )
+                        .checkbox(&mut uis.is_graph3d_panel_open, PanelKind::Graph3D.label())
                         .clicked()
                     {
                         ui.close_menu();
                     }
                 }
-                if available.contains(&PanelKind::Graph3D) {
+                if available.contains(&PanelKind::Settings) {
                     if ui
-                        .checkbox(
-                            &mut uis.is_graph3d_panel_open,
-                            PanelKind::Graph3D.label(),
-                        )
+                        .checkbox(&mut uis.is_settings_panel_open, PanelKind::Settings.label())
                         .clicked()
                     {
                         ui.close_menu();
@@ -132,7 +126,12 @@ pub fn draw_ui(
         });
     });
 
-    uis.sync_panels_to_app_mode();
+    let from_mode = uis.last_app_mode_for_panel_sync;
+    let to_mode = uis.app_mode;
+    if from_mode != to_mode {
+        uis.apply_panel_defaults_on_app_mode_change(from_mode, to_mode);
+        uis.last_app_mode_for_panel_sync = to_mode;
+    }
 
     if uis.show_graph3d_warning {
         egui::Window::new("Mode Switch Confirmation")

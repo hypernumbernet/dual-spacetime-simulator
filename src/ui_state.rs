@@ -101,6 +101,7 @@ pub struct UiState {
     pub is_resetting: bool,
     pub skip: u32,
     pub app_mode: AppMode,
+    pub last_app_mode_for_panel_sync: AppMode,
     pub initial_condition_type: InitialConditionType,
     pub initial_condition: InitialCondition,
     pub simulation_type: SimulationType,
@@ -149,6 +150,7 @@ impl Default for UiState {
             is_resetting: false,
             skip: 0,
             app_mode: AppMode::default(),
+            last_app_mode_for_panel_sync: AppMode::default(),
             initial_condition_type: InitialConditionType::default(),
             initial_condition: InitialCondition::default(),
             simulation_type: SimulationType::Normal,
@@ -201,17 +203,20 @@ impl UiState {
         self.is_graph_update_requested = false;
     }
 
-    pub fn sync_panels_to_app_mode(&mut self) {
-        match self.app_mode {
-            AppMode::Simulation => {
-                self.is_simulation_panel_open = true;
-                self.is_graph3d_panel_open = false;
-            }
+    pub fn apply_panel_defaults_on_app_mode_change(&mut self, from: AppMode, to: AppMode) {
+        if from == to {
+            return;
+        }
+        match to {
             AppMode::Graph3D => {
-                self.is_graph3d_panel_open = true;
                 self.is_simulation_panel_open = false;
                 self.is_initial_condition_panel_open = false;
+                self.is_graph3d_panel_open = true;
                 self.reset_graph_params();
+            }
+            AppMode::Simulation => {
+                self.is_graph3d_panel_open = false;
+                self.is_simulation_panel_open = true;
             }
         }
     }
