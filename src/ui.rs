@@ -45,7 +45,9 @@ pub fn draw_ui(
                     )
                     .clicked()
                 {
-                    uis.show_graph3d_warning = true;
+                    uis.app_mode = crate::ui_state::AppMode::Graph3D;
+                    uis.is_running = false;
+                    simulation_manager.read().unwrap().switch_mode(uis.app_mode);
                     ui.close_menu();
                 }
             });
@@ -131,30 +133,6 @@ pub fn draw_ui(
     if from_mode != to_mode {
         uis.apply_panel_defaults_on_app_mode_change(from_mode, to_mode);
         uis.last_app_mode_for_panel_sync = to_mode;
-    }
-
-    if uis.show_graph3d_warning {
-        egui::Window::new("Mode Switch Confirmation")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(ctx, |ui| {
-                ui.label("Switching to 3D Graph Mode will reset the current Simulation data to defaults. Continue?");
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        uis.app_mode = AppMode::Graph3D;
-                        uis.is_running = false;
-                        uis.is_reset_requested = true;
-                        uis.is_resetting = true;
-                        uis.show_graph3d_warning = false;
-                        simulation_manager.read().unwrap().switch_mode(uis.app_mode);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        uis.show_graph3d_warning = false;
-                    }
-                });
-            });
     }
 
     if uis.app_mode == AppMode::Simulation && uis.is_simulation_panel_open {
