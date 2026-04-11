@@ -1,5 +1,5 @@
 use glam::{Quat, Vec3};
-use rand::{Rng, SeedableRng, rngs::SmallRng};
+use rand::{Rng, SeedableRng};
 
 /// xz 平面の座標軸補助グリッドと同じ設定（`pipeline::create_axes_buffer` と同期）
 pub const AXIS_XZ_GRID_EXTENT: f32 = 2.0;
@@ -138,6 +138,35 @@ impl Tree {
             }
         }
         out
+    }
+
+    /// 指定されたレイアウトに応じて頂点を生成 (シングル木 or グリッド森)。
+    /// UI からの呼び出し用ヘルパー。
+    pub fn generate_vertices_for_layout(
+        layout: crate::ui_state::GpuTreeLayout,
+        params: TreeParams,
+    ) -> Vec<([f32; 3], [f32; 4])> {
+        match layout {
+            crate::ui_state::GpuTreeLayout::Single => {
+                let tree = Tree::generate(params);
+                tree.generate_vertices_at(Vec3::ZERO)
+            }
+            crate::ui_state::GpuTreeLayout::ForestOnGrid => {
+                Self::generate_forest_vertices_on_axis_xz_grid(params)
+            }
+        }
+    }
+
+    /// TreeParams の fingerprint (ui_state と同期)
+    pub fn params_fingerprint(params: TreeParams) -> u64 {
+        let mut hash = 0u64;
+        hash = hash.wrapping_add(params.seed as u64);
+        hash = hash.wrapping_mul(31).wrapping_add((params.trunk_height * 100.0) as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(params.max_depth as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(params.branch_factor as u64);
+        hash = hash.wrapping_mul(31).wrapping_add((params.branch_angle * 100.0) as u64);
+        hash = hash.wrapping_mul(31).wrapping_add((params.tropism * 100.0) as u64);
+        hash
     }
 
     fn grow_branch(

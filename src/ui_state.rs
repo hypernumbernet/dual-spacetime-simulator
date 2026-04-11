@@ -1,5 +1,6 @@
 use crate::initial_condition::{InitialCondition, InitialConditionType};
 use crate::settings::AppSettings;
+use crate::tree::TreeParams;
 use glam::DVec3;
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
@@ -76,6 +77,23 @@ pub enum GraphType {
     QuaternionProjection,
 }
 
+/// GpuTree 表示レイアウト: シングル木 または xzグリッド交点すべてに木を生やす
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GpuTreeLayout {
+    Single,
+    ForestOnGrid,
+}
+
+impl std::fmt::Display for GpuTreeLayout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            GpuTreeLayout::Single => "Single Tree",
+            GpuTreeLayout::ForestOnGrid => "Forest on XZ Grid",
+        };
+        write!(f, "{}", text)
+    }
+}
+
 impl std::fmt::Display for GraphType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
@@ -133,6 +151,9 @@ pub struct UiState {
     pub graph_t_slice: f64,
     pub graph_velocity_scale: f64,
     pub graph_phi: f64,
+    pub gpu_tree_layout: GpuTreeLayout,
+    pub gpu_tree_params: TreeParams,
+    pub last_gpu_tree_fingerprint: u64,
 }
 
 impl Default for UiState {
@@ -181,6 +202,9 @@ impl Default for UiState {
             graph_t_slice: 0.0,
             graph_velocity_scale: 1.0,
             graph_phi: 1.0,
+            gpu_tree_layout: GpuTreeLayout::ForestOnGrid,
+            gpu_tree_params: TreeParams::default(),
+            last_gpu_tree_fingerprint: 0,
         }
     }
 }
@@ -206,6 +230,26 @@ impl UiState {
         self.graph_phi = 1.0;
     }
 
+    pub fn reset_gpu_tree_params(&mut self) {
+        self.gpu_tree_layout = GpuTreeLayout::ForestOnGrid;
+        self.gpu_tree_params = TreeParams::default();
+        self.last_gpu_tree_fingerprint = 0;
+    }
+
+    /// GpuTree のパラメータ変化を検知するための簡易 fingerprint (hash-like)
+    pub fn gpu_tree_fingerprint(&self) -> u64 {
+        let mut hash = 0u64;
+        hash = hash.wrapping_add(self.gpu_tree_layout as u64);
+        // TreeParams の主要フィールドを簡易ハッシュ化
+        hash = hash.wrapping_mul(31).wrapping_add(self.gpu_tree_params.seed as u64);
+        hash = hash.wrapping_mul(31).wrapping_add((self.gpu_tree_params.trunk_height * 100.0) as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(self.gpu_tree_params.max_depth as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(self.gpu_tree_params.branch_factor as u64);
+        hash = hash.wrapping_mul(31).wrapping_add((self.gpu_tree_params.branch_angle * 100.0) as u64);
+        hash = hash.wrapping_mul(31).wrapping_add((self.gpu_tree_params.tropism * 100.0) as u64);
+        hash
+    }
+
     pub fn apply_panel_defaults_on_app_mode_change(&mut self, from: AppMode, to: AppMode) {
         if from == to {
             return;
@@ -223,6 +267,7 @@ impl UiState {
                 self.is_initial_condition_panel_open = false;
                 self.is_graph3d_panel_open = false;
                 self.is_gpu_tree_panel_open = true;
+                self.reset_gpu_tree_params();
             }
             AppMode::Simulation => {
                 self.is_graph3d_panel_open = false;

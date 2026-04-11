@@ -405,14 +405,40 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     "Real-Time GPU Tree Generation (HPG 2025)",
                 );
                 ui.separator();
+
+                // Layout toggle: Single tree vs Forest on XZ grid crossings
+                ComboBox::from_label("Layout")
+                    .selected_text(uis.gpu_tree_layout.to_string())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut uis.gpu_tree_layout,
+                            GpuTreeLayout::Single,
+                            GpuTreeLayout::Single.to_string(),
+                        );
+                        ui.selectable_value(
+                            &mut uis.gpu_tree_layout,
+                            GpuTreeLayout::ForestOnGrid,
+                            GpuTreeLayout::ForestOnGrid.to_string(),
+                        );
+                    });
+                ui.separator();
+
+                label_normal(ui, "Tree Parameters");
+                ui.add(Slider::new(&mut uis.gpu_tree_params.trunk_height, 0.3..=2.0).text("Trunk Height"));
+                ui.add(Slider::new(&mut uis.gpu_tree_params.trunk_radius_base, 0.02..=0.2).text("Trunk Radius"));
+                ui.add(Slider::new(&mut uis.gpu_tree_params.max_depth, 2..=7).text("Max Depth"));
+                ui.add(Slider::new(&mut uis.gpu_tree_params.branch_factor, 2..=5).text("Branch Factor"));
+                ui.add(Slider::new(&mut uis.gpu_tree_params.branch_angle, 0.2..=1.2).text("Branch Angle"));
+                ui.add(Slider::new(&mut uis.gpu_tree_params.tropism, 0.0..=1.0).text("Tropism"));
+                ui.add(Slider::new(&mut uis.gpu_tree_params.seed, 0..=999).text("Seed"));
+
+                ui.separator();
                 label_normal(
                     ui,
                     "CPU oak-like trees on every xz grid crossing (step 0.5, same as axis floor).",
                 );
                 ui.label("Weber-Penn spline branches + leaves per tree.");
-                ui.label("Switch to GpuTree mode in Mode menu to view.");
-                ui.separator();
-                ui.label("Next: GPU work graphs + full parameters.");
+                ui.label("Switch to GpuTree mode in Mode menu to view. Changes update in real-time.");
             });
     }
 }

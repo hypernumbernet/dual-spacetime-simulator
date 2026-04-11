@@ -160,6 +160,7 @@ pub struct App {
     last_right_click_pos: Option<(f64, f64)>,
     settings: AppSettings,
     last_graph3d_fingerprint: u64,
+    last_gpu_tree_fingerprint: u64,
     prev_app_mode: AppMode,
 }
 
@@ -191,6 +192,7 @@ impl Default for App {
             last_right_click_pos: None,
             settings,
             last_graph3d_fingerprint: u64::MAX,
+            last_gpu_tree_fingerprint: 0,
             prev_app_mode: AppMode::default(),
         }
     }
@@ -368,15 +370,21 @@ impl ApplicationHandler for App {
             }
         }
         if app_mode == AppMode::GpuTree {
-            if prev != AppMode::GpuTree {
+            let uis = self.ui_state.read().unwrap();
+            let fp = uis.gpu_tree_fingerprint();
+            let layout = uis.gpu_tree_layout;
+            let params = uis.gpu_tree_params;
+            drop(uis);
+
+            let needs_update = prev != AppMode::GpuTree || fp != self.last_gpu_tree_fingerprint;
+            if needs_update {
                 if let Some(pipeline) = self.render_pipeline.as_mut() {
                     pipeline.set_particles(&[], &[]);
                     pipeline.set_graph_lines(&[]);
-                    let verts = Tree::generate_forest_vertices_on_axis_xz_grid(
-                        crate::tree::TreeParams::default(),
-                    );
+                    let verts = Tree::generate_vertices_for_layout(layout, params);
                     pipeline.set_tree_vertices(verts);
                 }
+                self.last_gpu_tree_fingerprint = fp;
             }
             self.prev_app_mode = app_mode;
             // GpuTree モードではシミュレーション/Graph更新をスキップ
@@ -413,6 +421,7 @@ impl ApplicationHandler for App {
             return;
         }
         self.last_graph3d_fingerprint = u64::MAX;
+        self.last_gpu_tree_fingerprint = 0;
         if *self.need_redraw.read().unwrap() == false {
             return;
         }
