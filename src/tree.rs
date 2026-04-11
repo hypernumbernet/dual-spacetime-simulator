@@ -311,25 +311,53 @@ impl Tree {
             };
             let normal1 = binormal1.cross(tangent1).normalize();
 
-            // 各リングの頂点 (sides数)
-            for s in 0..=sides {
-                let angle = (s as f32 / sides as f32) * TAU;
-                let cos_a = angle.cos();
-                let sin_a = angle.sin();
+            // 各リングの頂点 (sides数)。TriangleList用に各quadを2三角形で明示 (6 verts/quad)
+            // 頂点順: pos0_s, pos0_{s+1}, pos1_s,   pos1_s, pos0_{s+1}, pos1_{s+1}
+            for s in 0..sides {
+                let s0 = s as f32 / sides as f32;
+                let s1 = (s + 1) as f32 / sides as f32;
+                let angle0 = s0 * TAU;
+                let angle1 = s1 * TAU;
+                let cos0 = angle0.cos();
+                let sin0 = angle0.sin();
+                let cos1 = angle1.cos();
+                let sin1 = angle1.sin();
 
-                // リング0
-                let offset0 = normal0 * cos_a + binormal0 * sin_a;
-                let pos0 = p0 + offset0 * r0;
-                let n0 = offset0.normalize(); // 近似法線
-                let y0 = -pos0.y; // 表示Y反転
-                verts.push(([pos0.x, y0, pos0.z], [n0.x, -n0.y, n0.z], color)); // normalもY反転
+                // リング0 - s0
+                let offset0_s0 = normal0 * cos0 + binormal0 * sin0;
+                let pos0_s0 = p0 + offset0_s0 * r0;
+                let n0_s0 = offset0_s0.normalize();
+                let y0_s0 = -pos0_s0.y;
 
-                // リング1
-                let offset1 = normal1 * cos_a + binormal1 * sin_a;
-                let pos1 = p1 + offset1 * r1;
-                let n1 = offset1.normalize();
-                let y1 = -pos1.y;
-                verts.push(([pos1.x, y1, pos1.z], [n1.x, -n1.y, n1.z], color));
+                // リング0 - s1
+                let offset0_s1 = normal0 * cos1 + binormal0 * sin1;
+                let pos0_s1 = p0 + offset0_s1 * r0;
+                let n0_s1 = offset0_s1.normalize();
+                let y0_s1 = -pos0_s1.y;
+
+                // リング1 - s0
+                let offset1_s0 = normal1 * cos0 + binormal1 * sin0;
+                let pos1_s0 = p1 + offset1_s0 * r1;
+                let n1_s0 = offset1_s0.normalize();
+                let y1_s0 = -pos1_s0.y;
+
+                // リング1 - s1
+                let offset1_s1 = normal1 * cos1 + binormal1 * sin1;
+                let pos1_s1 = p1 + offset1_s1 * r1;
+                let n1_s1 = offset1_s1.normalize();
+                let y1_s1 = -pos1_s1.y;
+
+                let col = color; // for readability
+
+                // Triangle 1: pos0_s0, pos0_s1, pos1_s0
+                verts.push(([pos0_s0.x, y0_s0, pos0_s0.z], [n0_s0.x, -n0_s0.y, n0_s0.z], col));
+                verts.push(([pos0_s1.x, y0_s1, pos0_s1.z], [n0_s1.x, -n0_s1.y, n0_s1.z], col));
+                verts.push(([pos1_s0.x, y1_s0, pos1_s0.z], [n1_s0.x, -n1_s0.y, n1_s0.z], col));
+
+                // Triangle 2: pos1_s0, pos0_s1, pos1_s1
+                verts.push(([pos1_s0.x, y1_s0, pos1_s0.z], [n1_s0.x, -n1_s0.y, n1_s0.z], col));
+                verts.push(([pos0_s1.x, y0_s1, pos0_s1.z], [n0_s1.x, -n0_s1.y, n0_s1.z], col));
+                verts.push(([pos1_s1.x, y1_s1, pos1_s1.z], [n1_s1.x, -n1_s1.y, n1_s1.z], col));
             }
         }
 
@@ -338,7 +366,7 @@ impl Tree {
             Self::collect_tube_vertices(child, base, verts);
         }
 
-        // 葉 (簡易: 末端に小さなTube or 残す)
+        // 葉 (簡易: 末端に小さなTube or 残す)。TriangleList対応に修正 (隙間防止)
         if branch.children.is_empty() && branch.depth >= 3 {
             // 葉は薄いTubeとして簡易表現 (またはスキップして性能重視)
             let tip = branch.spline.eval(1.0) + base;
@@ -352,18 +380,41 @@ impl Tree {
             };
             let leaf_normal = leaf_binormal.cross(leaf_tangent).normalize();
 
-            for s in 0..=sides {
-                let angle = (s as f32 / sides as f32) * TAU;
-                let cos_a = angle.cos();
-                let sin_a = angle.sin();
-                let offset = leaf_normal * cos_a + leaf_binormal * sin_a;
-                let pos = tip + offset * leaf_r;
-                let n = offset.normalize();
-                let y = -pos.y;
-                verts.push(([pos.x, y, pos.z], [n.x, -n.y, n.z], leaf_color));
-                // 2回pushで簡易Quad (実際はleaf_tipをもう1頂点)
+            // 葉もTube風円筒 (sides分割) で隙間をなくす
+            for s in 0..sides {
+                let s0 = s as f32 / sides as f32;
+                let s1 = (s + 1) as f32 / sides as f32;
+                let angle0 = s0 * TAU;
+                let angle1 = s1 * TAU;
+                let cos0 = angle0.cos();
+                let sin0 = angle0.sin();
+                let cos1 = angle1.cos();
+                let sin1 = angle1.sin();
+
+                let offset0 = leaf_normal * cos0 + leaf_binormal * sin0;
+                let pos0 = tip + offset0 * leaf_r;
+                let n0 = offset0.normalize();
+                let y0 = -pos0.y;
+
+                let offset1 = leaf_normal * cos1 + leaf_binormal * sin1;
+                let pos1 = tip + offset1 * leaf_r;
+                let n1 = offset1.normalize();
+                let y1 = -pos1.y;
+
                 let tip_y = -tip.y;
-                verts.push(([tip.x, tip_y, tip.z], [0.0, 1.0, 0.0], leaf_color));
+                let tip_n = [0.0f32, 1.0, 0.0]; // 上向き近似
+
+                let col = leaf_color;
+
+                // Triangle 1: pos0, pos1, tip
+                verts.push(([pos0.x, y0, pos0.z], [n0.x, -n0.y, n0.z], col));
+                verts.push(([pos1.x, y1, pos1.z], [n1.x, -n1.y, n1.z], col));
+                verts.push(([tip.x, tip_y, tip.z], tip_n, col));
+
+                // Triangle 2: pos1, pos0, tip (逆順で2枚目)
+                verts.push(([pos1.x, y1, pos1.z], [n1.x, -n1.y, n1.z], col));
+                verts.push(([pos0.x, y0, pos0.z], [n0.x, -n0.y, n0.z], col));
+                verts.push(([tip.x, tip_y, tip.z], tip_n, col));
             }
         }
     }
