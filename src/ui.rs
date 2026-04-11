@@ -213,7 +213,7 @@ pub fn draw_ui(
             });
     }
 
-    if uis.app_mode == AppMode::Simulation && uis.is_settings_panel_open {
+    if uis.is_settings_panel_open {
         egui::Window::new("Settings")
             .resizable(false)
             .collapsible(true)

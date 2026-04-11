@@ -41,7 +41,7 @@ const PANELS_SIMULATION: &[PanelKind] = &[
     PanelKind::Settings,
 ];
 
-const PANELS_GRAPH3D: &[PanelKind] = &[PanelKind::Graph3D];
+const PANELS_GRAPH3D: &[PanelKind] = &[PanelKind::Graph3D, PanelKind::Settings];
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SimulationType {
@@ -211,7 +211,6 @@ impl UiState {
                 self.is_graph3d_panel_open = true;
                 self.is_simulation_panel_open = false;
                 self.is_initial_condition_panel_open = false;
-                self.is_settings_panel_open = false;
                 self.reset_graph_params();
             }
         }
