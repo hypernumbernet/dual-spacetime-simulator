@@ -1,0 +1,92 @@
+#version 450
+
+// Real-Time GPU Tree Generation (inspired by HPG 2025 "gptree" sample)
+// Iterative branch generation using Hermite splines (no recursion allowed in compute)
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std140) uniform ComputeParams {
+    uint seed;
+    uint max_depth;
+    uint branch_factor;
+    uint padding;
+    float trunk_height;
+    float trunk_radius_base;
+    float branch_angle;
+    float tropism;
+} params;
+
+layout(set = 0, binding = 1, std430) buffer TreeVertices {
+    vec3 positions[];
+} out_vertices;
+
+layout(set = 0, binding = 2, std430) buffer TreeNormals {
+    vec3 normals[];
+} out_normals;
+
+layout(set = 0, binding = 3, std430) buffer TreeColors {
+    vec4 colors[];
+} out_colors;
+
+layout(set = 0, binding = 4) buffer AtomicCounter {
+    uint vertex_count;
+};
+
+// Simple hash for pseudo-random on GPU (inspired by gptree procedural techniques)
+uint hash(uint x) {
+    x ^= x >> 16;
+    x *= 0x85ebca6bU;
+    x ^= x >> 13;
+    x *= 0xc2b2ae35U;
+    x ^= x >> 16;
+    return x;
+}
+
+float rand(uint seed_val) {
+    return float(hash(seed_val)) / 4294967295.0;
+}
+
+// Very simplified iterative tree generation (placeholder for full Weber-Penn / Hermite implementation)
+// In full version this would generate multiple segments per branch using control points.
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint local_seed = params.seed + idx * 17u;
+
+    if (idx == 0) {
+        // Root trunk - generate a simple vertical tree as proof of concept
+        uint base = atomicAdd(vertex_count, 8u); // 8 vertices for simple trunk + branches
+
+        // Trunk base
+        out_vertices.positions[base] = vec3(0.0, 0.0, 0.0);
+        out_normals.normals[base] = vec3(0.0, 1.0, 0.0);
+        out_colors.colors[base] = vec4(0.4, 0.25, 0.1, 1.0);
+
+        // Trunk top
+        float h = params.trunk_height;
+        out_vertices.positions[base+1] = vec3(0.0, h, 0.0);
+        out_normals.normals[base+1] = vec3(0.0, 1.0, 0.0);
+        out_colors.colors[base+1] = vec4(0.3, 0.6, 0.2, 1.0);
+
+        // Simple branches (2 levels)
+        float angle = params.branch_angle;
+        for (uint i = 0; i < 2; i++) {
+            uint b = base + 2 + i * 3;
+            float a = float(i) * 1.57;
+            vec3 branch_dir = vec3(sin(a), 0.7, cos(a));
+            branch_dir = normalize(branch_dir);
+
+            out_vertices.positions[b] = vec3(0.0, h*0.6, 0.0);
+            out_normals.normals[b] = branch_dir;
+            out_colors.colors[b] = vec4(0.2, 0.5, 0.15, 1.0);
+
+            out_vertices.positions[b+1] = vec3(0.0, h*0.6, 0.0) + branch_dir * 0.4;
+            out_normals.normals[b+1] = branch_dir;
+            out_colors.colors[b+1] = vec4(0.15, 0.45, 0.1, 1.0);
+        }
+
+        // Leaf indicator
+        out_vertices.positions[base+7] = vec3(0.3, h*0.9, 0.3);
+        out_normals.normals[base+7] = vec3(0.0, 1.0, 0.0);
+        out_colors.colors[base+7] = vec4(0.1, 0.8, 0.2, 1.0);
+    }
+}

@@ -23,7 +23,7 @@ use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
 use crate::tree::Tree;
 use crate::ui::draw_ui;
-use crate::ui_state::{AppMode, GpuTreeLayout, GpuTreeRenderMode, UiState};
+use crate::ui_state::{AppMode, GpuTreeComputeMode, GpuTreeLayout, GpuTreeRenderMode, UiState};
 use glam::Vec3;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -381,6 +381,7 @@ impl ApplicationHandler for App {
             let fp = uis.gpu_tree_fingerprint();
             let layout = uis.gpu_tree_layout;
             let render_mode = uis.gpu_tree_render_mode;
+            let compute_mode = uis.gpu_tree_compute_mode;
             let params = uis.gpu_tree_params;
             drop(uis);
 
@@ -397,16 +398,27 @@ impl ApplicationHandler for App {
                         }
                         GpuTreeRenderMode::Polygons => {
                             // ポリゴン描画: Tubeメッシュ (TreeVertex, TriangleList + lighting)
-                            let tube_verts = match layout {
-                                GpuTreeLayout::Single => {
-                                    let tree = Tree::generate(params);
-                                    tree.generate_tube_vertices_at(Vec3::ZERO)
+                            if compute_mode == GpuTreeComputeMode::GPU {
+                                // GPU Compute Dispatchを実行
+                                if let Some(pipeline) = self.render_pipeline.as_mut() {
+                                    pipeline.compute_tree_vertices(params, layout);
                                 }
-                                GpuTreeLayout::ForestOnGrid => {
-                                    Tree::generate_forest_tube_vertices_on_axis_xz_grid(params)
+                                // compute_tree_vertices内でset_tree_verticesが呼ばれるため、ここでは何もしない
+                            } else {
+                                // CPUモードは従来通り
+                                let tube_verts = match layout {
+                                    GpuTreeLayout::Single => {
+                                        let tree = Tree::generate(params);
+                                        tree.generate_tube_vertices_at(Vec3::ZERO)
+                                    }
+                                    GpuTreeLayout::ForestOnGrid => {
+                                        Tree::generate_forest_tube_vertices_on_axis_xz_grid(params)
+                                    }
+                                };
+                                if let Some(pipeline) = self.render_pipeline.as_mut() {
+                                    pipeline.set_tree_vertices(tube_verts);
                                 }
-                            };
-                            pipeline.set_tree_vertices(tube_verts);
+                            }
                         }
                     }
                 }

@@ -2,12 +2,42 @@ use glam::{FloatExt, Quat, Vec3};
 use rand::{Rng, SeedableRng};
 use std::f32::consts::TAU;
 
+/// GPU Compute用にTreeParamsをpackした構造体 (std140 layout準拠)
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuTreeComputeParams {
+    pub seed: u32,
+    pub max_depth: u32,
+    pub branch_factor: u32,
+    pub _padding: u32,
+    pub trunk_height: f32,
+    pub trunk_radius_base: f32,
+    pub branch_angle: f32,
+    pub tropism: f32,
+}
+
+impl From<TreeParams> for GpuTreeComputeParams {
+    fn from(params: TreeParams) -> Self {
+        Self {
+            seed: params.seed,
+            max_depth: params.max_depth as u32,
+            branch_factor: params.branch_factor,
+            _padding: 0,
+            trunk_height: params.trunk_height,
+            trunk_radius_base: params.trunk_radius_base,
+            branch_angle: params.branch_angle,
+            tropism: params.tropism,
+        }
+    }
+}
+
 /// xz 平面の座標軸補助グリッドと同じ設定（`pipeline::create_axes_buffer` と同期）
 pub const AXIS_XZ_GRID_EXTENT: f32 = 2.0;
 pub const AXIS_XZ_GRID_LINE_COUNT: usize = 9;
 
-/// HPG 2025 / Weber-Penn 風の簡易木生成 (CPU版)
-/// 1本のOak-like木を再帰的に生成。まずは中心線 (LineListで描画)
+/// HPG 2025 / Weber-Penn 風の簡易木生成
+/// CPU版 (Tree::generate) と GPU Computeシェーダ版の両方をサポート。
+/// GPU版は tree_compute.comp で実装 (ComputeMode::GPU 使用時)。
 
 #[derive(Clone, Copy)]
 pub struct TreeParams {

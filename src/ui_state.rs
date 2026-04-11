@@ -111,6 +111,23 @@ impl std::fmt::Display for GpuTreeRenderMode {
     }
 }
 
+/// GpuTree の計算バックエンド: CPU (既存Tree::generate) または GPU (Computeシェーダ)
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GpuTreeComputeMode {
+    CPU,
+    GPU,
+}
+
+impl std::fmt::Display for GpuTreeComputeMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            GpuTreeComputeMode::CPU => "CPU",
+            GpuTreeComputeMode::GPU => "GPU (Compute)",
+        };
+        write!(f, "{}", text)
+    }
+}
+
 impl std::fmt::Display for GraphType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
@@ -170,6 +187,7 @@ pub struct UiState {
     pub graph_phi: f64,
     pub gpu_tree_layout: GpuTreeLayout,
     pub gpu_tree_render_mode: GpuTreeRenderMode,
+    pub gpu_tree_compute_mode: GpuTreeComputeMode,
     pub gpu_tree_params: TreeParams,
     pub last_gpu_tree_fingerprint: u64,
 }
@@ -222,6 +240,7 @@ impl Default for UiState {
             graph_phi: 1.0,
             gpu_tree_layout: GpuTreeLayout::Single,
             gpu_tree_render_mode: GpuTreeRenderMode::Polygons,
+            gpu_tree_compute_mode: GpuTreeComputeMode::CPU,
             gpu_tree_params: TreeParams::default(),
             last_gpu_tree_fingerprint: 0,
         }
@@ -252,6 +271,7 @@ impl UiState {
     pub fn reset_gpu_tree_params(&mut self) {
         self.gpu_tree_layout = GpuTreeLayout::Single;
         self.gpu_tree_render_mode = GpuTreeRenderMode::Polygons;
+        self.gpu_tree_compute_mode = GpuTreeComputeMode::CPU;
         self.gpu_tree_params = TreeParams::default();
         self.last_gpu_tree_fingerprint = 0;
     }
@@ -260,7 +280,8 @@ impl UiState {
     pub fn gpu_tree_fingerprint(&self) -> u64 {
         let mut hash = 0u64;
         hash = hash.wrapping_add(self.gpu_tree_layout as u64);
-        hash = hash.wrapping_add((self.gpu_tree_render_mode as u64) * 17); // render modeも検知
+        hash = hash.wrapping_add((self.gpu_tree_render_mode as u64) * 17);
+        hash = hash.wrapping_add((self.gpu_tree_compute_mode as u64) * 31); // compute modeも検知
         // TreeParams の主要フィールドを簡易ハッシュ化
         hash = hash
             .wrapping_mul(31)
