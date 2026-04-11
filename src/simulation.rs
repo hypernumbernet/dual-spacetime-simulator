@@ -223,7 +223,6 @@ impl SimulationManager {
         }
     }
 
-    /// SimulationTypeとInitialConditionからSimulationStateを作成
     pub fn create_simulation(
         initial_condition: InitialCondition,
         simulation_type: SimulationType,
@@ -250,7 +249,6 @@ impl SimulationManager {
         }
     }
 
-    /// 速度をrapidityに変換（Lorentzモード用）
     pub fn convert_to_lorentz(particles: Vec<Particle>, scale: f64) -> Vec<Particle> {
         let ls = scale / LIGHT_SPEED;
         particles
@@ -264,7 +262,6 @@ impl SimulationManager {
             .collect()
     }
 
-    /// リセット処理（UIから呼ばれる）
     pub fn reset(
         &self,
         initial_condition: InitialCondition,
@@ -272,36 +269,24 @@ impl SimulationManager {
         particle_count: u32,
         scale: f64,
     ) {
-        let new_state = Self::create_simulation(
-            initial_condition,
-            simulation_type,
-            particle_count,
-            scale,
-        );
+        let new_state =
+            Self::create_simulation(initial_condition, simulation_type, particle_count, scale);
         let mut state_guard = self.state.write().unwrap();
         *state_guard = new_state;
     }
 
-    /// モード切替（AppMode変更時。Graph3D時はシミュレーションを停止準備）
     pub fn switch_mode(&self, mode: AppMode) {
         if mode == AppMode::Graph3D {
-            // Graph3Dモードではシミュレーションを一時停止（is_running=falseによりバックグラウンドスレッドが止まる）
-            // 将来: GraphStateやGraphManagerに切り替え、ui_state.is_graph_update_requested
-            // からデータを読み、custom particlesやlinesをset_particles()で渡す
             let _state = self.state.write().unwrap();
-            // TODO: pub fn set_graph_data(&self, points: Vec<[f32;3]>, colors: Vec<[f32;4]>) 追加
         }
-        // Simulationモードでは何もしない（既存状態を維持）
     }
 
-    /// 1フレーム分の物理更新（advance_time + update_velocities）
     pub fn advance(&self, time_per_frame: f64) {
         let mut sim = self.state.write().unwrap();
         sim.advance_time(time_per_frame);
         sim.update_velocities(time_per_frame);
     }
 
-    /// particles()の委譲（RwLock経由で安全に取得）
     pub fn particles(&self) -> Vec<Particle> {
         let state = self.state.read().unwrap();
         state.particles().clone()

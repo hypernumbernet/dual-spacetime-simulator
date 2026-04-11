@@ -90,7 +90,6 @@ pub fn draw_ui(
                 }
             });
 
-            // Viewメニューは両モードで共通
             ui.menu_button("View", |ui| {
                 ui.set_min_width(MENU_POPUP_WIDTH);
                 if ui.checkbox(&mut uis.show_grid, "Show Grid").clicked() {
@@ -98,8 +97,7 @@ pub fn draw_ui(
                 }
             });
 
-            // SimulationメニューはSimulationモードのみ表示（Graph3Dでは無関係指示を防止）
-            if uis.is_simulation_mode() {
+            if uis.app_mode == AppMode::Simulation {
                 ui.menu_button("Simulation", |ui| {
                     ui.set_min_width(MENU_POPUP_WIDTH);
                     if ui
@@ -115,9 +113,6 @@ pub fn draw_ui(
                         ui.close_menu();
                     }
                 });
-            } else if uis.is_graph3d_mode() {
-                // Graph3DモードではGraph関連操作をPanelに統合するため、専用メニューは非表示
-                // 将来Graph専用メニューを追加する場合はここに実装
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -128,11 +123,8 @@ pub fn draw_ui(
         });
     });
 
-    // AppMode変更時にパネル状態を同期（Graph3D→Simulation時はSimulationパネルを開きGraph3Dを閉じる）
-    // Note: This runs every frame after menu/warning handling, ensuring panels stay consistent with current mode
     uis.sync_panels_to_app_mode();
 
-    // Warning dialog for switching to Graph3D (resets simulation data)
     if uis.show_graph3d_warning {
         egui::Window::new("Mode Switch Confirmation")
             .collapsible(false)
@@ -157,8 +149,7 @@ pub fn draw_ui(
             });
     }
 
-    // SimulationパネルはSimulationモードのみ表示（モード無関係指示防止）
-    if uis.is_simulation_mode() && uis.is_simulation_panel_open {
+    if uis.app_mode == AppMode::Simulation && uis.is_simulation_panel_open {
         egui::Window::new("Simulation")
             .resizable(false)
             .collapsible(true)
@@ -213,8 +204,7 @@ pub fn draw_ui(
             });
     }
 
-    // SettingsパネルはSimulationモードのみ表示
-    if uis.is_simulation_mode() && uis.is_settings_panel_open {
+    if uis.app_mode == AppMode::Simulation && uis.is_settings_panel_open {
         egui::Window::new("Settings")
             .resizable(false)
             .collapsible(true)
@@ -263,8 +253,7 @@ pub fn draw_ui(
             });
     }
 
-    // Initial ConditionパネルはSimulationモードのみ表示
-    if uis.is_simulation_mode() && uis.is_initial_condition_panel_open {
+    if uis.app_mode == AppMode::Simulation && uis.is_initial_condition_panel_open {
         egui::Window::new("Initial Condition")
             .resizable(false)
             .collapsible(true)
@@ -306,8 +295,7 @@ pub fn draw_ui(
                 }
             });
     }
-    // Reset flow (handles both manual Reset and Graph3D warning OK)
-    // Graph3DモードでもResetは許可（初期化用）
+
     if uis.is_resetting && uis.is_reset_requested {
         uis.is_resetting = false;
         uis.initial_condition = match uis.initial_condition_type {
@@ -375,8 +363,7 @@ pub fn draw_ui(
         uis.scale_gauge = DEFAULT_SCALE_UI;
     }
 
-    // Graph3DパネルはGraph3Dモードのみ表示
-    if uis.is_graph3d_mode() && uis.is_graph3d_panel_open {
+    if uis.app_mode == AppMode::Graph3D && uis.is_graph3d_panel_open {
         egui::Window::new("3D Graph")
             .resizable(false)
             .collapsible(true)
@@ -406,7 +393,6 @@ pub fn draw_ui(
                 ui.separator();
                 if button_normal(ui, "Update Graph").clicked() {
                     uis.is_graph_update_requested = true;
-                    // 将来: simulation_managerやpipelineにグラフデータを通知
                 }
                 ui.separator();
                 label_normal(ui, "Sample Count");

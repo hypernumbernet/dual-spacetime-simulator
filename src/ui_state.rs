@@ -165,7 +165,6 @@ impl UiState {
         }
     }
 
-    /// Graph3Dパネルのパラメータをリセット（モード切替時などに使用）
     pub fn reset_graph_params(&mut self) {
         self.graph_type = GraphType::LightCone;
         self.graph_sample_count = 1000;
@@ -175,8 +174,6 @@ impl UiState {
         self.is_graph_update_requested = false;
     }
 
-    /// AppModeに応じてパネル開閉状態を同期する
-    /// Graph3D → Simulation 切替時にSimulationパネルを開きGraph3Dパネルを閉じる
     pub fn sync_panels_to_app_mode(&mut self) {
         match self.app_mode {
             AppMode::Simulation => {
@@ -193,17 +190,6 @@ impl UiState {
         }
     }
 
-    /// 現在のAppModeがSimulationかどうかを返す
-    pub fn is_simulation_mode(&self) -> bool {
-        matches!(self.app_mode, AppMode::Simulation)
-    }
-
-    /// 現在のAppModeがGraph3Dかどうかを返す
-    pub fn is_graph3d_mode(&self) -> bool {
-        matches!(self.app_mode, AppMode::Graph3D)
-    }
-
-    /// モードに応じて許可されるパネルを返す（メニュー/パネル表示制御用）
     pub fn get_available_panels(&self) -> Vec<&'static str> {
         match self.app_mode {
             AppMode::Simulation => vec!["Simulation", "Initial Condition", "Settings"],
