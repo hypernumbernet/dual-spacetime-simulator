@@ -21,10 +21,9 @@ use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
 use crate::tree::Tree;
 use crate::ui::draw_ui;
-use crate::ui_state::{AppMode, GpuTreeComputeMode, GpuTreeLayout, GpuTreeRenderMode, UiState};
+use crate::ui_state::{AppMode, GpuTreeRenderMode, UiState};
 use crate::vulkan_base::VulkanBase;
 use ash::vk;
-use glam::Vec3;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use winit::{
@@ -425,7 +424,6 @@ impl ApplicationHandler for App {
             let fp = uis.gpu_tree_fingerprint();
             let layout = uis.gpu_tree_layout;
             let render_mode = uis.gpu_tree_render_mode;
-            let compute_mode = uis.gpu_tree_compute_mode;
             let params = uis.gpu_tree_params;
             drop(uis);
 
@@ -440,24 +438,7 @@ impl ApplicationHandler for App {
                             pipeline.set_graph_lines(&line_verts);
                         }
                         GpuTreeRenderMode::Polygons => {
-                            if compute_mode == GpuTreeComputeMode::GPU {
-                                if let Some(pipeline) = self.render_pipeline.as_mut() {
-                                    pipeline.compute_tree_vertices(params, layout);
-                                }
-                            } else {
-                                let tube_verts = match layout {
-                                    GpuTreeLayout::Single => {
-                                        let tree = Tree::generate(params);
-                                        tree.generate_tube_vertices_at(Vec3::ZERO)
-                                    }
-                                    GpuTreeLayout::ForestOnGrid => {
-                                        Tree::generate_forest_tube_vertices_on_axis_xz_grid(params)
-                                    }
-                                };
-                                if let Some(pipeline) = self.render_pipeline.as_mut() {
-                                    pipeline.set_tree_vertices(tube_verts);
-                                }
-                            }
+                            pipeline.compute_tree_vertices(params, layout);
                         }
                     }
                 }

@@ -435,22 +435,6 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     });
                 ui.separator();
 
-                ComboBox::from_label("Compute Backend")
-                    .selected_text(uis.gpu_tree_compute_mode.to_string())
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut uis.gpu_tree_compute_mode,
-                            GpuTreeComputeMode::CPU,
-                            GpuTreeComputeMode::CPU.to_string(),
-                        );
-                        ui.selectable_value(
-                            &mut uis.gpu_tree_compute_mode,
-                            GpuTreeComputeMode::GPU,
-                            GpuTreeComputeMode::GPU.to_string(),
-                        );
-                    });
-                ui.separator();
-
                 label_normal(ui, "Tree Generation Parameters");
                 ui.add(
                     Slider::new(&mut uis.gpu_tree_params.trunk_height, 0.3..=2.0)
