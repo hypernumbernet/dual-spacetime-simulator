@@ -1,7 +1,8 @@
 #version 450
 
-// Real-Time GPU Tree Generation (inspired by HPG 2025 "gptree" sample)
-// Iterative branch generation using Hermite splines (no recursion allowed in compute)
+// GPU Tree Generation: iterative cylinder-based branching
+// Each thread generates one branch (trunk, first-level, second-level, etc.)
+// as a cylinder approximated by triangle strips.
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -32,7 +33,14 @@ layout(set = 0, binding = 4) buffer AtomicCounter {
     uint vertex_count;
 };
 
-// Simple hash for pseudo-random on GPU (inspired by gptree procedural techniques)
+#define TAU 6.28318530
+#define SIDES 6
+#define SEGS 3
+#define VERTS_PER_BRANCH (SEGS * SIDES * 6)
+#define MAX_LEVELS 5
+#define MAX_BRANCHES 512
+#define MAX_OUTPUT_VERTS 65536
+
 uint hash(uint x) {
     x ^= x >> 16;
     x *= 0x85ebca6bU;
@@ -42,51 +50,178 @@ uint hash(uint x) {
     return x;
 }
 
-float rand(uint seed_val) {
-    return float(hash(seed_val)) / 4294967295.0;
+float rand01(uint s) {
+    return float(hash(s)) / 4294967295.0;
 }
 
-// Very simplified iterative tree generation (placeholder for full Weber-Penn / Hermite implementation)
-// In full version this would generate multiple segments per branch using control points.
+void emit_vertex(uint vi, vec3 pos, vec3 norm, vec4 col) {
+    out_vertices.positions[vi] = vec3(pos.x, -pos.y, pos.z);
+    out_normals.normals[vi] = vec3(norm.x, -norm.y, norm.z);
+    out_colors.colors[vi] = col;
+}
+
+void generate_cylinder(uint base_vi, vec3 p0, vec3 p1, float r0, float r1, vec4 color) {
+    vec3 axis = p1 - p0;
+    float len = length(axis);
+    if (len < 0.0001) return;
+    vec3 tangent = axis / len;
+
+    vec3 up = vec3(0.0, 1.0, 0.0);
+    vec3 binormal;
+    if (abs(dot(tangent, up)) < 0.99) {
+        binormal = normalize(cross(tangent, up));
+    } else {
+        binormal = normalize(cross(tangent, vec3(1.0, 0.0, 0.0)));
+    }
+    vec3 normal = normalize(cross(binormal, tangent));
+
+    for (uint seg = 0; seg < SEGS; seg++) {
+        float t0 = float(seg) / float(SEGS);
+        float t1 = float(seg + 1) / float(SEGS);
+        vec3 c0 = p0 + axis * t0;
+        vec3 c1 = p0 + axis * t1;
+        float rad0 = mix(r0, r1, t0);
+        float rad1 = mix(r0, r1, t1);
+
+        for (uint s = 0; s < SIDES; s++) {
+            float a0 = float(s) / float(SIDES) * TAU;
+            float a1 = float(s + 1) / float(SIDES) * TAU;
+
+            vec3 off0 = normal * cos(a0) + binormal * sin(a0);
+            vec3 off1 = normal * cos(a1) + binormal * sin(a1);
+
+            vec3 v00 = c0 + off0 * rad0;
+            vec3 v01 = c0 + off1 * rad0;
+            vec3 v10 = c1 + off0 * rad1;
+            vec3 v11 = c1 + off1 * rad1;
+
+            vec3 n0 = normalize(off0);
+            vec3 n1 = normalize(off1);
+
+            uint vi = base_vi + (seg * SIDES + s) * 6;
+
+            emit_vertex(vi,   v00, n0, color);
+            emit_vertex(vi+1, v01, n1, color);
+            emit_vertex(vi+2, v10, n0, color);
+
+            emit_vertex(vi+3, v10, n0, color);
+            emit_vertex(vi+4, v01, n1, color);
+            emit_vertex(vi+5, v11, n1, color);
+        }
+    }
+}
+
 void main() {
     uint idx = gl_GlobalInvocationID.x;
-    uint local_seed = params.seed + idx * 17u;
+    uint bf = max(params.branch_factor, 1u);
+    uint max_d = min(params.max_depth, uint(MAX_LEVELS));
 
-    if (idx == 0) {
-        // Root trunk - generate a simple vertical tree as proof of concept
-        uint base = atomicAdd(vertex_count, 8u); // 8 vertices for simple trunk + branches
+    // Compute level boundaries and total branch count (capped at MAX_BRANCHES)
+    uint level_starts[MAX_LEVELS + 2];
+    uint total = 0;
+    uint count_at_level = 1;
+    uint effective_depth = 0;
+    for (uint d = 0; d <= max_d; d++) {
+        if (total + count_at_level > MAX_BRANCHES) break;
+        level_starts[d] = total;
+        total += count_at_level;
+        effective_depth = d;
+        count_at_level *= bf;
+    }
+    level_starts[effective_depth + 1] = total;
 
-        // Trunk base
-        out_vertices.positions[base] = vec3(0.0, 0.0, 0.0);
-        out_normals.normals[base] = vec3(0.0, 1.0, 0.0);
-        out_colors.colors[base] = vec4(0.4, 0.25, 0.1, 1.0);
+    if (idx >= total) return;
 
-        // Trunk top
-        float h = params.trunk_height;
-        out_vertices.positions[base+1] = vec3(0.0, h, 0.0);
-        out_normals.normals[base+1] = vec3(0.0, 1.0, 0.0);
-        out_colors.colors[base+1] = vec4(0.3, 0.6, 0.2, 1.0);
+    // Determine which depth level this thread's branch belongs to
+    uint level = effective_depth;
+    for (uint d = 0; d <= effective_depth; d++) {
+        if (idx < level_starts[d + 1]) {
+            level = d;
+            break;
+        }
+    }
+    uint local_idx = idx - level_starts[level];
 
-        // Simple branches (2 levels)
-        float angle = params.branch_angle;
-        for (uint i = 0; i < 2; i++) {
-            uint b = base + 2 + i * 3;
-            float a = float(i) * 1.57;
-            vec3 branch_dir = vec3(sin(a), 0.7, cos(a));
+    // Decompose local_idx into sibling choices at each ancestor level
+    // e.g. for bf=3, level=2, local_idx=5: siblings = [0, 1, 2]
+    //   meaning: trunk → 2nd child at level 1 → 3rd child at level 2
+    uint siblings[MAX_LEVELS + 1];
+    uint tmp = local_idx;
+    for (int lv = int(level); lv >= 1; lv--) {
+        siblings[lv] = tmp % bf;
+        tmp /= bf;
+    }
+    siblings[0] = 0;
+
+    // Trace the branch hierarchy from root to compute this branch's geometry
+    vec3 pos = vec3(0.0);
+    vec3 dir = vec3(0.0, 1.0, 0.0);
+    float height = params.trunk_height;
+    float radius = params.trunk_radius_base;
+
+    vec3 branch_start, branch_end;
+    float r_start, r_end;
+
+    for (uint lv = 0; lv <= level; lv++) {
+        vec3 branch_dir;
+
+        if (lv == 0) {
+            branch_dir = dir;
+        } else {
+            float sib_angle = float(siblings[lv]) * TAU / float(bf);
+
+            // Deterministic jitter seeded from the full ancestry path
+            uint jseed = params.seed;
+            for (uint j = 1; j <= lv; j++) {
+                jseed = hash(jseed + siblings[j] * 31u + j * 17u);
+            }
+            float jitter = (rand01(jseed) - 0.5) * 0.4;
+
+            vec3 tangent = normalize(dir);
+            vec3 sv;
+            if (abs(tangent.y) < 0.99) {
+                sv = normalize(cross(tangent, vec3(0.0, 1.0, 0.0)));
+            } else {
+                sv = normalize(cross(tangent, vec3(1.0, 0.0, 0.0)));
+            }
+            vec3 uv = normalize(cross(sv, tangent));
+
+            float ba = params.branch_angle + jitter;
+            branch_dir = tangent * cos(ba)
+                + (sv * cos(sib_angle) + uv * sin(sib_angle)) * sin(ba);
             branch_dir = normalize(branch_dir);
 
-            out_vertices.positions[b] = vec3(0.0, h*0.6, 0.0);
-            out_normals.normals[b] = branch_dir;
-            out_colors.colors[b] = vec4(0.2, 0.5, 0.15, 1.0);
-
-            out_vertices.positions[b+1] = vec3(0.0, h*0.6, 0.0) + branch_dir * 0.4;
-            out_normals.normals[b+1] = branch_dir;
-            out_colors.colors[b+1] = vec4(0.15, 0.45, 0.1, 1.0);
+            branch_dir = normalize(
+                branch_dir + vec3(0.0, -params.tropism * 0.15 * float(lv), 0.0)
+            );
         }
 
-        // Leaf indicator
-        out_vertices.positions[base+7] = vec3(0.3, h*0.9, 0.3);
-        out_normals.normals[base+7] = vec3(0.0, 1.0, 0.0);
-        out_colors.colors[base+7] = vec4(0.1, 0.8, 0.2, 1.0);
+        if (lv == level) {
+            branch_start = pos;
+            branch_end = pos + branch_dir * height;
+            r_start = radius;
+            r_end = radius * (lv == 0 ? 0.65 : 0.35);
+        } else {
+            // Advance to the branch point where the next-level child originates
+            float t = 0.45 + 0.35 * float(siblings[lv + 1]) / float(bf);
+            pos = pos + branch_dir * height * t;
+            dir = branch_dir;
+            height *= 0.55;
+            radius *= 0.45;
+        }
+    }
+
+    vec4 color;
+    if (level == 0) {
+        color = vec4(0.55, 0.35, 0.15, 1.0);
+    } else if (level <= 2) {
+        color = vec4(0.45, 0.28, 0.12, 1.0);
+    } else {
+        color = vec4(0.1, 0.7, 0.15, 1.0);
+    }
+
+    uint base_vi = atomicAdd(vertex_count, VERTS_PER_BRANCH);
+    if (base_vi + VERTS_PER_BRANCH <= MAX_OUTPUT_VERTS) {
+        generate_cylinder(base_vi, branch_start, branch_end, r_start, r_end, color);
     }
 }

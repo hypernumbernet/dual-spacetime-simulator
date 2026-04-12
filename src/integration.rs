@@ -1,145 +1,136 @@
-use crate::renderer::Renderer;
-use egui::{ClippedPrimitive, TexturesDelta};
+use ash::vk;
+use egui::ClippedPrimitive;
 use egui_winit::winit::event_loop::ActiveEventLoop;
-use std::sync::Arc;
-use vulkano::{
-    command_buffer::SecondaryAutoCommandBuffer,
-    device::Queue,
-    format::{Format, NumericFormat},
-    render_pass::Subpass,
-    swapchain::Surface,
-};
 use winit::window::Window;
-
-pub struct GuiConfig {
-    pub allow_srgb_render_target: bool,
-}
-
-impl Default for GuiConfig {
-    fn default() -> Self {
-        GuiConfig {
-            allow_srgb_render_target: false,
-        }
-    }
-}
-
-impl GuiConfig {
-    pub fn validate(&self, output_format: Format) {
-        if output_format.numeric_format_color().unwrap() == NumericFormat::SRGB {
-            assert!(
-                self.allow_srgb_render_target,
-                "Using an output format with sRGB requires `GuiConfig::allow_srgb_render_target` \
-                 to be set! Egui prefers UNORM render targets. Using sRGB will cause minor \
-                 discoloration of UI elements due to blending in linear color space and not sRGB \
-                 as Egui expects."
-            );
-        }
-    }
-}
 
 pub struct Gui {
     pub egui_ctx: egui::Context,
     pub egui_winit: egui_winit::State,
-    renderer: Renderer,
-    surface: Arc<Surface>,
+    renderer: egui_ash_renderer::Renderer,
     shapes: Vec<egui::epaint::ClippedShape>,
     textures_delta: egui::TexturesDelta,
+    prepared_meshes: Vec<ClippedPrimitive>,
+    prepared_textures_free: Vec<egui::TextureId>,
+    pixels_per_point: f32,
+    queue: vk::Queue,
+    command_pool: vk::CommandPool,
 }
 
 impl Gui {
-    pub fn new_with_subpass(
+    pub fn new(
         event_loop: &ActiveEventLoop,
-        surface: Arc<Surface>,
-        gfx_queue: Arc<Queue>,
-        subpass: Subpass,
-        output_format: Format,
-        config: GuiConfig,
-    ) -> Gui {
-        config.validate(output_format);
-        let renderer = Renderer::new_with_subpass(gfx_queue, output_format, subpass);
-        Self::new_internal(event_loop, surface, renderer)
-    }
+        window: &Window,
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: ash::Device,
+        queue: vk::Queue,
+        command_pool: vk::CommandPool,
+        render_pass: vk::RenderPass,
+        swapchain_format: vk::Format,
+    ) -> Self {
+        let is_srgb = matches!(
+            swapchain_format,
+            vk::Format::B8G8R8A8_SRGB
+                | vk::Format::R8G8B8A8_SRGB
+                | vk::Format::A8B8G8R8_SRGB_PACK32
+        );
+        let renderer = egui_ash_renderer::Renderer::with_default_allocator(
+            instance,
+            physical_device,
+            device,
+            render_pass,
+            egui_ash_renderer::Options {
+                srgb_framebuffer: is_srgb,
+                enable_depth_test: false,
+                enable_depth_write: false,
+                in_flight_frames: 2,
+            },
+        )
+        .expect("Failed to create egui-ash-renderer");
 
-    fn new_internal(
-        event_loop: &ActiveEventLoop,
-        surface: Arc<Surface>,
-        renderer: Renderer,
-    ) -> Gui {
-        let max_texture_side = renderer
-            .queue()
-            .device()
-            .physical_device()
-            .properties()
-            .max_image_dimension2_d as usize;
-        let egui_ctx: egui_winit::egui::Context = Default::default();
+        let egui_ctx: egui::Context = Default::default();
         let theme = match egui_ctx.theme() {
-            egui_winit::egui::Theme::Dark => winit::window::Theme::Dark,
-            egui_winit::egui::Theme::Light => winit::window::Theme::Light,
+            egui::Theme::Dark => winit::window::Theme::Dark,
+            egui::Theme::Light => winit::window::Theme::Light,
         };
+        let max_texture_side = 8192;
+
         let egui_winit = egui_winit::State::new(
             egui_ctx.clone(),
             egui_ctx.viewport_id(),
             event_loop,
-            Some(surface_window(&surface).scale_factor() as f32),
+            Some(window.scale_factor() as f32),
             Some(theme),
             Some(max_texture_side),
         );
+
+        let pixels_per_point = window.scale_factor() as f32;
+
         Gui {
             egui_ctx,
             egui_winit,
             renderer,
-            surface,
             shapes: vec![],
             textures_delta: Default::default(),
+            prepared_meshes: vec![],
+            prepared_textures_free: vec![],
+            pixels_per_point,
+            queue,
+            command_pool,
         }
     }
 
-    fn pixels_per_point(&self) -> f32 {
-        egui_winit::pixels_per_point(&self.egui_ctx, surface_window(&self.surface))
-    }
-
-    pub fn update(&mut self, winit_event: &winit::event::WindowEvent) -> bool {
+    pub fn update(&mut self, window: &Window, winit_event: &winit::event::WindowEvent) -> bool {
         self.egui_winit
-            .on_window_event(surface_window(&self.surface), winit_event)
+            .on_window_event(window, winit_event)
             .consumed
     }
 
-    pub fn immediate_ui(&mut self, layout_function: impl FnOnce(&mut Self)) {
-        let raw_input = self
-            .egui_winit
-            .take_egui_input(surface_window(&self.surface));
+    pub fn immediate_ui(&mut self, window: &Window, layout_function: impl FnOnce(&mut Self)) {
+        let raw_input = self.egui_winit.take_egui_input(window);
         self.egui_ctx.begin_pass(raw_input);
         layout_function(self);
     }
 
-    pub fn draw_on_subpass_image(
-        &mut self,
-        image_dimensions: [u32; 2],
-    ) -> Arc<SecondaryAutoCommandBuffer> {
-        if self.renderer.has_renderpass() {
-            panic!(
-                "Gui integration has been created with its own render pass, use `draw_on_image` \
-                 instead"
-            )
-        }
-        let (clipped_meshes, textures_delta) = self.extract_draw_data_at_frame_end();
-        self.renderer.draw_on_subpass_image(
-            &clipped_meshes,
-            &textures_delta,
-            self.pixels_per_point(),
-            image_dimensions,
-        )
+    pub fn context(&self) -> egui::Context {
+        self.egui_ctx.clone()
     }
 
-    fn extract_draw_data_at_frame_end(&mut self) -> (Vec<ClippedPrimitive>, TexturesDelta) {
-        self.end_frame();
+    pub fn prepare_frame(&mut self, window: &Window) {
+        self.end_frame(window);
         let shapes = std::mem::take(&mut self.shapes);
         let textures_delta = std::mem::take(&mut self.textures_delta);
-        let clipped_meshes = self.egui_ctx.tessellate(shapes, self.pixels_per_point());
-        (clipped_meshes, textures_delta)
+
+        self.pixels_per_point = egui_winit::pixels_per_point(&self.egui_ctx, window);
+        self.prepared_meshes = self.egui_ctx.tessellate(shapes, self.pixels_per_point);
+        self.prepared_textures_free = textures_delta.free.clone();
+
+        self.renderer
+            .set_textures(self.queue, self.command_pool, &textures_delta.set)
+            .expect("Failed to set egui textures");
     }
 
-    fn end_frame(&mut self) {
+    pub fn draw(&mut self, command_buffer: vk::CommandBuffer, extent: vk::Extent2D) {
+        self.renderer
+            .cmd_draw(
+                command_buffer,
+                extent,
+                self.pixels_per_point,
+                &self.prepared_meshes,
+            )
+            .expect("Failed to record egui draw commands");
+    }
+
+    pub fn finish_frame(&mut self) {
+        let free = std::mem::take(&mut self.prepared_textures_free);
+        if !free.is_empty() {
+            self.renderer
+                .free_textures(&free)
+                .expect("Failed to free egui textures");
+        }
+    }
+
+    fn end_frame(&mut self, window: &Window) {
         let egui::FullOutput {
             platform_output,
             textures_delta,
@@ -148,16 +139,8 @@ impl Gui {
             viewport_output: _,
         } = self.egui_ctx.end_pass();
         self.egui_winit
-            .handle_platform_output(surface_window(&self.surface), platform_output);
+            .handle_platform_output(window, platform_output);
         self.shapes = shapes;
         self.textures_delta = textures_delta;
     }
-
-    pub fn context(&self) -> egui::Context {
-        self.egui_ctx.clone()
-    }
-}
-
-fn surface_window(surface: &Surface) -> &Window {
-    surface.object().unwrap().downcast_ref::<Window>().unwrap()
 }

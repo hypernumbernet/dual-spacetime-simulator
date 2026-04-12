@@ -1,4 +1,3 @@
-//Hide the console window on Windows in release mode
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod camera;
@@ -7,36 +6,34 @@ mod initial_condition;
 mod integration;
 mod math;
 mod pipeline;
-mod renderer;
 mod settings;
 mod simulation;
 mod tree;
 mod ui;
 mod ui_state;
 mod ui_styles;
-mod utils;
+mod vulkan_base;
 
 use crate::initial_condition::InitialCondition;
-use crate::integration::{Gui, GuiConfig};
+use crate::integration::Gui;
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
 use crate::tree::Tree;
 use crate::ui::draw_ui;
 use crate::ui_state::{AppMode, GpuTreeComputeMode, GpuTreeLayout, GpuTreeRenderMode, UiState};
+use crate::vulkan_base::VulkanBase;
+use ash::vk;
 use glam::Vec3;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use vulkano_util::{
-    context::{VulkanoConfig, VulkanoContext},
-    window::{VulkanoWindows, WindowDescriptor},
-};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalPosition,
     error::EventLoopError,
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
+    window::Window,
 };
 
 const DOUBLE_CLICK_MILLIS: u64 = 400;
@@ -47,7 +44,7 @@ fn main() -> Result<(), EventLoopError> {
     let mut app = App::default();
     let ui_state_clone = Arc::clone(&app.ui_state);
     let simulation_manager_clone = Arc::clone(&app.simulation_manager);
-    let simulation_manager_for_reset = Arc::clone(&simulation_manager_clone); // for reset in background
+    let simulation_manager_for_reset = Arc::clone(&simulation_manager_clone);
     let need_redraw = Arc::clone(&app.need_redraw);
     let skip_redraw = Arc::clone(&app.skip_redraw);
     let mut last_advance = Instant::now();
@@ -58,7 +55,7 @@ fn main() -> Result<(), EventLoopError> {
         .build()
         .unwrap();
     std::thread::spawn(move || {
-        let simulation_manager = simulation_manager_for_reset; // renamed for clarity in reset/advance calls
+        let simulation_manager = simulation_manager_for_reset;
         loop {
             if *need_redraw.read().unwrap() {
                 std::thread::sleep(Duration::from_millis(16));
@@ -141,10 +138,11 @@ fn generate_window_title() -> String {
 }
 
 pub struct App {
-    context: VulkanoContext,
-    windows: VulkanoWindows,
-    render_pipeline: Option<ParticleRenderPipeline>,
+    // Drop order matters: gui and pipeline must be dropped before vulkan_base
     gui: Option<Gui>,
+    render_pipeline: Option<ParticleRenderPipeline>,
+    vulkan_base: Option<VulkanBase>,
+    window: Option<Arc<Window>>,
     ui_state: Arc<RwLock<UiState>>,
     simulation_manager: Arc<RwLock<SimulationManager>>,
     positions: Vec<[f32; 3]>,
@@ -167,14 +165,12 @@ pub struct App {
 
 impl Default for App {
     fn default() -> Self {
-        let context = VulkanoContext::new(VulkanoConfig::default());
-        let windows = VulkanoWindows::default();
         let settings = AppSettings::load();
         let mut ui_state = UiState::default();
         ui_state.apply_settings(&settings);
         Self {
-            context,
-            windows,
+            window: None,
+            vulkan_base: None,
             render_pipeline: None,
             gui: None,
             ui_state: Arc::new(RwLock::new(ui_state)),
@@ -202,39 +198,39 @@ impl Default for App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let ui_state = self.ui_state.write().unwrap();
-        let resize_constraints = vulkano_util::window::WindowResizeConstraints {
-            min_width: ui_state.min_window_width,
-            min_height: ui_state.min_window_height,
-            ..Default::default()
-        };
-        let descriptor = WindowDescriptor {
-            title: generate_window_title(),
-            resize_constraints,
-            ..Default::default()
-        };
-        self.windows
-            .create_window(event_loop, &self.context, &descriptor, |ci| {
-                ci.image_format = vulkano::format::Format::B8G8R8A8_UNORM;
-                ci.min_image_count = ci.min_image_count.max(2);
-            });
-        let primary_renderer = self.windows.get_primary_renderer().unwrap();
+
+        let window_attrs = Window::default_attributes()
+            .with_title(generate_window_title())
+            .with_min_inner_size(winit::dpi::LogicalSize::new(
+                ui_state.min_window_width,
+                ui_state.min_window_height,
+            ));
+        let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
+
         if self.settings.start_maximized {
-            primary_renderer.window().set_maximized(true);
+            window.set_maximized(true);
         }
-        let render_pipeline = ParticleRenderPipeline::new(
-            self.context.graphics_queue().clone(),
-            primary_renderer.swapchain_format(),
-            self.context.memory_allocator(),
-        );
-        self.render_pipeline = Some(render_pipeline);
-        self.gui = Some(Gui::new_with_subpass(
+
+        let vulkan_base = VulkanBase::new(&window);
+        let render_pipeline = ParticleRenderPipeline::new(&vulkan_base);
+
+        let gui = Gui::new(
             event_loop,
-            primary_renderer.surface(),
-            primary_renderer.graphics_queue(),
-            self.render_pipeline.as_ref().unwrap().gui_pass(),
-            primary_renderer.swapchain_format(),
-            GuiConfig::default(),
-        ));
+            &window,
+            &vulkan_base.instance,
+            vulkan_base.physical_device,
+            vulkan_base.device.clone(),
+            vulkan_base.graphics_queue,
+            vulkan_base.command_pool,
+            render_pipeline.render_pass(),
+            vulkan_base.swapchain_format,
+        );
+
+        self.window = Some(window);
+        self.render_pipeline = Some(render_pipeline);
+        self.vulkan_base = Some(vulkan_base);
+        self.gui = Some(gui);
+
         let initial_condition = InitialCondition::default();
         let particle_count = ui_state.particle_count;
         let scale = ui_state.scale;
@@ -251,14 +247,20 @@ impl ApplicationHandler for App {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        window_id: winit::window::WindowId,
+        _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        let renderer = self.windows.get_renderer_mut(window_id).unwrap();
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        let Some(vb) = self.vulkan_base.as_mut() else {
+            return;
+        };
         let gui = self.gui.as_mut().unwrap();
         let Some(pipeline) = self.render_pipeline.as_mut() else {
             return;
         };
+
         {
             let mut ui_state = self.ui_state.write().unwrap();
             if ui_state.request_exit {
@@ -267,105 +269,147 @@ impl ApplicationHandler for App {
                 return;
             }
         }
+
         let lock_camera_up = {
             let ui_state = self.ui_state.read().unwrap();
             ui_state.lock_camera_up
         };
         pipeline.set_lock_camera_up(lock_camera_up);
+
         match &event {
-            WindowEvent::Resized(_) => {
-                renderer.resize();
+            WindowEvent::Resized(size) => {
+                if size.width > 0 && size.height > 0 {
+                    vb.recreate_swapchain(window);
+                    pipeline.recreate_framebuffers(vb);
+                }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
-                renderer.resize();
+                vb.recreate_swapchain(window);
+                pipeline.recreate_framebuffers(vb);
             }
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                gui.immediate_ui(|gui| {
+                gui.immediate_ui(window, |gui| {
                     let ctx = gui.context();
                     draw_ui(&self.ui_state, &mut self.settings, &ctx);
                 });
-                match renderer.acquire(Some(Duration::from_millis(5000)), |_| {}) {
-                    Ok(future) => {
-                        let ui_state = self.ui_state.read().unwrap();
-                        let scale = ui_state.scale_gauge;
-                        let link_point_size_to_scale = ui_state.link_point_size_to_scale;
-                        let show_grid = ui_state.show_grid;
-                        let app_mode = ui_state.app_mode;
-                        let gpu_tree_render_mode = if app_mode == AppMode::GpuTree {
-                            ui_state.gpu_tree_render_mode
-                        } else {
-                            GpuTreeRenderMode::Polygons
-                        };
-                        drop(ui_state);
-                        let after_future = pipeline.render(
-                            future,
-                            renderer.swapchain_image_view(),
-                            gui,
-                            scale,
-                            link_point_size_to_scale,
-                            show_grid,
-                            app_mode,
-                            gpu_tree_render_mode,
-                        );
-                        renderer.present(after_future, true);
+                gui.prepare_frame(window);
+
+                vb.wait_for_fence();
+
+                let image_index = match vb.acquire_next_image() {
+                    Ok((idx, _)) => idx,
+                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                        vb.recreate_swapchain(window);
+                        pipeline.recreate_framebuffers(vb);
+                        return;
                     }
-                    Err(vulkano::VulkanError::OutOfDate) => {
-                        renderer.resize();
-                    }
-                    Err(e) => panic!("Failed to acquire swapchain future: {}", e),
+                    Err(e) => panic!("Failed to acquire swapchain image: {:?}", e),
                 };
+
+                vb.reset_fence();
+
+                let cb = vb.current_command_buffer();
+                let begin_ci = vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+                unsafe {
+                    vb.device
+                        .reset_command_buffer(cb, vk::CommandBufferResetFlags::empty())
+                        .unwrap();
+                    vb.device.begin_command_buffer(cb, &begin_ci).unwrap();
+                }
+
+                let ui_state = self.ui_state.read().unwrap();
+                let scale = ui_state.scale_gauge;
+                let link_point_size_to_scale = ui_state.link_point_size_to_scale;
+                let show_grid = ui_state.show_grid;
+                let app_mode = ui_state.app_mode;
+                let gpu_tree_render_mode = if app_mode == AppMode::GpuTree {
+                    ui_state.gpu_tree_render_mode
+                } else {
+                    GpuTreeRenderMode::Polygons
+                };
+                drop(ui_state);
+
+                pipeline.render(
+                    cb,
+                    image_index as usize,
+                    vb.swapchain_extent,
+                    gui,
+                    scale,
+                    link_point_size_to_scale,
+                    show_grid,
+                    app_mode,
+                    gpu_tree_render_mode,
+                );
+
+                unsafe {
+                    vb.device.end_command_buffer(cb).unwrap();
+                }
+
+                match vb.submit_and_present(image_index) {
+                    Ok(true) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                        vb.recreate_swapchain(window);
+                        pipeline.recreate_framebuffers(vb);
+                    }
+                    Ok(false) => {}
+                    Err(e) => panic!("Failed to present: {:?}", e),
+                }
+
+                gui.finish_frame();
+                vb.advance_frame();
             }
             _ => (),
         }
-        if window_id == renderer.window().id() {
-            if !gui.update(&event) {
-                match &event {
-                    WindowEvent::MouseInput { state, button, .. } => match button {
-                        MouseButton::Left => self.left_button(state),
-                        MouseButton::Right => self.right_button(state),
-                        MouseButton::Middle => self.middle_button(state),
-                        _ => {}
-                    },
-                    WindowEvent::CursorMoved { position, .. } => {
-                        let (x, y) = (position.x, position.y);
-                        if let Some((lx, ly)) = self.last_cursor_position {
-                            if self.mouse_left_down {
-                                pipeline.revolve_camera(x - lx, y - ly);
-                            }
-                            if self.mouse_right_down {
-                                pipeline.look_around(x - lx, y - ly);
-                            }
-                            if self.mouse_middle_down {
-                                let window_size = renderer.window().inner_size();
-                                let center_x = window_size.width as f64 / 2.0;
-                                let center_y = window_size.height as f64 / 2.0;
-                                pipeline.rotate_camera(x, lx, y, ly, center_x, center_y);
-                            }
-                        }
-                        self.last_cursor_position = Some((x, y));
-                    }
-                    WindowEvent::MouseWheel { delta, .. } => match delta {
-                        MouseScrollDelta::LineDelta(_, y) => {
-                            let zoom_factor = y * 0.1;
-                            pipeline.zoom_camera(zoom_factor);
-                        }
-                        MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                            let zoom_factor = y * 0.1;
-                            pipeline.zoom_camera(zoom_factor as f32);
-                        }
-                    },
+
+        let window_clone = window.clone();
+        if !gui.update(&window_clone, &event) {
+            match &event {
+                WindowEvent::MouseInput { state, button, .. } => match button {
+                    MouseButton::Left => self.left_button(state),
+                    MouseButton::Right => self.right_button(state),
+                    MouseButton::Middle => self.middle_button(state),
                     _ => {}
+                },
+                WindowEvent::CursorMoved { position, .. } => {
+                    let (x, y) = (position.x, position.y);
+                    if let Some((lx, ly)) = self.last_cursor_position {
+                        if self.mouse_left_down {
+                            pipeline.revolve_camera(x - lx, y - ly);
+                        }
+                        if self.mouse_right_down {
+                            pipeline.look_around(x - lx, y - ly);
+                        }
+                        if self.mouse_middle_down {
+                            let window_size = window.inner_size();
+                            let center_x = window_size.width as f64 / 2.0;
+                            let center_y = window_size.height as f64 / 2.0;
+                            pipeline.rotate_camera(x, lx, y, ly, center_x, center_y);
+                        }
+                    }
+                    self.last_cursor_position = Some((x, y));
                 }
+                WindowEvent::MouseWheel { delta, .. } => match delta {
+                    MouseScrollDelta::LineDelta(_, y) => {
+                        let zoom_factor = y * 0.1;
+                        pipeline.zoom_camera(zoom_factor);
+                    }
+                    MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
+                        let zoom_factor = y * 0.1;
+                        pipeline.zoom_camera(zoom_factor as f32);
+                    }
+                },
+                _ => {}
             }
         }
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        let renderer = self.windows.get_primary_renderer().unwrap();
-        renderer.window().request_redraw();
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
         }
@@ -392,20 +436,15 @@ impl ApplicationHandler for App {
                     pipeline.set_graph_lines(&[]);
                     match render_mode {
                         GpuTreeRenderMode::Lines => {
-                            // 線描画: generate_vertices_for_layout で LineList 互換頂点 (AxesVertex)
                             let line_verts = Tree::generate_vertices_for_layout(layout, params);
                             pipeline.set_graph_lines(&line_verts);
                         }
                         GpuTreeRenderMode::Polygons => {
-                            // ポリゴン描画: Tubeメッシュ (TreeVertex, TriangleList + lighting)
                             if compute_mode == GpuTreeComputeMode::GPU {
-                                // GPU Compute Dispatchを実行
                                 if let Some(pipeline) = self.render_pipeline.as_mut() {
                                     pipeline.compute_tree_vertices(params, layout);
                                 }
-                                // compute_tree_vertices内でset_tree_verticesが呼ばれるため、ここでは何もしない
                             } else {
-                                // CPUモードは従来通り
                                 let tube_verts = match layout {
                                     GpuTreeLayout::Single => {
                                         let tree = Tree::generate(params);
@@ -425,7 +464,6 @@ impl ApplicationHandler for App {
                 self.last_gpu_tree_fingerprint = fp;
             }
             self.prev_app_mode = app_mode;
-            // GpuTree モードではシミュレーション/Graph更新をスキップ
             return;
         }
         self.prev_app_mode = app_mode;
