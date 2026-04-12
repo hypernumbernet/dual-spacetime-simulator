@@ -1,101 +1,153 @@
 # プロジェクトの全体設計概要
 
-このプロジェクトは、Rust言語を使用して物理粒子シミュレーションアプリケーションを作成します。Vulkanoを活用したグラフィックスレンダリングとeguiによるUIを統合し、3D空間での粒子シミュレーションを実現します。設計の原則として、モジュール性と構造化を重視し、処理を関数単位に分割して可読性を高めます。テストコードは、主要な関数に対してユニットテストを追加し、無理のない範囲でカバーします。
+このリポジトリは **Rust** で書かれたデスクトップアプリです。**Vulkan（ash）** で 3D を描画し、**egui** で操作パネルを重ねます。中身は大きく次の 3 つです。
+
+1. **N 体に近い重力シミュレーション**（ニュートン近似に、光速スケールやローレンツ変換に基づく変種を追加）
+2. **3D Graph モード**：双四元数・双ベクトルなどの幾何を、サンプル点と補助線として可視化
+3. **GPU Tree モード**：計算シェーダで木状メッシュを生成し、ラインまたはポリゴンで描画
+
+設計方針は、**ウィンドウ・Vulkan・UI・シミュレーションの責務をモジュールで分ける**こと、および **シミュレーションを描画ループから切り離してバックグラウンドスレッドで進める**ことです。
+
+---
 
 ## 1. 依存関係と外部ライブラリ
-- **主要ライブラリ**:
-  - `vulkano`: Vulkanベースのグラフィックスコンテキストとウィンドウ管理。
-  - `egui`: UIコンポーネント（サイドパネル、入力フィールドなど）。
-  - `winit`: イベントループとウィンドウイベント処理。
-  - `rayon`: 並列処理によるシミュレーション最適化。
-  - `glam`: 3D数学ライブラリ（ベクトル、行列など）。
 
-Cargo.tomlでこれらを依存として定義します。
+`Cargo.toml`（エディション **2024**、パッケージ **0.2.0**）より。
 
-## 2. アプリケーションの構造
-アプリケーションは、winitの`ApplicationHandler`トレイトを実装した`App`構造体を中心に構築します。状態を保持し、イベント処理を分散します。
+| 用途 | クレート |
+|------|-----------|
+| ウィンドウ・イベント | `winit` |
+| Vulkan ローレベル | `ash`, `ash-window` |
+| メモリ割り当て | `gpu-allocator` |
+| UI | `egui`, `egui-winit`, `egui-ash-renderer` |
+| 数学 | `glam` |
+| CPU 並列（粒子の力積分など） | `rayon`, `num_cpus` |
+| 乱数・分布 | `rand`, `rand_distr` |
+| 設定ファイル | `serde`, `serde_json` |
+| 太陽系初期条件（暦） | `satkit` |
+| その他 | `bytemuck`, `raw-window-handle`, `ahash` |
 
-- **主要構造体**:
-  - `App`: アプリケーションの全体状態を管理（`src/types.rs`で定義）。
-    - フィールド:
-      - `context: VulkanoContext`: Vulkanコンテキスト。
-      - `windows: VulkanoWindows`: ウィンドウとレンダラーの管理。
-      - `gui: Option<Gui>`: eguiの統合オブジェクト。
-      - `simulation_state: SimulationState`: 粒子シミュレーションの状態。
-      - `ui_state: UiState`: UI入力値の状態（例: 粒子数、速度、重力などのパラメータ）。
+**注**：以前の設計メモにあった **Vulkano** は現行実装では使っていません。Vulkan は **ash** 直叩きです。
 
-- **補助構造体**:
-  - `SimulationState`: 粒子データ（位置、速度など）と物理計算の状態を保持。
-  - `UiState`: 入力ペインの状態。
+---
 
-- **モジュール分け**:
-  - `src/main.rs`: エントリーポイントと`App`の定義。
-  - `src/ui.rs`: UI関連の関数（入力ペインの描画、状態更新）。
-  - `src/ui_styles.rs`: UIスタイル関連。
-  - `src/simulation.rs`: 粒子シミュレーションのロジック。
-  - `src/camera.rs`: カメラロジック。
-  - `src/integration.rs`: GUI統合。
-  - `src/pipeline.rs`: レンダリングパイプラインの構築。
-  - `src/renderer.rs`: レンダリング処理。
-  - `src/utils.rs`: ユーティリティ関数。
-  - `src/shaders/`: GLSLシェーダーコード。
-  - `tests/render_tests.rs`: テストコード。
+## 2. アプリケーションの中心構造
 
-## 3. 画面枠組みの設計（UIレイアウト）
-ウィンドウを1つとし、eguiでレイアウトを構成。画面全体が3D描写エリアと値入力フロートパネルとする。
+`winit` の `ApplicationHandler` を実装した **`App`**（`src/main.rs`）がエントリです。
 
-- **全体レイアウト**:
-    - メインウィンドウ全体: 3D描写エリア。
-      - 内容: Vulkanoで3Dシーンを描画。粒子をレンダリング。
-    - 値入力パネル: 画面左側にフロート表示。
-      - 内容: スライダー、テキスト入力、ボタンでパラメータを設定。
-      - 状態更新: UI入力で`UiState`を更新し、シミュレーションに反映。
+### 2.1 `App` が保持する主な状態
 
-- **UIの更新フロー**:
-  - `egui::Window::new("Control Panel")` でUIを描画。
-  - 入力ペインの変更を検知し、`UiState`を更新。
-  - メイン画面は、レンダリング関数を呼び出してVulkanoコマンドバッファに描画。
+- **`VulkanBase`**：インスタンス、スワップチェーン、コマンドバッファ、フェンス／セマフォ、`gpu-allocator` など
+- **`ParticleRenderPipeline`**：レンダパス、グラフィックス／コンピュートパイプライン、頂点バッファ更新、軌道カメラ
+- **`Gui`**（`integration.rs`）：`egui` + `egui-ash-renderer` による UI メッシュの Vulkan への載せ込み
+- **`Arc<RwLock<UiState>>`**：UI とシミュスレッド双方から読み書き
+- **`Arc<RwLock<SimulationManager>>`**：シミュレーション状態（粒子ベクトル）
+- **`need_redraw` / `skip_redraw`**：シミュ結果を GPU バッファへ反映するタイミング制御
+- **`AppSettings`**：実行ファイル近傍の `setting.config`（JSON）から読み込み
 
-## 4. レンダリングとイベント処理の流れ
-- **初期化 (`resumed` メソッド)**:
-  - ウィンドウ作成: `windows.create_window` でウィンドウを生成。
-  - GUI初期化: `Gui::new` でegui統合を設定。
-  - 状態初期化: `SimulationState`と`UiState`をデフォルト値で作成。
-  - パイプラインセットアップ: `pipeline.rs`でVulkanoのグラフィックスパイプラインを作成。
+**ドロップ順**：コメントどおり、`gui` と `render_pipeline` を **`vulkan_base` より先に** 破棄する必要があります。
 
-- **イベント処理 (`window_event` メソッド)**:
-  - `WindowEvent::RedrawRequested`: UI描画とレンダリングを実行。
-    - UI更新: `draw_ui` 関数で入力ペインとメイン画面のUIを構築。
-    - シミュレーション更新: `update_simulation` 関数で粒子状態を更新。
-    - レンダリング: `renderer.rs`の関数でVulkanoコマンドバッファを構築し、スワップチェーンに描画。
-  - その他イベント: リサイズ、閉じるなどの標準処理。
+### 2.2 シミュレーションと描画の分離
 
-- **レンダリングの詳細**:
-  - 粒子を頂点バッファで表現し、物理計算後にバッファを更新。
+- メインスレッド：`RedrawRequested` で **egui の即時 UI** → **コマンドバッファ記録** → **Present**
+- 別スレッド：`UiState` の `is_running` と `AppMode::Simulation` のときだけ、`rayon` スレッドプール上で `SimulationManager::advance` を周期実行。終了後に `need_redraw` を立て、`about_to_wait` 側で粒子バッファを `pipeline.set_particles` に流し込みます。
 
-## 5. テスト戦略
-- 無理のない範囲: ユニットテストで関数を検証。
-  - `simulation.rs`: 粒子更新関数のテスト。
-  - `ui.rs`: UI状態更新のテスト。
-  - インテグレーションテスト: `tests/render_tests.rs` で全体フローをテスト。
+これにより、UI の応答性とシミュレーションのスループットを両立しています。
 
-## 6. 次フェーズの計画
-- 基本枠組み完成後: 粒子シミュレーションの追加。
-- 拡張: カメラコントロール、複数粒子タイプ、性能最適化。
+---
 
-## 7. 開発環境
+## 3. アプリモード（`UiState` / `src/ui_state.rs`）
 
-このプロジェクトの開発は、以下の環境で進められます。クロスプラットフォーム対応を考慮しつつ、主にWindows環境でテストと実装を行いました。
+| モード | 役割 |
+|--------|------|
+| **`Simulation`** | 粒子シミュレーション。左ペインは Simulation / Initial Condition / Settings |
+| **`Graph3D`** | `graph3d.rs` が点列とグラフ用ライン頂点を生成し、粒子パイプライン＋ライン描画で表示。ペインは 3D Graph / Settings |
+| **`GpuTree`** | `tree_compute.comp` で頂点を生成（または CPU でライン頂点）。**Lines** / **Polygons**、**Single** / **Forest on XZ Grid**。ペインは GPU Tree / Settings |
 
-- **OS**: Windows 11 (バージョン 23H2 以降を推奨。Vulkanドライバの安定性を確保するため、最新のGPUドライバをインストールしてください。NVIDIA/AMD/Intel GPUに対応)。
-- **IDE/エディタ**: Visual Studio Code (VSCode)。Rust拡張機能（`rust-analyzer`）をインストールし、シンタックスハイライト、デバッグ、コード補完を活用。eguiやVulkanoのサンプルコードを参照する際に便利です。
-- **バージョン管理**: GitHub。リポジトリとして使用し、ブランチ管理で開発を進めます。CI/CDとしてGitHub Actionsを設定し、Rustのビルドとテストを自動化。
+モード切替時に `about_to_wait` でフィンガープリントを見て、GPU バッファの更新をスキップまたは差し替えます。
 
-### セットアップ手順
-1. **Rustツールチェーンのインストール**: `rustup`を使用してRust 2024をインストール（`rustup update stable`）。
-2. **VSCodeの設定**: Extensionsから`rust-analyzer`と`CodeLLDB`を追加。tasks.jsonで`cargo build`や`cargo run`のタスクを定義。
-3. **GitHubリポジトリのクローン**: `git clone https://github.com/hypernumbernet/dual-spacetime-simulator.git`でリポジトリを取得。`.gitignore`に`target/`ディレクトリを追加。
-4. **Vulkan環境**: Vulkan SDK 1.3.296以降をインストール（LunarGからダウンロード）。`vkconfig`ツールでレイトレーシングや拡張を有効化。
-5. **依存の解決**: `cargo build`を実行し、Vulkanoのシェーダーコンパイルを確認。エラーが発生した場合、`VULKAN_SDK`環境変数を設定。
+---
 
-この環境により、モジュール性の高いコード構造を維持しつつ、効率的なデバッグとイテレーションを実現します。将来的な拡張（例: クロスコンパイルでLinux/macOS対応）にも対応可能です。
+## 4. シミュレーション（`src/simulation.rs`）
+
+- **`SimulationManager`**：`reset` で初期条件から `SimulationState` を構築し、`advance` で時間発展（`advance_time` のあと `update_velocities`）
+- **`SimulationState`** のバリアント：
+  - **Normal**：古典的 N 体風（ペア和の重力、並列）
+  - **SpeedOfLightLimit**：前進を \(\gamma^{-1}\) でスケール
+  - **LorentzTransformation**：速度更新にラピディティ／`Spacetime` を用いた変種、位置更新も相対論的な形
+
+物理定数（`G`, `c`, `AU` 等）は `simulation.rs` に集約されています。
+
+---
+
+## 5. 初期条件（`src/initial_condition.rs`）
+
+乱数球・立方体、二球、渦巻き円盤、**太陽系（`satkit` + JPL 系データ）** など、列挙子 `InitialCondition` として定義され、`generate_particles` で `Particle` ベクトルを返します。
+
+---
+
+## 6. 数学モジュール（`src/math/`）
+
+- **`spacetime.rs`**：時空・ラピディティ周り（ユニットテストあり）
+- **`biquaternion.rs`**, **`bivector.rs`**：Graph3D の可視化に使用（四元数関連にテストあり）
+
+---
+
+## 7. 木生成（`src/tree.rs` + `src/shaders/tree_compute.comp`）
+
+Weber–Penn 系に着想を得た手続き木。**CPU** でスプライン頂点を出す経路と、**GPU コンピュート**で三角形メッシュを書き出す経路があり、`GpuTreeRenderMode` と `ParticleRenderPipeline::compute_tree_vertices` で切り替わります。
+
+---
+
+## 8. レンダリングパイプライン（`src/pipeline.rs`）
+
+- **軌道カメラ**（`camera.rs`）：ドラッグで回転、ホイールでズーム、ダブルクリックで視点プリセット（`main.rs` のマウス処理から呼び出し）
+- **座標軸・グリッド**、**粒子（点スプライト風のサイズ定数）**、**補助ライン**、**木メッシュ**、最後に **egui** を同一レンダパス／フレームバッファへ合成
+- シェーダは `build.rs` が `glslc` で **SPIR-V** にコンパイル（`OUT_DIR/shaders/*.spv`）
+
+シェーダ一覧（ソースは `src/shaders/`）：
+
+- `axes_vertex.vert` / `axes_fragment.frag`
+- `particles_vertex.vert` / `particles_fragment.frag`
+- `tree_vertex.vert` / `tree_fragment.frag`
+- `tree_compute.comp`
+- `egui_vertex.vert` / `egui_fragment.frag`
+
+---
+
+## 9. UI（`src/ui.rs`, `src/ui_styles.rs`）
+
+`draw_ui` が `UiState` と `AppSettings` を編集します。実行パラメータ（粒子数、時間刻み、スケール、シミュ種別、Graph／GpuTree のパラメータなど）と、設定の保存（`AppSettings::save`）を担当します。
+
+---
+
+## 10. ビルド要件
+
+- **Rust**：`edition = "2024"` に対応したツールチェーン（安定版の新しめ推奨）
+- **Vulkan SDK**：`glslc` が `PATH` に通っていること（`build.rs` がコンパイル失敗時に明示的にエラーを出します）
+
+---
+
+## 11. テスト
+
+- **統合テスト用の `tests/` ディレクトリは現状なし**
+- **`src/math/spacetime.rs`** と **`src/math/biquaternion.rs`** にモジュール内 `#[test]` が存在します
+
+---
+
+## 12. 開発環境のメモ
+
+- **OS**：Windows 10/11 での動作確認が主想定。Vulkan 対応 GPU と最新ドライバを推奨
+- **エディタ**：Visual Studio Code + `rust-analyzer` など
+- **リポジトリ**：例として `git clone https://github.com/hypernumbernet/dual-spacetime-simulator.git`
+- **CI**：リポジトリ直下に `.github` ワークフローが無い場合もあるため、自動ビルドはプロジェクト設定に依存します
+
+### セットアップの流れ（要約）
+
+1. `rustup` で Rust を入れ、`cargo build` が通る状態にする  
+2. Vulkan SDK を入れ、`glslc` が使えることを確認する  
+3. 必要ならリポジトリをクローンし、ルートで `cargo run`
+
+---
+
+以上が、現行ソースツリー（`main.rs` が宣言するモジュール構成と `Cargo.toml`）に整合した設計概要です。
