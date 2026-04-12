@@ -2,7 +2,7 @@ use glam::{FloatExt, Quat, Vec3};
 use rand::{Rng, SeedableRng};
 use std::f32::consts::TAU;
 
-/// GPU Compute用にTreeParamsをpackした構造体 (std140 layout準拠)
+/// A structure containing TreeParams packed for GPU Compute (compliant with std140 layout)
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuTreeComputeParams {
@@ -31,13 +31,13 @@ impl From<TreeParams> for GpuTreeComputeParams {
     }
 }
 
-/// xz 平面の座標軸補助グリッドと同じ設定（`pipeline::create_axes_buffer` と同期）
+/// Same as the xz coordinate axis auxiliary grid (synchronized with `pipeline::create_axes_buffer`)
 pub const AXIS_XZ_GRID_EXTENT: f32 = 2.0;
 pub const AXIS_XZ_GRID_LINE_COUNT: usize = 9;
 
-/// HPG 2025 / Weber-Penn 風の簡易木生成
-/// CPU版 (Tree::generate) と GPU Computeシェーダ版の両方をサポート。
-/// GPU版は tree_compute.comp で実装 (ComputeMode::GPU 使用時)。
+/// Simple tree generation inspired by HPG 2025 / Weber-Penn style
+/// Supports both CPU and GPU Compute shader versions (using ComputeMode::GPU for GPU version).
+/// The GPU version is implemented in tree_compute.comp.
 
 #[derive(Clone, Copy)]
 pub struct TreeParams {
@@ -47,7 +47,7 @@ pub struct TreeParams {
     pub max_depth: u8,
     pub branch_factor: u32,
     pub branch_angle: f32,
-    pub tropism: f32, // 重力方向への曲げ強度
+    pub tropism: f32, // Strength of bending towards gravity direction
 }
 
 impl Default for TreeParams {
@@ -68,8 +68,8 @@ impl Default for TreeParams {
 pub struct HermiteSpline {
     pub p0: Vec3,
     pub p1: Vec3,
-    pub m0: Vec3, // 開始接線 (scaled)
-    pub m1: Vec3, // 終了接線
+    pub m0: Vec3,
+    pub m1: Vec3,
 }
 
 impl HermiteSpline {
@@ -121,7 +121,6 @@ impl Tree {
         let trunk_height = params.trunk_height;
         let trunk_p1 = root_pos + root_tangent * trunk_height;
 
-        // 簡単なHermite (開始/終了接線をスケール)
         let m0 = root_tangent * trunk_height * 0.6;
         let m1 = root_tangent * trunk_height * 0.4;
 
@@ -143,13 +142,12 @@ impl Tree {
             &mut bounds_max,
         );
 
-        // バウンズ更新 (rootも)
         Self::update_bounds(&root, &mut bounds_min, &mut bounds_max);
 
         Tree { root }
     }
 
-    /// 軸グリッド線（0.5 間隔）の xz 交点すべてに 1 本ずつ木を置き、描画頂点を連結する。
+    /// Place one tree at each xz grid crossing (0.5 interval) and connect the drawing vertices.
     pub fn generate_forest_vertices_on_axis_xz_grid(
         params: TreeParams,
     ) -> Vec<([f32; 3], [f32; 4])> {
@@ -173,8 +171,7 @@ impl Tree {
         out
     }
 
-    /// 指定されたレイアウトに応じて頂点を生成 (シングル木 or グリッド森)。
-    /// UI からの呼び出し用ヘルパー。
+    /// Generate vertices for the specified layout (single tree or grid forest).
     pub fn generate_vertices_for_layout(
         layout: crate::ui_state::GpuTreeLayout,
         params: TreeParams,
@@ -190,7 +187,7 @@ impl Tree {
         }
     }
 
-    /// 軸グリッド線（0.5 間隔）の xz 交点すべてに 1 本ずつ木を置き、Tubeメッシュを連結する。
+    /// Place one tree at each xz grid crossing (0.5 interval) and connect the Tube mesh.
     pub fn generate_forest_tube_vertices_on_axis_xz_grid(
         params: TreeParams,
     ) -> Vec<([f32; 3], [f32; 3], [f32; 4])> {
@@ -233,12 +230,12 @@ impl Tree {
         let attach_step = 1.0 / (num_children as f32 + 1.0);
 
         for i in 0..num_children {
-            let attach_t = 0.3 + attach_step * (i as f32 + 0.5); // 幹の下部から
+            let attach_t = 0.3 + attach_step * (i as f32 + 0.5);
 
             let attach_pos = branch.spline.eval(attach_t);
             let tangent = branch.spline.eval_tangent(attach_t);
 
-            // シンプルな分岐フレーム
+            // Simple branching frame
             let up = Vec3::Y;
             let side = if tangent.cross(up).length() > 0.01 {
                 tangent.cross(up).normalize()
@@ -247,7 +244,7 @@ impl Tree {
             };
             let binormal = tangent.cross(side).normalize();
 
-            // ランダム角度
+            // Random angle
             let angle = (rng.random::<f32>() - 0.5) * params.branch_angle * 2.0;
             let rot = Quat::from_axis_angle(binormal, angle);
             let child_dir = rot * tangent;
@@ -258,7 +255,7 @@ impl Tree {
             let child_p1 = attach_pos + child_dir * child_length;
 
             let child_m0 = child_dir * child_length * 0.5;
-            let child_m1 = child_dir * child_length * 0.3 * (1.0 - params.tropism); // トロピズム簡易
+            let child_m1 = child_dir * child_length * 0.3 * (1.0 - params.tropism); // Simple tropism
 
             let child_spline = HermiteSpline::new(attach_pos, child_p1, child_m0, child_m1);
 
@@ -288,7 +285,7 @@ impl Tree {
         }
     }
 
-    /// 指定base位置にTubeメッシュを生成（Forest対応）。
+    /// Generate Tube mesh at the specified base position (Forest support).
     pub fn generate_tube_vertices_at(&self, base: Vec3) -> Vec<([f32; 3], [f32; 3], [f32; 4])> {
         let mut verts = Vec::new();
         Self::collect_tube_vertices(&self.root, base, &mut verts);
@@ -300,14 +297,14 @@ impl Tree {
         base: Vec3,
         verts: &mut Vec<([f32; 3], [f32; 3], [f32; 4])>,
     ) {
-        let segments = 8; // セグメント数 (精度と性能のバランス)
-        let sides = 8; // 円周の分割数 (ポリゴン数に影響)
+        let segments = 8; // Number of segments (balance of accuracy and performance)
+        let sides = 8; // Number of sides (affects polygon count)
         let color = if branch.depth == 0 {
-            [0.55, 0.35, 0.15, 1.0] // 幹: 濃い茶
+            [0.55, 0.35, 0.15, 1.0] // Trunk: dark brown
         } else if branch.depth < 3 {
             [0.45, 0.28, 0.12, 1.0]
         } else {
-            [0.1, 0.7, 0.15, 1.0] // 葉: 緑 (葉は薄く)
+            [0.1, 0.7, 0.15, 1.0] // Leaf: green (leaves are thin)
         };
 
         let radius_start = branch.radius_base;
@@ -325,7 +322,7 @@ impl Tree {
             let r0 = radius_start.lerp(radius_end, t0);
             let r1 = radius_start.lerp(radius_end, t1);
 
-            // フレーム計算 (接線から法線・副法線)
+            // Frame calculation (tangent to normal and binormal)
             let up = Vec3::Y;
             let binormal0 = if tangent0.cross(up).length() > 0.01 {
                 tangent0.cross(up).normalize()
@@ -341,8 +338,6 @@ impl Tree {
             };
             let normal1 = binormal1.cross(tangent1).normalize();
 
-            // 各リングの頂点 (sides数)。TriangleList用に各quadを2三角形で明示 (6 verts/quad)
-            // 頂点順: pos0_s, pos0_{s+1}, pos1_s,   pos1_s, pos0_{s+1}, pos1_{s+1}
             for s in 0..sides {
                 let s0 = s as f32 / sides as f32;
                 let s1 = (s + 1) as f32 / sides as f32;
@@ -353,52 +348,67 @@ impl Tree {
                 let cos1 = angle1.cos();
                 let sin1 = angle1.sin();
 
-                // リング0 - s0
                 let offset0_s0 = normal0 * cos0 + binormal0 * sin0;
                 let pos0_s0 = p0 + offset0_s0 * r0;
                 let n0_s0 = offset0_s0.normalize();
                 let y0_s0 = -pos0_s0.y;
 
-                // リング0 - s1
                 let offset0_s1 = normal0 * cos1 + binormal0 * sin1;
                 let pos0_s1 = p0 + offset0_s1 * r0;
                 let n0_s1 = offset0_s1.normalize();
                 let y0_s1 = -pos0_s1.y;
 
-                // リング1 - s0
                 let offset1_s0 = normal1 * cos0 + binormal1 * sin0;
                 let pos1_s0 = p1 + offset1_s0 * r1;
                 let n1_s0 = offset1_s0.normalize();
                 let y1_s0 = -pos1_s0.y;
 
-                // リング1 - s1
                 let offset1_s1 = normal1 * cos1 + binormal1 * sin1;
                 let pos1_s1 = p1 + offset1_s1 * r1;
                 let n1_s1 = offset1_s1.normalize();
                 let y1_s1 = -pos1_s1.y;
 
-                let col = color; // for readability
+                let col = color;
 
-                // Triangle 1: pos0_s0, pos0_s1, pos1_s0
-                verts.push(([pos0_s0.x, y0_s0, pos0_s0.z], [n0_s0.x, -n0_s0.y, n0_s0.z], col));
-                verts.push(([pos0_s1.x, y0_s1, pos0_s1.z], [n0_s1.x, -n0_s1.y, n0_s1.z], col));
-                verts.push(([pos1_s0.x, y1_s0, pos1_s0.z], [n1_s0.x, -n1_s0.y, n1_s0.z], col));
+                verts.push((
+                    [pos0_s0.x, y0_s0, pos0_s0.z],
+                    [n0_s0.x, -n0_s0.y, n0_s0.z],
+                    col,
+                ));
+                verts.push((
+                    [pos0_s1.x, y0_s1, pos0_s1.z],
+                    [n0_s1.x, -n0_s1.y, n0_s1.z],
+                    col,
+                ));
+                verts.push((
+                    [pos1_s0.x, y1_s0, pos1_s0.z],
+                    [n1_s0.x, -n1_s0.y, n1_s0.z],
+                    col,
+                ));
 
-                // Triangle 2: pos1_s0, pos0_s1, pos1_s1
-                verts.push(([pos1_s0.x, y1_s0, pos1_s0.z], [n1_s0.x, -n1_s0.y, n1_s0.z], col));
-                verts.push(([pos0_s1.x, y0_s1, pos0_s1.z], [n0_s1.x, -n0_s1.y, n0_s1.z], col));
-                verts.push(([pos1_s1.x, y1_s1, pos1_s1.z], [n1_s1.x, -n1_s1.y, n1_s1.z], col));
+                verts.push((
+                    [pos1_s0.x, y1_s0, pos1_s0.z],
+                    [n1_s0.x, -n1_s0.y, n1_s0.z],
+                    col,
+                ));
+                verts.push((
+                    [pos0_s1.x, y0_s1, pos0_s1.z],
+                    [n0_s1.x, -n0_s1.y, n0_s1.z],
+                    col,
+                ));
+                verts.push((
+                    [pos1_s1.x, y1_s1, pos1_s1.z],
+                    [n1_s1.x, -n1_s1.y, n1_s1.z],
+                    col,
+                ));
             }
         }
 
-        // 子枝 (再帰)
         for child in &branch.children {
             Self::collect_tube_vertices(child, base, verts);
         }
 
-        // 葉 (簡易: 末端に小さなTube or 残す)。TriangleList対応に修正 (隙間防止)
         if branch.children.is_empty() && branch.depth >= 3 {
-            // 葉は薄いTubeとして簡易表現 (またはスキップして性能重視)
             let tip = branch.spline.eval(1.0) + base;
             let leaf_r = 0.03f32;
             let leaf_color = [0.1, 0.8, 0.2, 1.0];
@@ -410,7 +420,6 @@ impl Tree {
             };
             let leaf_normal = leaf_binormal.cross(leaf_tangent).normalize();
 
-            // 葉もTube風円筒 (sides分割) で隙間をなくす
             for s in 0..sides {
                 let s0 = s as f32 / sides as f32;
                 let s1 = (s + 1) as f32 / sides as f32;
@@ -432,16 +441,14 @@ impl Tree {
                 let y1 = -pos1.y;
 
                 let tip_y = -tip.y;
-                let tip_n = [0.0f32, 1.0, 0.0]; // 上向き近似
+                let tip_n = [0.0f32, 1.0, 0.0];
 
                 let col = leaf_color;
 
-                // Triangle 1: pos0, pos1, tip
                 verts.push(([pos0.x, y0, pos0.z], [n0.x, -n0.y, n0.z], col));
                 verts.push(([pos1.x, y1, pos1.z], [n1.x, -n1.y, n1.z], col));
                 verts.push(([tip.x, tip_y, tip.z], tip_n, col));
 
-                // Triangle 2: pos1, pos0, tip (逆順で2枚目)
                 verts.push(([pos1.x, y1, pos1.z], [n1.x, -n1.y, n1.z], col));
                 verts.push(([pos0.x, y0, pos0.z], [n0.x, -n0.y, n0.z], col));
                 verts.push(([tip.x, tip_y, tip.z], tip_n, col));
@@ -449,13 +456,6 @@ impl Tree {
         }
     }
 
-    /// 旧LineList互換 (後方互換/テスト用)
-    #[allow(dead_code)]
-    pub fn generate_vertices(&self) -> Vec<([f32; 3], [f32; 4])> {
-        self.generate_vertices_at(Vec3::ZERO)
-    }
-
-    /// `base` を幹の根元（xz 上の植栽位置）として頂点を生成する。
     pub fn generate_vertices_at(&self, base: Vec3) -> Vec<([f32; 3], [f32; 4])> {
         let mut verts = Vec::new();
         Self::collect_branch_vertices(&self.root, base, &mut verts, 0.0);
@@ -483,17 +483,14 @@ impl Tree {
             let p0 = branch.spline.eval(t0) + base;
             let p1 = branch.spline.eval(t1) + base;
 
-            // ワールド座標と表示の Y 向きを揃える（描画時のみ Y を反転）
             verts.push(([p0.x, -p0.y, p0.z], color));
             verts.push(([p1.x, -p1.y, p1.z], color));
         }
 
-        // 子枝
         for child in &branch.children {
             Self::collect_branch_vertices(child, base, verts, t_offset);
         }
 
-        // 葉の簡易表現 (末端に星型 or 点群)
         if branch.children.is_empty() && branch.depth >= 3 {
             let tip = branch.spline.eval(1.0) + base;
             let leaf_color = [0.0, 0.8, 0.2, 1.0];

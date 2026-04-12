@@ -9,7 +9,6 @@ pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 pub enum AppMode {
     Simulation,
     Graph3D,
-    /// Real-Time GPU Tree Generation (HPG 2025) 向け。GPU 上で木を生成・描画するモード（実装は段階的に追加）。
     GpuTree,
 }
 
@@ -77,7 +76,7 @@ pub enum GraphType {
     QuaternionProjection,
 }
 
-/// GpuTree 表示レイアウト: シングル木 または xzグリッド交点すべてに木を生やす
+/// GpuTree display layout: single tree or trees on all xz grid crossings
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GpuTreeLayout {
     Single,
@@ -94,7 +93,7 @@ impl std::fmt::Display for GpuTreeLayout {
     }
 }
 
-/// GpuTree の描画モード: 線分 (LineList) または ポリゴンチューブ (TriangleList with normals/lighting)
+/// GpuTree drawing mode: lines (LineList) or polygons (TriangleList with normals/lighting)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GpuTreeRenderMode {
     Lines,
@@ -111,7 +110,7 @@ impl std::fmt::Display for GpuTreeRenderMode {
     }
 }
 
-/// GpuTree の計算バックエンド: CPU (既存Tree::generate) または GPU (Computeシェーダ)
+/// GpuTree compute backend: CPU or GPU (Compute shader)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GpuTreeComputeMode {
     CPU,
@@ -276,13 +275,12 @@ impl UiState {
         self.last_gpu_tree_fingerprint = 0;
     }
 
-    /// GpuTree のパラメータ変化を検知するための簡易 fingerprint (hash-like)
+    /// Simple fingerprint (hash-like) for detecting changes in GpuTree parameters
     pub fn gpu_tree_fingerprint(&self) -> u64 {
         let mut hash = 0u64;
         hash = hash.wrapping_add(self.gpu_tree_layout as u64);
         hash = hash.wrapping_add((self.gpu_tree_render_mode as u64) * 17);
-        hash = hash.wrapping_add((self.gpu_tree_compute_mode as u64) * 31); // compute modeも検知
-        // TreeParams の主要フィールドを簡易ハッシュ化
+        hash = hash.wrapping_add((self.gpu_tree_compute_mode as u64) * 31);
         hash = hash
             .wrapping_mul(31)
             .wrapping_add(self.gpu_tree_params.seed as u64);

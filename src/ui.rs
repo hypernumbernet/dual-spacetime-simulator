@@ -46,7 +46,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 if ui
                     .selectable_label(
                         uis.app_mode == crate::ui_state::AppMode::GpuTree,
-                        "GPU Tree (HPG 2025)",
+                        "GPU Tree",
                     )
                     .clicked()
                 {
@@ -400,14 +400,10 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
             .collapsible(true)
             .default_width(uis.input_panel_width)
             .show(ctx, |ui| {
-                label_normal(
-                    ui,
-                    "Real-Time GPU Tree Generation (HPG 2025)",
-                );
+                label_normal(ui, "Real-Time GPU Tree Generation");
                 ui.separator();
 
-                // Layout toggle: Single tree vs Forest on XZ grid crossings
-                ComboBox::from_label("Layout")
+                ComboBox::from_label("Display Layout")
                     .selected_text(uis.gpu_tree_layout.to_string())
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
@@ -423,8 +419,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     });
                 ui.separator();
 
-                // Render mode toggle: Lines (LineList) vs Polygons (Tube mesh with lighting)
-                ComboBox::from_label("Render Mode")
+                ComboBox::from_label("Drawing Mode")
                     .selected_text(uis.gpu_tree_render_mode.to_string())
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
@@ -440,8 +435,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     });
                 ui.separator();
 
-                // Compute backend: CPU (existing) vs GPU (Compute shader - real GPU computation for tree generation)
-                ComboBox::from_label("Compute")
+                ComboBox::from_label("Compute Backend")
                     .selected_text(uis.gpu_tree_compute_mode.to_string())
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
@@ -457,12 +451,24 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     });
                 ui.separator();
 
-                label_normal(ui, "Tree Parameters");
-                ui.add(Slider::new(&mut uis.gpu_tree_params.trunk_height, 0.3..=2.0).text("Trunk Height"));
-                ui.add(Slider::new(&mut uis.gpu_tree_params.trunk_radius_base, 0.02..=0.2).text("Trunk Radius"));
+                label_normal(ui, "Tree Generation Parameters");
+                ui.add(
+                    Slider::new(&mut uis.gpu_tree_params.trunk_height, 0.3..=2.0)
+                        .text("Trunk Height"),
+                );
+                ui.add(
+                    Slider::new(&mut uis.gpu_tree_params.trunk_radius_base, 0.02..=0.2)
+                        .text("Trunk Radius"),
+                );
                 ui.add(Slider::new(&mut uis.gpu_tree_params.max_depth, 2..=7).text("Max Depth"));
-                ui.add(Slider::new(&mut uis.gpu_tree_params.branch_factor, 2..=5).text("Branch Factor"));
-                ui.add(Slider::new(&mut uis.gpu_tree_params.branch_angle, 0.2..=1.2).text("Branch Angle"));
+                ui.add(
+                    Slider::new(&mut uis.gpu_tree_params.branch_factor, 2..=5)
+                        .text("Branch Factor"),
+                );
+                ui.add(
+                    Slider::new(&mut uis.gpu_tree_params.branch_angle, 0.2..=1.2)
+                        .text("Branch Angle"),
+                );
                 ui.add(Slider::new(&mut uis.gpu_tree_params.tropism, 0.0..=1.0).text("Tropism"));
                 ui.add(Slider::new(&mut uis.gpu_tree_params.seed, 0..=999).text("Seed"));
 
@@ -472,7 +478,9 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     "CPU oak-like trees on every xz grid crossing (step 0.5, same as axis floor).",
                 );
                 ui.label("Weber-Penn spline branches + leaves per tree.");
-                ui.label("Switch to GpuTree mode in Mode menu to view. Changes update in real-time.");
+                ui.label(
+                    "Switch to GpuTree mode in Mode menu to view. Changes update in real-time.",
+                );
             });
     }
 }
@@ -760,7 +768,10 @@ fn condition_rapidity_field(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.1, "Velocity Scale");
     label_normal(ui, "Maps v -> rapidity η = artanh(|v|)");
     ui.separator();
-    label_normal(ui, "Boost bivector (i,j,k) from sampled velocities; updates live.");
+    label_normal(
+        ui,
+        "Boost bivector (i,j,k) from sampled velocities; updates live.",
+    );
 }
 
 fn condition_boost_exponent(ui: &mut egui::Ui, uis: &mut UiState) {
@@ -769,7 +780,10 @@ fn condition_boost_exponent(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.1, "Direction Scale");
     label_normal(ui, "Exponential map of boost bivector.");
     ui.separator();
-    label_normal(ui, "Vector part of exp(boost); scalar shades color; updates live.");
+    label_normal(
+        ui,
+        "Vector part of exp(boost); scalar shades color; updates live.",
+    );
 }
 
 fn condition_bivector_viz(ui: &mut egui::Ui, uis: &mut UiState) {
@@ -777,7 +791,10 @@ fn condition_bivector_viz(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.graph_phi, 0.1, "Magnitude");
     label_normal(ui, "Planes and rotation axes from bivectors.");
     ui.separator();
-    label_normal(ui, "Sampled boost directions scaled by magnitude; updates live.");
+    label_normal(
+        ui,
+        "Sampled boost directions scaled by magnitude; updates live.",
+    );
 }
 
 fn condition_quaternion_proj(ui: &mut egui::Ui, _uis: &mut UiState) {
