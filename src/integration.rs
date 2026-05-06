@@ -86,6 +86,10 @@ impl Gui {
             .consumed
     }
 
+    pub fn pointer_wants_input(&self) -> bool {
+        self.egui_ctx.wants_pointer_input() || self.egui_ctx.is_pointer_over_area()
+    }
+
     pub fn immediate_ui(&mut self, window: &Window, layout_function: impl FnOnce(&mut Self)) {
         let raw_input = self.egui_winit.take_egui_input(window);
         self.egui_ctx.begin_pass(raw_input);

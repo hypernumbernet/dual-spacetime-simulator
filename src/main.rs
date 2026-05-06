@@ -38,6 +38,18 @@ use winit::{
 const DOUBLE_CLICK_MILLIS: u64 = 400;
 const DOUBLE_CLICK_DIST: f64 = 25.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DragOwner {
+    None,
+    Ui,
+    PendingSceneLeft,
+    PendingSceneRight,
+    PendingSceneMiddle,
+    SceneLeft,
+    SceneRight,
+    SceneMiddle,
+}
+
 fn main() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new()?;
     let mut app = App::default();
@@ -160,6 +172,7 @@ pub struct App {
     last_graph3d_fingerprint: u64,
     last_gpu_tree_fingerprint: u64,
     prev_app_mode: AppMode,
+    drag_owner: DragOwner,
 }
 
 impl Default for App {
@@ -190,6 +203,7 @@ impl Default for App {
             last_graph3d_fingerprint: u64::MAX,
             last_gpu_tree_fingerprint: 0,
             prev_app_mode: AppMode::default(),
+            drag_owner: DragOwner::None,
         }
     }
 }
@@ -364,44 +378,112 @@ impl ApplicationHandler for App {
         }
 
         let window_clone = window.clone();
-        if !gui.update(&window_clone, &event) {
-            match &event {
-                WindowEvent::MouseInput { state, button, .. } => match button {
-                    MouseButton::Left => self.left_button(state),
-                    MouseButton::Right => self.right_button(state),
-                    MouseButton::Middle => self.middle_button(state),
+        let ui_consumed = gui.update(&window_clone, &event);
+        let ui_wants_pointer = gui.pointer_wants_input();
+
+        match &event {
+            WindowEvent::MouseInput { state, button, .. } => {
+                let pressed = *state == ElementState::Pressed;
+                if pressed {
+                    if ui_wants_pointer || ui_consumed {
+                        self.drag_owner = DragOwner::Ui;
+                        self.clear_mouse_drag_flags();
+                    } else {
+                        match button {
+                            MouseButton::Left => {
+                                self.drag_owner = DragOwner::PendingSceneLeft;
+                                self.left_button(state);
+                            }
+                            MouseButton::Right => {
+                                self.drag_owner = DragOwner::PendingSceneRight;
+                                self.right_button(state);
+                            }
+                            MouseButton::Middle => {
+                                self.drag_owner = DragOwner::PendingSceneMiddle;
+                                self.middle_button(state);
+                            }
+                            _ => {}
+                        }
+                    }
+                } else {
+                    match button {
+                        MouseButton::Left => self.left_button(state),
+                        MouseButton::Right => self.right_button(state),
+                        MouseButton::Middle => self.middle_button(state),
+                        _ => {}
+                    }
+                    self.drag_owner = DragOwner::None;
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let (x, y) = (position.x, position.y);
+                match self.drag_owner {
+                    DragOwner::PendingSceneLeft => {
+                        if ui_wants_pointer || ui_consumed {
+                            self.drag_owner = DragOwner::Ui;
+                            self.mouse_left_down = false;
+                            self.mouse_right_down = false;
+                            self.mouse_middle_down = false;
+                        } else {
+                            self.drag_owner = DragOwner::SceneLeft;
+                        }
+                    }
+                    DragOwner::PendingSceneRight => {
+                        if ui_wants_pointer || ui_consumed {
+                            self.drag_owner = DragOwner::Ui;
+                            self.mouse_left_down = false;
+                            self.mouse_right_down = false;
+                            self.mouse_middle_down = false;
+                        } else {
+                            self.drag_owner = DragOwner::SceneRight;
+                        }
+                    }
+                    DragOwner::PendingSceneMiddle => {
+                        if ui_wants_pointer || ui_consumed {
+                            self.drag_owner = DragOwner::Ui;
+                            self.mouse_left_down = false;
+                            self.mouse_right_down = false;
+                            self.mouse_middle_down = false;
+                        } else {
+                            self.drag_owner = DragOwner::SceneMiddle;
+                        }
+                    }
                     _ => {}
-                },
-                WindowEvent::CursorMoved { position, .. } => {
-                    let (x, y) = (position.x, position.y);
-                    if let Some((lx, ly)) = self.last_cursor_position {
-                        if self.mouse_left_down {
-                            pipeline.revolve_camera(x - lx, y - ly);
-                        }
-                        if self.mouse_right_down {
-                            pipeline.look_around(x - lx, y - ly);
-                        }
-                        if self.mouse_middle_down {
+                }
+                if let Some((lx, ly)) = self.last_cursor_position {
+                    match self.drag_owner {
+                        DragOwner::SceneLeft => pipeline.revolve_camera(x - lx, y - ly),
+                        DragOwner::SceneRight => pipeline.look_around(x - lx, y - ly),
+                        DragOwner::SceneMiddle => {
                             let window_size = window.inner_size();
                             let center_x = window_size.width as f64 / 2.0;
                             let center_y = window_size.height as f64 / 2.0;
                             pipeline.rotate_camera(x, lx, y, ly, center_x, center_y);
                         }
+                        DragOwner::None
+                        | DragOwner::Ui
+                        | DragOwner::PendingSceneLeft
+                        | DragOwner::PendingSceneRight
+                        | DragOwner::PendingSceneMiddle => {}
                     }
-                    self.last_cursor_position = Some((x, y));
                 }
-                WindowEvent::MouseWheel { delta, .. } => match delta {
-                    MouseScrollDelta::LineDelta(_, y) => {
-                        let zoom_factor = y * 0.1;
-                        pipeline.zoom_camera(zoom_factor);
-                    }
-                    MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                        let zoom_factor = y * 0.1;
-                        pipeline.zoom_camera(zoom_factor as f32);
-                    }
-                },
-                _ => {}
+                self.last_cursor_position = Some((x, y));
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if !ui_wants_pointer && !ui_consumed {
+                    match delta {
+                        MouseScrollDelta::LineDelta(_, y) => {
+                            let zoom_factor = y * 0.1;
+                            pipeline.zoom_camera(zoom_factor);
+                        }
+                        MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
+                            let zoom_factor = y * 0.1;
+                            pipeline.zoom_camera(zoom_factor as f32);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -504,6 +586,12 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    fn clear_mouse_drag_flags(&mut self) {
+        self.mouse_left_down = false;
+        self.mouse_right_down = false;
+        self.mouse_middle_down = false;
+    }
+
     fn left_button(&mut self, state: &ElementState) {
         let pressed = *state == ElementState::Pressed;
         self.mouse_left_down = pressed;
