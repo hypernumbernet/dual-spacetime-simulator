@@ -1,4 +1,12 @@
-﻿use crate::camera::OrbitCamera;
+﻿/// SPIR-V blobs compiled by `build.rs` (exposed for integration tests).
+pub mod shader_blobs {
+    pub const TREE_COMPUTE: &[u8] = include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/shaders/tree_compute.comp.spv"
+    ));
+}
+
+use crate::camera::OrbitCamera;
 use crate::integration::Gui;
 use crate::tree::{AXIS_XZ_GRID_EXTENT, AXIS_XZ_GRID_LINE_COUNT, GpuTreeComputeParams};
 use crate::ui_state::*;
@@ -788,7 +796,9 @@ impl ParticleRenderPipeline {
 impl Drop for ParticleRenderPipeline {
     fn drop(&mut self) {
         unsafe {
-            self.device.device_wait_idle().unwrap();
+            if let Err(err) = self.device.device_wait_idle() {
+                eprintln!("ParticleRenderPipeline::drop device_wait_idle failed: {err:?}");
+            }
 
             if let Some(buf) = self.graph_lines_buffer.take() {
                 buf.destroy(&self.device, self.allocator());
@@ -1221,13 +1231,7 @@ fn create_compute_pipeline(
     let pl_ci = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pl_ci, None) }.unwrap();
 
-    let cs_mod = create_shader_module(
-        device,
-        include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/shaders/tree_compute.comp.spv"
-        )),
-    );
+    let cs_mod = create_shader_module(device, shader_blobs::TREE_COMPUTE);
     let entry = c"main";
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)

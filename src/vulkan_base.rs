@@ -231,7 +231,9 @@ impl VulkanBase {
 impl Drop for VulkanBase {
     fn drop(&mut self) {
         unsafe {
-            self.device.device_wait_idle().unwrap();
+            if let Err(err) = self.device.device_wait_idle() {
+                eprintln!("VulkanBase::drop device_wait_idle failed: {err:?}");
+            }
 
             for &sem in &self.image_available_semaphores {
                 self.device.destroy_semaphore(sem, None);

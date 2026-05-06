@@ -3,6 +3,14 @@ name = "dual-spacetime-simulator"
 version = "0.2.0"
 edition = "2024"
 
+[lib]
+name = "dual_spacetime_simulator"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dual-spacetime-simulator"
+path = "src/main.rs"
+
 [dependencies]
 ahash = "0.8.12"
 ash = { version = "0.38", features = ["loaded"] }

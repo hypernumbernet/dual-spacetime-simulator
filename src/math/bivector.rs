@@ -75,11 +75,18 @@ impl BivectorBoost {
     }
 
     pub fn from_velocity(vx: f64, vy: f64, vz: f64) -> Self {
-        let phi = (vx * vx + vy * vy + vz * vz).sqrt().atanh();
-        let i = phi * vx / (vx * vx + vy * vy + vz * vz).sqrt();
-        let j = phi * vy / (vx * vx + vy * vy + vz * vz).sqrt();
-        let k = phi * vz / (vx * vx + vy * vy + vz * vz).sqrt();
-        Self { i, j, k }
+        let speed_sq = vx.mul_add(vx, vy.mul_add(vy, vz * vz));
+        if speed_sq < 1e-30 {
+            return Self::new(0.0, 0.0, 0.0);
+        }
+        let speed = speed_sq.sqrt();
+        let phi = speed.atanh();
+        let scale = phi / speed;
+        Self {
+            i: scale * vx,
+            j: scale * vy,
+            k: scale * vz,
+        }
     }
 }
 

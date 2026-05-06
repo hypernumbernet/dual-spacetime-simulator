@@ -191,6 +191,15 @@ impl TetraQuaternion {
         self.coeffs.iter().all(|&c| c.abs() < 1e-10)
     }
 
+    /// Largest absolute difference per coefficient (useful for tests).
+    pub fn max_abs_diff(&self, other: &Self) -> f64 {
+        self.coeffs
+            .iter()
+            .zip(other.coeffs.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f64::max)
+    }
+
     /// `I`, `J`, `K` coefficients (`coeffs[8..=10]`, basis indices 7–9).
     pub fn ijk_coeffs(&self) -> [f64; 3] {
         [self.coeffs[8], self.coeffs[9], self.coeffs[10]]
