@@ -39,6 +39,48 @@ impl PanelKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DragOwner {
+    None,
+    Ui,
+    PendingSceneLeft,
+    PendingSceneRight,
+    PendingSceneMiddle,
+    SceneLeft,
+    SceneRight,
+    SceneMiddle,
+}
+
+impl DragOwner {
+    /// If `self` is a pending scene drag, returns the promoted owner (`Ui` when the UI blocks the scene).
+    pub(crate) fn promote_from_pending(self, ui_blocks_scene: bool) -> Option<Self> {
+        Some(match self {
+            Self::PendingSceneLeft => {
+                if ui_blocks_scene {
+                    Self::Ui
+                } else {
+                    Self::SceneLeft
+                }
+            }
+            Self::PendingSceneRight => {
+                if ui_blocks_scene {
+                    Self::Ui
+                } else {
+                    Self::SceneRight
+                }
+            }
+            Self::PendingSceneMiddle => {
+                if ui_blocks_scene {
+                    Self::Ui
+                } else {
+                    Self::SceneMiddle
+                }
+            }
+            _ => return None,
+        })
+    }
+}
+
 const PANELS_SIMULATION: &[PanelKind] = &[
     PanelKind::Simulation,
     PanelKind::InitialCondition,

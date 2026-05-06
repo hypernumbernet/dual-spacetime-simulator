@@ -21,7 +21,7 @@ use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
 use crate::tree::Tree;
 use crate::ui::draw_ui;
-use crate::ui_state::{AppMode, GpuTreeRenderMode, UiState};
+use crate::ui_state::{AppMode, DragOwner, GpuTreeRenderMode, UiState};
 use crate::vulkan_base::VulkanBase;
 use ash::vk;
 use std::sync::{Arc, RwLock};
@@ -38,35 +38,32 @@ use winit::{
 const DOUBLE_CLICK_MILLIS: u64 = 400;
 const DOUBLE_CLICK_DIST: f64 = 25.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DragOwner {
-    None,
-    Ui,
-    PendingSceneLeft,
-    PendingSceneRight,
-    PendingSceneMiddle,
-    SceneLeft,
-    SceneRight,
-    SceneMiddle,
-}
-
 fn main() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new()?;
     let mut app = App::default();
-    let ui_state_clone = Arc::clone(&app.ui_state);
-    let simulation_manager_clone = Arc::clone(&app.simulation_manager);
-    let simulation_manager_for_reset = Arc::clone(&simulation_manager_clone);
-    let need_redraw = Arc::clone(&app.need_redraw);
-    let skip_redraw = Arc::clone(&app.skip_redraw);
-    let mut last_advance = Instant::now();
-    let mut last_fps = Instant::now();
-    let mut prev_frame: i64 = 1;
+    spawn_simulation_worker(
+        Arc::clone(&app.ui_state),
+        Arc::clone(&app.simulation_manager),
+        Arc::clone(&app.need_redraw),
+        Arc::clone(&app.skip_redraw),
+    );
+    event_loop.run_app(&mut app)
+}
+
+fn spawn_simulation_worker(
+    ui_state_clone: Arc<RwLock<UiState>>,
+    simulation_manager: Arc<RwLock<SimulationManager>>,
+    need_redraw: Arc<RwLock<bool>>,
+    skip_redraw: Arc<RwLock<u32>>,
+) {
     let thread_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_cpus::get())
         .build()
         .unwrap();
     std::thread::spawn(move || {
-        let simulation_manager = simulation_manager_for_reset;
+        let mut last_advance = Instant::now();
+        let mut last_fps = Instant::now();
+        let mut prev_frame: i64 = 1;
         loop {
             if *need_redraw.read().unwrap() {
                 std::thread::sleep(Duration::from_millis(16));
@@ -139,7 +136,6 @@ fn main() -> Result<(), EventLoopError> {
             ui_state.simulation_time += time_per_frame;
         }
     });
-    event_loop.run_app(&mut app)
 }
 
 fn generate_window_title() -> String {
@@ -417,38 +413,14 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let (x, y) = (position.x, position.y);
-                match self.drag_owner {
-                    DragOwner::PendingSceneLeft => {
-                        if ui_wants_pointer || ui_consumed {
-                            self.drag_owner = DragOwner::Ui;
-                            self.mouse_left_down = false;
-                            self.mouse_right_down = false;
-                            self.mouse_middle_down = false;
-                        } else {
-                            self.drag_owner = DragOwner::SceneLeft;
-                        }
+                let ui_blocks = ui_wants_pointer || ui_consumed;
+                if let Some(new_owner) = self.drag_owner.promote_from_pending(ui_blocks) {
+                    if new_owner == DragOwner::Ui {
+                        self.mouse_left_down = false;
+                        self.mouse_right_down = false;
+                        self.mouse_middle_down = false;
                     }
-                    DragOwner::PendingSceneRight => {
-                        if ui_wants_pointer || ui_consumed {
-                            self.drag_owner = DragOwner::Ui;
-                            self.mouse_left_down = false;
-                            self.mouse_right_down = false;
-                            self.mouse_middle_down = false;
-                        } else {
-                            self.drag_owner = DragOwner::SceneRight;
-                        }
-                    }
-                    DragOwner::PendingSceneMiddle => {
-                        if ui_wants_pointer || ui_consumed {
-                            self.drag_owner = DragOwner::Ui;
-                            self.mouse_left_down = false;
-                            self.mouse_right_down = false;
-                            self.mouse_middle_down = false;
-                        } else {
-                            self.drag_owner = DragOwner::SceneMiddle;
-                        }
-                    }
-                    _ => {}
+                    self.drag_owner = new_owner;
                 }
                 if let Some((lx, ly)) = self.last_cursor_position {
                     match self.drag_owner {
@@ -592,42 +564,59 @@ impl App {
         self.mouse_middle_down = false;
     }
 
+    /// Returns `true` when a double-click was recognized (click history is cleared).
+    fn try_consume_double_click(
+        click_pos: (f64, f64),
+        now: Instant,
+        last_time: &mut Option<Instant>,
+        last_pos: &mut Option<(f64, f64)>,
+    ) -> bool {
+        let max_dt = Duration::from_millis(DOUBLE_CLICK_MILLIS);
+        let Some(prev_t) = *last_time else {
+            *last_time = Some(now);
+            *last_pos = Some(click_pos);
+            return false;
+        };
+        let dt = now.duration_since(prev_t);
+        let is_double = if dt <= max_dt {
+            if let Some((px, py)) = *last_pos {
+                let dx = px - click_pos.0;
+                let dy = py - click_pos.1;
+                let dist2 = dx * dx + dy * dy;
+                dist2 <= DOUBLE_CLICK_DIST
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if is_double {
+            *last_time = None;
+            *last_pos = None;
+            true
+        } else {
+            *last_time = Some(now);
+            *last_pos = Some(click_pos);
+            false
+        }
+    }
+
     fn left_button(&mut self, state: &ElementState) {
         let pressed = *state == ElementState::Pressed;
         self.mouse_left_down = pressed;
         if pressed {
             let now = Instant::now();
-            let max_dt = Duration::from_millis(DOUBLE_CLICK_MILLIS);
             let Some(click_pos) = self.last_cursor_position else {
                 return;
             };
-            let Some(last_click_time) = self.last_left_click_time else {
-                self.last_left_click_time = Some(now);
-                self.last_left_click_pos = Some(click_pos);
-                return;
-            };
-            let dt = now.duration_since(last_click_time);
-            let is_double = if dt <= max_dt {
-                let mut close_enough = false;
-                if let Some((px, py)) = self.last_left_click_pos {
-                    let dx = px - click_pos.0;
-                    let dy = py - click_pos.1;
-                    let dist2 = dx * dx + dy * dy;
-                    close_enough = dist2 <= DOUBLE_CLICK_DIST;
-                }
-                close_enough
-            } else {
-                false
-            };
-            if is_double {
-                if let Some(pipeline) = self.render_pipeline.as_mut() {
-                    pipeline.y_top();
-                }
-                self.last_left_click_time = None;
-                self.last_left_click_pos = None;
-            } else {
-                self.last_left_click_time = Some(now);
-                self.last_left_click_pos = Some(click_pos);
+            if Self::try_consume_double_click(
+                click_pos,
+                now,
+                &mut self.last_left_click_time,
+                &mut self.last_left_click_pos,
+            ) && let Some(pipeline) = self.render_pipeline.as_mut()
+            {
+                pipeline.y_top();
             }
         }
     }
@@ -637,37 +626,17 @@ impl App {
         self.mouse_right_down = pressed;
         if pressed {
             let now = Instant::now();
-            let max_dt = Duration::from_millis(DOUBLE_CLICK_MILLIS);
             let Some(click_pos) = self.last_cursor_position else {
                 return;
             };
-            let Some(last_click_time) = self.last_right_click_time else {
-                self.last_right_click_time = Some(now);
-                self.last_right_click_pos = Some(click_pos);
-                return;
-            };
-            let dt = now.duration_since(last_click_time);
-            let is_double = if dt <= max_dt {
-                let mut close_enough = false;
-                if let Some((px, py)) = self.last_right_click_pos {
-                    let dx = px - click_pos.0;
-                    let dy = py - click_pos.1;
-                    let dist2 = dx * dx + dy * dy;
-                    close_enough = dist2 <= DOUBLE_CLICK_DIST;
-                }
-                close_enough
-            } else {
-                false
-            };
-            if is_double {
-                if let Some(pipeline) = self.render_pipeline.as_mut() {
-                    pipeline.center_target_on_origin();
-                }
-                self.last_right_click_time = None;
-                self.last_right_click_pos = None;
-            } else {
-                self.last_right_click_time = Some(now);
-                self.last_right_click_pos = Some(click_pos);
+            if Self::try_consume_double_click(
+                click_pos,
+                now,
+                &mut self.last_right_click_time,
+                &mut self.last_right_click_pos,
+            ) && let Some(pipeline) = self.render_pipeline.as_mut()
+            {
+                pipeline.center_target_on_origin();
             }
         }
     }
