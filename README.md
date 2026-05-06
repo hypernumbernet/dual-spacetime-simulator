@@ -1,88 +1,89 @@
 # dual-spacetime-simulator
 
-四次元時空や特殊時空まわりの挙動を、N体重力などのシミュレーションと 3D 可視化で試すデスクトップアプリです。描画は **Vulkan（Vulkano）**、UI は **egui** です。
+四次元時空や相対論モチーフの可視化を、粒子シミュレーションと 3D 描画で試すデスクトップアプリです。  
+描画は **Vulkan（ash）**、UI は **egui** を使用しています。
 
 ## ビルド・実行
 
 ### 必要な環境
 
-- **OS**: Windows、Linux など Vulkan が使える環境を想定
-- **Rust**: `edition = "2024"` を使用しているため、**2024 Edition に対応した十分新しい stable**の `rustc` / `cargo`
-- **Vulkan 1.x 対応 GPU** とドライバ（インスタンス・スワップチェーンが作成できること）
-- **シェーダコンパイル**: `vulkano-shaders` が **shaderc** に依存するため、ビルド環境に **Vulkan SDK** など、shaderc がリンク／取得できるセットアップがあること
+- **OS**: Windows / Linux など Vulkan が使える環境
+- **Rust**: `edition = "2024"` に対応した stable (`rustc`, `cargo`)
+- **GPU/Driver**: Vulkan 1.x 対応
+- **GLSL コンパイラ**: `build.rs` で `glslc` を呼び出すため、`glslc` が `PATH` にあること（通常は Vulkan SDK 同梱）
 
-### コマンド
+### 実行コマンド
 
 ```powershell
 cargo run --release
 ```
 
-リリースプロファイルは `Cargo.toml` で `lto` 等が有効です。`cargo build --release` でも同様に成果物を生成できます。
+`cargo build --release` でも同じ設定（`lto = true`, `codegen-units = 1`, `panic = "abort"`）でビルドできます。
 
-## 主要クレート
+## 現在の主要依存
 
-| クレート | バージョン（`Cargo.toml`） | メモ |
-|----------|---------------------------|------|
-| **vulkano** | `0.35.2` | **features は `Cargo.toml` では未指定**（crates.io パッケージのデフォルト機能のみ） |
-| **vulkano-shaders** | `0.35.0` | GLSL のコンパイル（ビルド時） |
-| **vulkano-util** | `0.35.0` | `VulkanoContext`、ウィンドウ／スワップチェーン補助 |
-| **winit** | `0.30.12` | ウィンドウ・入力 |
-| **egui** / **egui-winit** | `0.31.1` | UI（`egui-winit` は `default-features = false`） |
-| **glam** | `0.30.8` | 行列・ベクトル（ビュー／投影など） |
-| **rayon** | `1.11.0` | シミュレーションの並列更新 |
+- **Vulkan 基盤**: `ash`, `ash-window`, `gpu-allocator`
+- **UI**: `egui`, `egui-winit`, `egui-ash-renderer`
+- **ウィンドウ/入力**: `winit`
+- **数学/並列**: `glam`, `rayon`
+- **その他**: `rand`, `rand_distr`, `serde`, `serde_json`, `satkit` など
 
-その他: `ahash`, `rand`, `rand_distr`, `num_cpus`, `serde` / `serde_json`, `satkit` など。
+## アーキテクチャ概要
 
-## アーキテクチャ（描画まわり）
+### アプリ進行 (`src/main.rs`)
 
-- **エントリとループ**（`src/main.rs`）  
-  - `winit` の `ApplicationHandler` 実装 `App` がウィンドウ生成、`RedrawRequested` で 1 フレーム処理。  
-  - `about_to_wait` で `request_redraw`、シミュレーション結果のバッファ更新、3D グラフモード時は `graph3d` の再計算。  
-  - シミュレーション進行は別スレッド（`rayon` スレッドプール）で `SimulationManager::advance` を実行。
+- `winit` の `ApplicationHandler` 実装 `App` がイベントループを管理
+- `resumed` で `VulkanBase` と `ParticleRenderPipeline`、`Gui` を初期化
+- シミュレーション更新は別スレッドで実行し、描画タイミングと分離
+- `UiState` と `SimulationManager` は `Arc<RwLock<...>>` で共有
 
-- **シーン描画** — `ParticleRenderPipeline`（`src/pipeline.rs`）  
-  - `ordered_passes_renderpass!` で **同一カラーアタッチメントを 2 サブパス**（パス0: 3D、パス1: egui）に分割。  
-  - **`pipeline_axes`**: `PrimitiveTopology::LineList` — 座標グリッド・軸、および 3D Graph モードの折れ線。頂点型 `AxesVertex`、プッシュ定数で `view_proj`。  
-  - **`pipeline_particles`**: `PrimitiveTopology::PointList` — 粒子は点描画。`ParticleVertex` + プッシュ定数（`view_proj`, `size_scale`）。  
-  - `ParticleRenderPipeline::render(...)` がプライマリコマンドバッファを組み立て、サブパス0ではセカンダリで軸／線／粒子を描画し、サブパス1で `Gui::draw_on_subpass_image` を実行。
+### Vulkan 初期化 (`src/vulkan_base.rs`)
 
-- **UI オーバーレイ** — `Gui`（`src/integration.rs`）と **`Renderer`**（`src/renderer.rs`）  
-  - `Renderer` は **egui 用**の `GraphicsPipeline`（頂点は `EguiVertex`、シェーダはファイルではなく **`vulkano_shaders::shader!` でインライン GLSL**）。  
-  - `Gui::new_with_subpass` でレンダパスの **第 2 サブパス** に乗せる。
+- `ash` で Vulkan インスタンス / サーフェス / 論理デバイスを構築
+- グラフィックス + プレゼント可能なキューファミリを選択
+- スワップチェーン、イメージビュー、コマンドプール、同期オブジェクトを管理
+- メモリ割り当ては `gpu-allocator` を使用
 
-## シェーダ（GLSL ファイル）
+### 描画パイプライン (`src/pipeline.rs`)
 
-次の 4 ファイルは `vulkano_shaders::shader!` の `path` から参照されます（`src/pipeline.rs`）。
+- 1 つのレンダーパス内でシーン描画後に egui を重ねる構成
+- グラフィックスパイプラインは以下を用途別に保持:
+  - 軸・グリッド・グラフ線 (`LineList`)
+  - 粒子 (`PointList`)
+  - GPU Tree (`LineList` / `TriangleList` をモードで切替)
+- GPU Tree 用のコンピュートパイプラインを持ち、木構造頂点の生成更新を実行
 
-| ファイル | 用途 |
-|----------|------|
-| `src/shaders/axes_vertex.vert` | 軸・グリッド・グラフ線（頂点） |
-| `src/shaders/axes_fragment.frag` | 上記フラグメント |
-| `src/shaders/particles_vertex.vert` | 粒子（点）頂点 |
-| `src/shaders/particles_fragment.frag` | 粒子フラグメント |
+### UI 統合 (`src/integration.rs`, `src/ui.rs`, `src/ui_state.rs`)
 
-※ egui レイヤーの頂点／フラグメントは `src/renderer.rs` 内の `shader!` マクロに埋め込まれています。
+- `egui-winit` で入力処理、`egui-ash-renderer` で Vulkan コマンドに描画を記録
+- モード切替、各種パネル表示、設定保存 (`AppSettings`) を UI から操作
+- パネル表示状態やシミュレーション状態は `UiState` に集約
 
-## 想定 GPU
+## 実装済みモード
 
-- **Vulkan 対応**の一般的なディスクリート GPU または統合 GPU。  
-- スワップチェーンは `B8G8R8A8_UNORM` を要求する初期化があります（`main.rs` の `create_window` クロージャ）。  
-- レイトレーシング等の拡張機能には依存していません。
+- **Simulation**: N 体重力系ベースの粒子更新と可視化
+- **3D Graph**: 相対論モチーフの各種 3D グラフ（Light Cone など）を線描画
+- **GPU Tree**: GPU 側計算を使った木構造描画（Lines / Polygons）
 
-## 機能・現在の表示内容
+## シェーダ
 
-- **Simulation モード**: N 体（ニュートン重力）に近い更新（種類は UI のシミュレーションタイプで切替）で粒子の位置・速度を更新し、**色付きの点**として描画。オプションで **XZ 平面のグリッドと座標軸**（線）を表示。  
-- **3D Graph モード**: パラメータに応じた **3D 曲線／グラフを線分**で表示し、同じく点群も表示（`graph3d` モジュール）。  
-- **egui**: メニュー（File / Mode / Panel / View など）、シミュレーション設定、初期条件、FPS・フレーム表示など。
+シェーダは `src/shaders/` 配下の GLSL を `build.rs` で `glslc` コンパイルし、  
+実行時には `include_bytes!(concat!(env!("OUT_DIR"), ...))` で `.spv` を読み込みます。
+
+主なファイル:
+
+- `axes_vertex.vert` / `axes_fragment.frag`
+- `particles_vertex.vert` / `particles_fragment.frag`
+- `tree_vertex.vert` / `tree_fragment.frag`
+- `tree_compute.comp`
+- `egui_vertex.vert` / `egui_fragment.frag`
 
 ## 操作方法
 
-| 操作 | 内容 |
-|------|------|
-| **左ドラッグ** | カメラを軌道回転（revolve） |
-| **右ドラッグ** | 視線の向き変更（look around） |
-| **中ドラッグ** | 画面中心まわりのロール回転 |
-| **マウスホイール** | ズーム |
-| **左ダブルクリック** | カメラを **Y 軸上から** の見下ろし寄りに |
-| **右ダブルクリック** | 注視点を原点付近にリセット |
-| **メニュー / パネル** | シミュの開始・一時停止、リセット、モード切替、グリッド表示、各種スライダ・設定 |
+- **左ドラッグ**: カメラを軌道回転
+- **右ドラッグ**: 視線方向を回転
+- **中ドラッグ**: ロール回転
+- **マウスホイール**: ズーム
+- **左ダブルクリック**: 俯瞰寄りの視点へ
+- **右ダブルクリック**: 注視点を原点付近へリセット
+- **メニュー / パネル**: モード切替、シミュレーション開始/停止、各種パラメータ変更
