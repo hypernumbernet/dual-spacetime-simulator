@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 const MAX_SAMPLES: u32 = 5000;
 const GOLDEN: f64 = 1.618033988749895;
 
+/// Generates an approximately uniform unit direction on a sphere using Fibonacci sampling.
 fn fibonacci_unit_direction(index: usize, n: usize) -> [f64; 3] {
     if n == 0 {
         return [0.0, 1.0, 0.0];
@@ -21,10 +22,12 @@ fn fibonacci_unit_direction(index: usize, n: usize) -> [f64; 3] {
     [x, y, z]
 }
 
+/// Clamps the requested sample count to a valid GPU-friendly range.
 fn clamp_samples(n: u32) -> usize {
     (n.clamp(1, MAX_SAMPLES)) as usize
 }
 
+/// Converts each graph type into a stable numeric tag for hashing.
 fn graph_type_tag(gt: GraphType) -> u8 {
     match gt {
         GraphType::LightCone => 0,
@@ -35,7 +38,7 @@ fn graph_type_tag(gt: GraphType) -> u8 {
     }
 }
 
-/// パラメータが変わったときだけ GPU バッファを差し替えるためのフィンガープリント。
+/// Computes a stable fingerprint for graph parameters to detect buffer update needs.
 pub fn graph_params_fingerprint(
     graph_type: GraphType,
     graph_sample_count: u32,
@@ -52,6 +55,7 @@ pub fn graph_params_fingerprint(
     h.finish()
 }
 
+/// Builds point positions and colors for the selected 3D graph visualization mode.
 pub fn build_points(
     graph_type: GraphType,
     graph_sample_count: u32,
@@ -93,11 +97,7 @@ pub fn build_points(
                     BivectorBoost::from_velocity(vx, vy, vz)
                 };
                 let s = vs as f32 * 0.25 + 0.25;
-                positions.push([
-                    (bv.i * vs) as f32,
-                    (bv.j * vs) as f32,
-                    (bv.k * vs) as f32,
-                ]);
+                positions.push([(bv.i * vs) as f32, (bv.j * vs) as f32, (bv.k * vs) as f32]);
                 colors.push([s, 0.4, 1.0 - s * 0.5, 1.0]);
             }
         }
@@ -151,7 +151,7 @@ pub fn build_points(
     (positions, colors)
 }
 
-/// `LineList` 用の頂点列（連続する 2 頂点が 1 線分）。`GraphType::LightCone` のみ非空。
+/// Builds line-list vertices and colors for graph types that render line segments.
 pub fn build_graph_line_vertices(
     graph_type: GraphType,
     graph_sample_count: u32,
@@ -165,7 +165,11 @@ pub fn build_graph_line_vertices(
     }
 }
 
-fn build_light_cone_line_vertices(graph_sample_count: u32, graph_t_slice: f64) -> Vec<([f32; 3], [f32; 4])> {
+/// Creates radial light-cone line segments from the origin to sampled sphere directions.
+fn build_light_cone_line_vertices(
+    graph_sample_count: u32,
+    graph_t_slice: f64,
+) -> Vec<([f32; 3], [f32; 4])> {
     let n = clamp_samples(graph_sample_count);
     let r = graph_t_slice.abs();
     let origin = [0.0_f32, 0.0, 0.0];

@@ -17,6 +17,7 @@ pub struct GpuTreeComputeParams {
 }
 
 impl From<TreeParams> for GpuTreeComputeParams {
+    /// Converts CPU-side tree parameters into GPU compute parameter layout.
     fn from(params: TreeParams) -> Self {
         Self {
             seed: params.seed,
@@ -51,6 +52,7 @@ pub struct TreeParams {
 }
 
 impl Default for TreeParams {
+    /// Provides default procedural parameters for a balanced demo tree shape.
     fn default() -> Self {
         Self {
             seed: 42,
@@ -73,10 +75,12 @@ pub struct HermiteSpline {
 }
 
 impl HermiteSpline {
+    /// Creates a cubic Hermite spline segment from endpoints and tangents.
     pub fn new(p0: Vec3, p1: Vec3, m0: Vec3, m1: Vec3) -> Self {
         Self { p0, p1, m0, m1 }
     }
 
+    /// Evaluates a point on the spline at normalized parameter t.
     pub fn eval(&self, t: f32) -> Vec3 {
         let t2 = t * t;
         let t3 = t2 * t;
@@ -87,6 +91,7 @@ impl HermiteSpline {
         self.p0 * h00 + self.m0 * h10 + self.p1 * h01 + self.m1 * h11
     }
 
+    /// Evaluates and normalizes the spline tangent at parameter t.
     pub fn eval_tangent(&self, t: f32) -> Vec3 {
         let t2 = t * t;
         let h00 = 6.0 * t2 - 6.0 * t;
@@ -111,6 +116,7 @@ pub struct Tree {
 }
 
 impl Tree {
+    /// Generates a full procedural tree hierarchy from input parameters.
     pub fn generate(params: TreeParams) -> Self {
         let mut rng = rand::rngs::SmallRng::seed_from_u64(params.seed as u64);
         let mut bounds_min = Vec3::splat(f32::MAX);
@@ -147,7 +153,7 @@ impl Tree {
         Tree { root }
     }
 
-    /// Place one tree at each xz grid crossing (0.5 interval) and connect the drawing vertices.
+    /// Generates line vertices by placing one procedural tree at each XZ grid point.
     pub fn generate_forest_vertices_on_axis_xz_grid(
         params: TreeParams,
     ) -> Vec<([f32; 3], [f32; 4])> {
@@ -171,7 +177,7 @@ impl Tree {
         out
     }
 
-    /// Generate vertices for the specified layout (single tree or grid forest).
+    /// Dispatches vertex generation for either single-tree or grid-forest layout.
     pub fn generate_vertices_for_layout(
         layout: crate::ui_state::GpuTreeLayout,
         params: TreeParams,
@@ -187,7 +193,7 @@ impl Tree {
         }
     }
 
-    /// Place one tree at each xz grid crossing (0.5 interval) and connect the Tube mesh.
+    /// Generates tube-mesh vertices by instancing one procedural tree per XZ grid point.
     pub fn generate_forest_tube_vertices_on_axis_xz_grid(
         params: TreeParams,
     ) -> Vec<([f32; 3], [f32; 3], [f32; 4])> {
@@ -211,6 +217,7 @@ impl Tree {
         out
     }
 
+    /// Recursively grows child branches and appends them to the current branch.
     fn grow_branch(
         branch: &mut Branch,
         params: &TreeParams,
@@ -272,6 +279,7 @@ impl Tree {
         }
     }
 
+    /// Recursively expands world-space bounds by sampling each branch spline.
     fn update_bounds(branch: &Branch, min: &mut Vec3, max: &mut Vec3) {
         let steps = 8;
         for i in 0..=steps {
@@ -285,13 +293,14 @@ impl Tree {
         }
     }
 
-    /// Generate Tube mesh at the specified base position (Forest support).
+    /// Builds tube-mesh vertices for this tree translated to the given base position.
     pub fn generate_tube_vertices_at(&self, base: Vec3) -> Vec<([f32; 3], [f32; 3], [f32; 4])> {
         let mut verts = Vec::new();
         Self::collect_tube_vertices(&self.root, base, &mut verts);
         verts
     }
 
+    /// Recursively tessellates each branch into shaded tube triangles and optional leaf caps.
     fn collect_tube_vertices(
         branch: &Branch,
         base: Vec3,
@@ -456,12 +465,14 @@ impl Tree {
         }
     }
 
+    /// Builds line-list branch and leaf vertices translated to the given base position.
     pub fn generate_vertices_at(&self, base: Vec3) -> Vec<([f32; 3], [f32; 4])> {
         let mut verts = Vec::new();
         Self::collect_branch_vertices(&self.root, base, &mut verts, 0.0);
         verts
     }
 
+    /// Recursively collects line segments for branches and simple tip leaves.
     fn collect_branch_vertices(
         branch: &Branch,
         base: Vec3,
@@ -470,11 +481,11 @@ impl Tree {
     ) {
         let steps = 12;
         let color = if branch.depth == 0 {
-            [0.4, 0.25, 0.1, 1.0] // 幹: 茶
+            [0.4, 0.25, 0.1, 1.0] // Trunk: brown
         } else if branch.depth < 3 {
             [0.35, 0.22, 0.08, 1.0]
         } else {
-            [0.1, 0.6, 0.1, 1.0] // 葉: 緑
+            [0.1, 0.6, 0.1, 1.0] // Leaves: green
         };
 
         for i in 0..steps {

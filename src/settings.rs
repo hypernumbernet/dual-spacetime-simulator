@@ -15,6 +15,7 @@ pub struct AppSettings {
 }
 
 impl Default for AppSettings {
+    /// Returns default application settings for first launch and fallback loading.
     fn default() -> Self {
         Self {
             max_particle_count: 20_000,
@@ -28,12 +29,14 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    /// Resolves the filesystem path used to load and save persisted settings.
     fn config_path() -> io::Result<PathBuf> {
         let exe_path = std::env::current_exe()?;
         let dir = exe_path.parent().unwrap_or_else(|| Path::new("."));
         Ok(dir.join("setting.config"))
     }
 
+    /// Loads settings from disk and falls back to defaults on any read or parse failure.
     pub fn load() -> Self {
         if let Ok(path) = Self::config_path() {
             if let Ok(text) = fs::read_to_string(&path) {
@@ -45,6 +48,7 @@ impl AppSettings {
         Self::default()
     }
 
+    /// Persists current settings to disk as pretty-printed JSON.
     pub fn save(&self) -> io::Result<()> {
         let path = Self::config_path()?;
         if let Some(parent) = path.parent() {

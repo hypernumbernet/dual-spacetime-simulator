@@ -14,6 +14,7 @@ pub struct LabelStyle {
     pub padding: Option<Margin>,
 }
 
+/// Draws a label with optional frame, text, and sizing overrides.
 pub fn draw_label_with_style(ui: &mut Ui, text: &str, style: &LabelStyle) {
     let stroke = if style.border_width > 0.0 {
         Some(Stroke::new(
@@ -61,6 +62,7 @@ pub fn draw_label_with_style(ui: &mut Ui, text: &str, style: &LabelStyle) {
     });
 }
 
+/// Draws a styled drag-value row with label, custom parsing, and scientific fallback formatting.
 pub fn dragvalue_normal<T: egui::emath::Numeric>(
     ui: &mut Ui,
     value: &mut T,
@@ -106,6 +108,7 @@ pub fn dragvalue_normal<T: egui::emath::Numeric>(
     });
 }
 
+/// Draws a right-aligned highlighted indicator label for compact status display.
 pub fn label_indicator(ui: &mut Ui, text: &str) {
     let style = LabelStyle {
         font_size: 14.0,
@@ -122,6 +125,7 @@ pub fn label_indicator(ui: &mut Ui, text: &str) {
     });
 }
 
+/// Draws a standard body-style label used throughout the control panels.
 pub fn label_normal(ui: &mut Ui, text: &str) {
     let style = LabelStyle {
         font_size: 12.0,
@@ -133,12 +137,14 @@ pub fn label_normal(ui: &mut Ui, text: &str) {
     draw_label_with_style(ui, text, &style);
 }
 
+/// Draws a full-width slider without rendering its numeric value text.
 pub fn slider_pure(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64>) {
     ui.add_space(4.0);
     ui.style_mut().spacing.slider_width = ui.available_width();
     ui.add(egui::Slider::new(value, range).show_value(false));
 }
 
+/// Binds a selectable UI item by display string to a typed selected value.
 pub fn selectable_value<T: PartialEq + std::fmt::Display>(
     ui: &mut Ui,
     current: &mut T,
@@ -148,6 +154,7 @@ pub fn selectable_value<T: PartialEq + std::fmt::Display>(
     ui.selectable_value(current, selected, display_text.as_str());
 }
 
+/// Draws a full-width normal button with enlarged interactive height.
 pub fn button_normal(ui: &mut Ui, text: &str) -> Response {
     let button_width = ui.available_width();
     let button_height = ui.spacing().interact_size.y * 1.5;

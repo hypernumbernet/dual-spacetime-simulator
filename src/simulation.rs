@@ -13,7 +13,9 @@ pub const G: f64 = 6.6743e-11; // Gravitational constant in m^3 kg^-1 s^-2
 pub const EPSILON: f64 = 1e-10;
 
 pub trait SimulationEngine {
+    /// Updates particle velocities for one simulation step duration.
     fn update_velocities(&mut self, delta_seconds: f64);
+    /// Advances particle positions or states for one simulation step duration.
     fn advance_time(&mut self, delta_seconds: f64);
 }
 
@@ -46,6 +48,7 @@ pub struct Particle {
 }
 
 impl SimulationEngine for SimulationNormal {
+    /// Applies Newtonian gravity to update velocities for all particles.
     fn update_velocities(&mut self, delta_seconds: f64) {
         let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
@@ -71,6 +74,7 @@ impl SimulationEngine for SimulationNormal {
             });
     }
 
+    /// Advances positions using current velocities under classical kinematics.
     fn advance_time(&mut self, delta_seconds: f64) {
         self.particles.par_iter_mut().for_each(|particle| {
             particle.position += particle.velocity * delta_seconds;
@@ -79,6 +83,7 @@ impl SimulationEngine for SimulationNormal {
 }
 
 impl SimulationEngine for SimulationSpeedOfLightLimit {
+    /// Applies Newtonian gravity to update velocities before relativistic position correction.
     fn update_velocities(&mut self, delta_seconds: f64) {
         let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
@@ -104,6 +109,7 @@ impl SimulationEngine for SimulationSpeedOfLightLimit {
             });
     }
 
+    /// Advances positions with a gamma-based speed limit correction.
     fn advance_time(&mut self, delta_seconds: f64) {
         let lss = LIGHT_SPEED_SQUARED / (self.scale * self.scale);
         self.particles.par_iter_mut().for_each(|particle| {
@@ -115,6 +121,7 @@ impl SimulationEngine for SimulationSpeedOfLightLimit {
 }
 
 impl SimulationEngine for SimulationLorentzTransformation {
+    /// Updates rapidity-like velocities from momentum-based relativistic interactions.
     fn update_velocities(&mut self, delta_seconds: f64) {
         let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
@@ -143,6 +150,7 @@ impl SimulationEngine for SimulationLorentzTransformation {
             });
     }
 
+    /// Advances positions by applying Lorentz transformation to proper-time increments.
     fn advance_time(&mut self, delta_seconds: f64) {
         let ct = delta_seconds * LIGHT_SPEED / self.scale;
         self.particles.par_iter_mut().for_each(|particle| {
@@ -155,6 +163,7 @@ impl SimulationEngine for SimulationLorentzTransformation {
 }
 
 impl SimulationEngine for SimulationState {
+    /// Delegates velocity updates to the active simulation variant.
     fn update_velocities(&mut self, delta_seconds: f64) {
         match self {
             SimulationState::Normal(s) => s.update_velocities(delta_seconds),
@@ -163,6 +172,7 @@ impl SimulationEngine for SimulationState {
         }
     }
 
+    /// Delegates time advancement to the active simulation variant.
     fn advance_time(&mut self, delta_seconds: f64) {
         match self {
             SimulationState::Normal(s) => s.advance_time(delta_seconds),
@@ -173,12 +183,14 @@ impl SimulationEngine for SimulationState {
 }
 
 impl Default for SimulationNormal {
+    /// Creates an empty Newtonian simulation state.
     fn default() -> Self {
         Self { particles: vec![] }
     }
 }
 
 impl Default for SimulationSpeedOfLightLimit {
+    /// Creates an empty speed-limited simulation state with default world scale.
     fn default() -> Self {
         Self {
             particles: vec![],
@@ -188,6 +200,7 @@ impl Default for SimulationSpeedOfLightLimit {
 }
 
 impl Default for SimulationLorentzTransformation {
+    /// Creates an empty Lorentz-transformation simulation state with default scale.
     fn default() -> Self {
         Self {
             particles: vec![],
@@ -197,6 +210,7 @@ impl Default for SimulationLorentzTransformation {
 }
 
 impl SimulationState {
+    /// Returns an immutable reference to particles in the active simulation variant.
     pub fn particles(&self) -> &Vec<Particle> {
         match self {
             SimulationState::Normal(s) => &s.particles,
@@ -207,6 +221,7 @@ impl SimulationState {
 }
 
 impl Default for SimulationState {
+    /// Creates a default simulation state using the normal Newtonian variant.
     fn default() -> Self {
         Self::Normal(SimulationNormal::default())
     }
@@ -217,12 +232,14 @@ pub struct SimulationManager {
 }
 
 impl SimulationManager {
+    /// Creates a simulation manager with an initially empty default state.
     pub fn new() -> Self {
         Self {
             state: Arc::new(RwLock::new(SimulationState::default())),
         }
     }
 
+    /// Builds a simulation state from initial conditions and selected simulation model.
     pub fn create_simulation(
         initial_condition: InitialCondition,
         simulation_type: SimulationType,
@@ -249,6 +266,7 @@ impl SimulationManager {
         }
     }
 
+    /// Converts particle velocities into rapidity representation for Lorentz mode.
     pub fn convert_to_lorentz(particles: Vec<Particle>, scale: f64) -> Vec<Particle> {
         let ls = scale / LIGHT_SPEED;
         particles
@@ -262,6 +280,7 @@ impl SimulationManager {
             .collect()
     }
 
+    /// Replaces current simulation state with a freshly generated one.
     pub fn reset(
         &self,
         initial_condition: InitialCondition,
@@ -275,12 +294,14 @@ impl SimulationManager {
         *state_guard = new_state;
     }
 
+    /// Advances the active simulation by one frame and updates velocities.
     pub fn advance(&self, time_per_frame: f64) {
         let mut sim = self.state.write().unwrap();
         sim.advance_time(time_per_frame);
         sim.update_velocities(time_per_frame);
     }
 
+    /// Returns a cloned particle list from the current simulation state.
     pub fn particles(&self) -> Vec<Particle> {
         let state = self.state.read().unwrap();
         state.particles().clone()
@@ -288,6 +309,7 @@ impl SimulationManager {
 }
 
 impl Default for SimulationManager {
+    /// Creates a default simulation manager instance.
     fn default() -> Self {
         Self::new()
     }

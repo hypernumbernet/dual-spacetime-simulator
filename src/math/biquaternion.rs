@@ -8,6 +8,7 @@ enum QuatComp {
     K, // k or K
 }
 
+/// Multiplies two quaternion basis components and returns sign and resulting component.
 const fn quat_mul(a: QuatComp, b: QuatComp) -> (i8, QuatComp) {
     match (a, b) {
         (QuatComp::R, x) => (1, x),
@@ -42,6 +43,7 @@ const BASIS: [(QuatComp, QuatComp); 15] = [
     (QuatComp::I, QuatComp::R), // 14: i
 ];
 
+/// Returns the compact basis index for a pair of quaternion side and lane components.
 const fn get_basis_index(s: QuatComp, l: QuatComp) -> usize {
     match (s, l) {
         (QuatComp::J, QuatComp::R) => 0,
@@ -63,6 +65,7 @@ const fn get_basis_index(s: QuatComp, l: QuatComp) -> usize {
     }
 }
 
+/// Precomputes the multiplication lookup table for all tetraquaternion basis pairs.
 const fn compute_mul_table() -> [[(i8, usize); 15]; 15] {
     let mut table = [[(0i8, 0usize); 15]; 15];
     let mut left: usize = 0;
@@ -97,6 +100,7 @@ pub struct TetraQuaternion {
 }
 
 impl TetraQuaternion {
+    /// Creates a tetraquaternion from a real coefficient and 15 basis coefficients.
     pub fn new(real: f64, bases: [f64; 15]) -> Self {
         let mut coeffs = [0.0; DIM];
         coeffs[0] = real;
@@ -104,12 +108,14 @@ impl TetraQuaternion {
         Self { coeffs }
     }
 
+    /// Returns multiplicative identity tetraquaternion.
     pub fn one() -> Self {
         let mut coeffs = [0.0; DIM];
         coeffs[0] = 1.0;
         Self { coeffs }
     }
 
+    /// Returns a unit tetraquaternion basis element by index.
     pub fn basis(index: usize) -> Self {
         assert!(index < 15, "Basis index out of range");
         let mut coeffs = [0.0; DIM];
@@ -120,6 +126,7 @@ impl TetraQuaternion {
 
 impl Add for TetraQuaternion {
     type Output = Self;
+    /// Adds two tetraquaternions component-wise.
     fn add(self, rhs: Self) -> Self {
         let mut coeffs = [0.0; DIM];
         for i in 0..DIM {
@@ -131,6 +138,7 @@ impl Add for TetraQuaternion {
 
 impl Mul for TetraQuaternion {
     type Output = Self;
+    /// Multiplies two tetraquaternions using the precomputed basis multiplication table.
     fn mul(self, rhs: Self) -> Self {
         let mut result = [0.0; DIM];
         result[0] += self.coeffs[0] * rhs.coeffs[0];
@@ -154,6 +162,7 @@ impl Mul for TetraQuaternion {
 }
 
 impl AddAssign for TetraQuaternion {
+    /// Accumulates tetraquaternion coefficients by component-wise addition.
     fn add_assign(&mut self, rhs: Self) {
         for i in 0..DIM {
             self.coeffs[i] += rhs.coeffs[i];
@@ -163,6 +172,7 @@ impl AddAssign for TetraQuaternion {
 
 impl Sub for TetraQuaternion {
     type Output = Self;
+    /// Subtracts two tetraquaternions component-wise.
     fn sub(self, rhs: Self) -> Self {
         let mut coeffs = [0.0; DIM];
         for i in 0..DIM {
@@ -173,6 +183,7 @@ impl Sub for TetraQuaternion {
 }
 
 impl SubAssign for TetraQuaternion {
+    /// Applies in-place component-wise subtraction.
     fn sub_assign(&mut self, rhs: Self) {
         for i in 0..DIM {
             self.coeffs[i] -= rhs.coeffs[i];
@@ -181,17 +192,19 @@ impl SubAssign for TetraQuaternion {
 }
 
 impl MulAssign for TetraQuaternion {
+    /// Applies in-place tetraquaternion multiplication.
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
 impl TetraQuaternion {
+    /// Returns true when all coefficients are numerically near zero.
     pub fn is_zero(&self) -> bool {
         self.coeffs.iter().all(|&c| c.abs() < 1e-10)
     }
 
-    /// Largest absolute difference per coefficient (useful for tests).
+    /// Returns the maximum absolute per-coefficient difference against another value.
     pub fn max_abs_diff(&self, other: &Self) -> f64 {
         self.coeffs
             .iter()
@@ -200,7 +213,7 @@ impl TetraQuaternion {
             .fold(0.0, f64::max)
     }
 
-    /// `I`, `J`, `K` coefficients (`coeffs[8..=10]`, basis indices 7–9).
+    /// Extracts the I, J, and K coefficients used for 3D projection.
     pub fn ijk_coeffs(&self) -> [f64; 3] {
         [self.coeffs[8], self.coeffs[9], self.coeffs[10]]
     }
@@ -211,6 +224,7 @@ const BASIS_NAMES: [&str; 15] = [
     "jK ", " i ",
 ];
 
+/// Formats the multiplication table into an aligned printable string.
 fn _to_mul_table_string() -> String {
     let mut result = String::new();
     for _ in 0..16 {

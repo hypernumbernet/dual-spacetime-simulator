@@ -3,6 +3,7 @@ use std::f64;
 
 const EPSILON: f64 = 1e-10;
 
+/// Compares two floating-point values within a fixed numerical tolerance.
 pub fn fuzzy_compare(a: f64, b: f64) -> bool {
     (a - b).abs() < EPSILON
 }
@@ -16,28 +17,34 @@ pub struct Spacetime {
 }
 
 impl Spacetime {
+    /// Creates a spacetime value from explicit temporal and spatial components.
     pub fn new(t: f64, x: f64, y: f64, z: f64) -> Self {
         Self { t, x, y, z }
     }
 
+    /// Creates a pure temporal spacetime value with zero spatial coordinates.
     pub fn from_t(t: f64) -> Self {
         Self::new(t, 0.0, 0.0, 0.0)
     }
 
+    /// Creates a pure spatial spacetime value from a 3D vector.
     pub fn from_vector3(v: DVec3) -> Self {
         Self::new(0.0, v.x, v.y, v.z)
     }
 
+    /// Creates a spacetime value from the first four entries of a slice.
     pub fn from_array(a: &[f64]) -> Self {
         assert!(a.len() >= 4);
         Self::new(a[0], a[1], a[2], a[3])
     }
 
+    /// Creates a spacetime value from a four-value window in a slice.
     pub fn from_array_index(a: &[f64], index: usize) -> Self {
         assert!(a.len() >= index + 4);
         Self::new(a[index], a[index + 1], a[index + 2], a[index + 3])
     }
 
+    /// Sets all spacetime components at once.
     pub fn set_values(&mut self, t: f64, x: f64, y: f64, z: f64) {
         self.t = t;
         self.x = x;
@@ -45,6 +52,7 @@ impl Spacetime {
         self.z = z;
     }
 
+    /// Sets only the temporal component and clears spatial components.
     pub fn set_t_only(&mut self, t: f64) {
         self.t = t;
         self.x = 0.0;
@@ -52,6 +60,7 @@ impl Spacetime {
         self.z = 0.0;
     }
 
+    /// Overwrites spacetime components from the first four slice entries.
     pub fn set_from_array(&mut self, a: &[f64]) {
         assert!(a.len() >= 4);
         self.t = a[0];
@@ -60,6 +69,7 @@ impl Spacetime {
         self.z = a[3];
     }
 
+    /// Overwrites spacetime components from a four-value window in a slice.
     pub fn set_from_array_index(&mut self, a: &[f64], index: usize) {
         assert!(a.len() >= index + 4);
         self.t = a[index];
@@ -68,6 +78,7 @@ impl Spacetime {
         self.z = a[index + 3];
     }
 
+    /// Returns a zero spacetime value.
     pub const fn zero() -> Self {
         Self {
             t: 0.0,
@@ -77,6 +88,7 @@ impl Spacetime {
         }
     }
 
+    /// Returns multiplicative identity spacetime value used for no-op transforms.
     pub const fn identity() -> Self {
         Self {
             t: 1.0,
@@ -86,6 +98,7 @@ impl Spacetime {
         }
     }
 
+    /// Returns the component at index order t, x, y, z.
     pub fn get(&self, i: usize) -> f64 {
         match i {
             0 => self.t,
@@ -96,6 +109,7 @@ impl Spacetime {
         }
     }
 
+    /// Returns mutable access to a component at index order t, x, y, z.
     pub fn get_mut(&mut self, i: usize) -> &mut f64 {
         match i {
             0 => &mut self.t,
@@ -106,34 +120,40 @@ impl Spacetime {
         }
     }
 
-    /// signature (-+++)
+    /// Computes Minkowski norm using the (-,+,+,+) signature convention.
     pub fn norm(&self) -> f64 {
         self.x * self.x + self.y * self.y + self.z * self.z - self.t * self.t
     }
 
+    /// Returns the spacetime conjugate that negates only the temporal component.
     pub fn conjugated(&self) -> Self {
         Self::new(-self.t, self.x, self.y, self.z)
     }
 
+    /// Returns the magnitude derived from the absolute Minkowski norm.
     pub fn abs(&self) -> f64 {
         self.norm().abs().sqrt()
     }
 
+    /// Returns rapidity-like argument from spatial norm over temporal component.
     pub fn arg(&self) -> f64 {
         let n = (self.x * self.x + self.y * self.y + self.z * self.z).sqrt();
         (n / self.t).atanh()
     }
 
+    /// Builds a boost versor from axis components and rapidity scalar.
     pub fn exp_versor(x: f64, y: f64, z: f64, a: f64) -> Self {
         let s = a.sinh();
         Self::new(a.cosh(), x * s, y * s, z * s)
     }
 
+    /// Builds a boost versor from rapidity scalar and direction vector.
     pub fn exp(a: f64, v: DVec3) -> Self {
         let s = a.sinh();
         Self::new(a.cosh(), v.x * s, v.y * s, v.z * s)
     }
 
+    /// Converts rapidity vector components into physical velocity components.
     pub fn velocities(versor_angle: DVec3, speed_of_light: f64) -> DVec3 {
         let a = versor_angle.length_squared();
         if a == 0.0 {
@@ -144,6 +164,7 @@ impl Spacetime {
         DVec3::new(v * versor_angle.x, v * versor_angle.y, v * versor_angle.z)
     }
 
+    /// Applies a Lorentz transformation represented as a spacetime versor.
     #[inline(always)]
     pub fn lorentz_transformation(&mut self, g: Spacetime) {
         let p = g.t;
@@ -172,6 +193,7 @@ impl Spacetime {
         self.z = (pp - qq - rr + ss) * z + 2.0 * s * (p_w - q_x - r_y);
     }
 
+    /// Applies a Lorentz transformation from velocity and inverse light speed.
     pub fn lorentz_transformation_v(&mut self, v: DVec3, speed_of_light_inv: f64) {
         let l = v.length_squared();
         if l == 0.0 {
@@ -183,6 +205,7 @@ impl Spacetime {
         self.lorentz_transformation(g);
     }
 
+    /// Applies a Lorentz transformation directly from rapidity vector.
     pub fn lorentz_transformation_rapidity(&mut self, rapidity: DVec3) {
         let a = rapidity.length_squared();
         if a == 0.0 {
@@ -193,6 +216,7 @@ impl Spacetime {
         self.lorentz_transformation(g);
     }
 
+    /// Compares two spacetime values using tolerance-based component checks.
     pub fn fuzzy_compare(&self, a: Spacetime) -> bool {
         fuzzy_compare(self.t, a.t)
             && fuzzy_compare(self.x, a.x)
@@ -202,12 +226,13 @@ impl Spacetime {
 }
 
 impl std::fmt::Display for Spacetime {
+    /// Formats spacetime components as a comma-separated tuple-like string.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}, {}, {}, {}", self.t, self.x, self.y, self.z)
     }
 }
 
-/// Converting Velocity ​​to Rapidity Vector.
+/// Converts a velocity vector into a rapidity vector.
 pub fn rapidity_vector(v: DVec3, speed_of_light_inv: f64) -> DVec3 {
     let speed = v.length_squared();
     if speed == 0.0 {
@@ -218,7 +243,7 @@ pub fn rapidity_vector(v: DVec3, speed_of_light_inv: f64) -> DVec3 {
     DVec3::new(b * v.x, b * v.y, b * v.z)
 }
 
-/// Converting Momentum to Rapidity Vector.
+/// Converts a momentum vector into a rapidity vector.
 ///
 /// p = mvγ
 /// {γ : Lorentz factor : 1 / sqrt(1 - v^2 / c^2)}

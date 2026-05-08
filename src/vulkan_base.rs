@@ -33,6 +33,7 @@ pub struct VulkanBase {
 }
 
 impl VulkanBase {
+    /// Creates Vulkan instance/device/swapchain resources for the provided window surface.
     pub fn new(window: &Window) -> Self {
         let entry = unsafe { Entry::load() }.expect("Failed to load Vulkan");
 
@@ -139,6 +140,7 @@ impl VulkanBase {
         }
     }
 
+    /// Recreates swapchain-dependent resources after resize or surface changes.
     pub fn recreate_swapchain(&mut self, window: &Window) {
         unsafe { self.device.device_wait_idle().unwrap() };
 
@@ -164,6 +166,7 @@ impl VulkanBase {
         }
     }
 
+    /// Destroys current swapchain image views and swapchain handle.
     fn cleanup_swapchain(&mut self) {
         for &iv in &self.swapchain_image_views {
             unsafe { self.device.destroy_image_view(iv, None) };
@@ -171,16 +174,19 @@ impl VulkanBase {
         self.swapchain_image_views.clear();
     }
 
+    /// Waits for the current in-flight frame fence to signal completion.
     pub fn wait_for_fence(&self) {
         let fence = self.in_flight_fences[self.current_frame];
         unsafe { self.device.wait_for_fences(&[fence], true, u64::MAX).unwrap() };
     }
 
+    /// Resets the current in-flight frame fence before command submission.
     pub fn reset_fence(&self) {
         let fence = self.in_flight_fences[self.current_frame];
         unsafe { self.device.reset_fences(&[fence]).unwrap() };
     }
 
+    /// Acquires the next presentable swapchain image for rendering.
     pub fn acquire_next_image(&self) -> Result<(u32, bool), vk::Result> {
         let semaphore = self.image_available_semaphores[self.current_frame];
         unsafe {
@@ -189,10 +195,12 @@ impl VulkanBase {
         }
     }
 
+    /// Returns the command buffer associated with the current frame index.
     pub fn current_command_buffer(&self) -> vk::CommandBuffer {
         self.command_buffers[self.current_frame]
     }
 
+    /// Submits the current frame command buffer and presents the selected swapchain image.
     pub fn submit_and_present(&self, image_index: u32) -> Result<bool, vk::Result> {
         let wait_semaphores = [self.image_available_semaphores[self.current_frame]];
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
@@ -222,6 +230,7 @@ impl VulkanBase {
         unsafe { self.swapchain_loader.queue_present(self.graphics_queue, &present_info) }
     }
 
+    /// Advances frame index in the ring of in-flight frame resources.
     pub fn advance_frame(&mut self) {
         self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
@@ -229,6 +238,7 @@ impl VulkanBase {
 }
 
 impl Drop for VulkanBase {
+    /// Releases all Vulkan resources in reverse dependency order.
     fn drop(&mut self) {
         unsafe {
             if let Err(err) = self.device.device_wait_idle() {
@@ -260,6 +270,7 @@ impl Drop for VulkanBase {
     }
 }
 
+/// Chooses a suitable physical device and graphics/present queue family index.
 fn pick_physical_device(
     instance: &Instance,
     surface_loader: &surface::Instance,
@@ -283,6 +294,7 @@ fn pick_physical_device(
     panic!("No suitable physical device found");
 }
 
+/// Creates a swapchain configured for window extent, format, and present mode.
 fn create_swapchain(
     surface_loader: &surface::Instance,
     swapchain_loader: &swapchain::Device,
@@ -359,6 +371,7 @@ fn create_swapchain(
     (swapchain, images, surface_format.format, extent)
 }
 
+/// Creates image views for every swapchain image.
 fn create_image_views(
     device: &Device,
     images: &[vk::Image],
@@ -383,6 +396,7 @@ fn create_image_views(
         .collect()
 }
 
+/// Creates per-frame semaphores and fences for CPU-GPU synchronization.
 fn create_sync_objects(
     device: &Device,
 ) -> (Vec<vk::Semaphore>, Vec<vk::Semaphore>, Vec<vk::Fence>) {

@@ -70,6 +70,7 @@ pub enum InitialCondition {
 }
 
 impl std::fmt::Display for InitialCondition {
+    /// Formats each initial-condition variant into a human-readable label.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InitialCondition::RandomSphere { .. } => write!(f, "Random Sphere"),
@@ -95,12 +96,14 @@ pub enum InitialConditionType {
 }
 
 impl Default for InitialConditionType {
+    /// Selects random-sphere as the default initial-condition type.
     fn default() -> Self {
         InitialConditionType::RandomSphere
     }
 }
 
 impl std::fmt::Display for InitialConditionType {
+    /// Formats each initial-condition type into a human-readable label.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InitialConditionType::RandomSphere => write!(f, "Random Sphere"),
@@ -115,6 +118,7 @@ impl std::fmt::Display for InitialConditionType {
 }
 
 impl InitialConditionType {
+    /// Expands a condition type into concrete default initial-condition parameters.
     pub fn to_initial_condition(&self) -> InitialCondition {
         match self {
             InitialConditionType::RandomSphere => InitialCondition::RandomSphere {
@@ -166,6 +170,7 @@ impl InitialConditionType {
     }
 }
 
+/// Provides a small deterministic solar-system particle set when ephemeris data is unavailable.
 fn get_solar_system_fallback_particles(correct: &Correct) -> Vec<Particle> {
     vec![
         // Sun
@@ -247,6 +252,7 @@ fn get_solar_system_fallback_particles(correct: &Correct) -> Vec<Particle> {
 }
 
 impl InitialCondition {
+    /// Returns the canonical world scale associated with this initial condition.
     pub fn get_scale(&self) -> f64 {
         match self {
             InitialCondition::RandomSphere { scale, .. } => *scale,
@@ -259,6 +265,7 @@ impl InitialCondition {
         }
     }
 
+    /// Generates particles according to the selected initial-condition variant and settings.
     pub fn generate_particles(&self, particle_count: u32) -> SimulationNormal {
         let mut rng = rand::rng();
         let sim = match self {
@@ -628,6 +635,7 @@ impl InitialCondition {
         sim
     }
 
+    /// Creates a particle with random position inside a sphere and zero initial velocity.
     fn random_in_sphere(center: DVec3, radius: f64, mass: f64, rng: &mut impl Rng) -> Particle {
         Particle {
             position: Self::position_in_sphere(center, radius, rng),
@@ -641,6 +649,7 @@ impl InitialCondition {
         }
     }
 
+    /// Samples a uniformly distributed position inside a sphere around the given center.
     fn position_in_sphere(center: DVec3, radius: f64, rng: &mut impl Rng) -> DVec3 {
         let r = radius * rng.random::<f64>().cbrt();
         let cos_theta = rng.random::<f64>() * 2.0 - 1.0;
@@ -653,6 +662,7 @@ impl InitialCondition {
         }
     }
 
+    /// Samples a random unit vector orthogonal to the provided direction vector.
     fn random_perpendicular_unit_vector(x: DVec3, rng: &mut impl Rng) -> DVec3 {
         let n = x.normalize();
         let a = if n.x.abs() > 0.9 { DVec3::Y } else { DVec3::X };
@@ -664,6 +674,7 @@ impl InitialCondition {
 }
 
 impl Default for InitialCondition {
+    /// Creates the default initial-condition instance from the default type preset.
     fn default() -> Self {
         InitialConditionType::RandomSphere.to_initial_condition()
     }
@@ -675,6 +686,7 @@ struct Correct {
 }
 
 impl Correct {
+    /// Builds unit-conversion factors from world scale into simulation units.
     fn new(scale: f64) -> Self {
         let m = 1.0 / scale; // Scale-corrected length
         let kg = m * m * m; // Scale-corrected mass

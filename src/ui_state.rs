@@ -13,6 +13,7 @@ pub enum AppMode {
 }
 
 impl Default for AppMode {
+    /// Selects simulation mode as the default application startup mode.
     fn default() -> Self {
         AppMode::Simulation
     }
@@ -28,6 +29,7 @@ pub enum PanelKind {
 }
 
 impl PanelKind {
+    /// Returns the UI label used to represent each panel kind.
     pub const fn label(self) -> &'static str {
         match self {
             PanelKind::Simulation => "Simulation",
@@ -52,7 +54,7 @@ pub enum DragOwner {
 }
 
 impl DragOwner {
-    /// If `self` is a pending scene drag, returns the promoted owner (`Ui` when the UI blocks the scene).
+    /// Promotes a pending scene drag to a concrete owner based on UI capture state.
     pub(crate) fn promote_from_pending(self, ui_blocks_scene: bool) -> Option<Self> {
         Some(match self {
             Self::PendingSceneLeft => {
@@ -99,6 +101,7 @@ pub enum SimulationType {
 }
 
 impl std::fmt::Display for SimulationType {
+    /// Formats simulation type for combo-box and labels.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
             SimulationType::Normal => "Normal",
@@ -118,7 +121,7 @@ pub enum GraphType {
     QuaternionProjection,
 }
 
-/// GpuTree display layout: single tree or trees on all xz grid crossings
+/// Defines whether GPU trees render as one instance or a full XZ-grid forest.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GpuTreeLayout {
     Single,
@@ -126,6 +129,7 @@ pub enum GpuTreeLayout {
 }
 
 impl std::fmt::Display for GpuTreeLayout {
+    /// Formats GPU tree layout option for UI selection controls.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
             GpuTreeLayout::Single => "Single Tree",
@@ -135,7 +139,7 @@ impl std::fmt::Display for GpuTreeLayout {
     }
 }
 
-/// GpuTree drawing mode: lines (LineList) or polygons (TriangleList with normals/lighting)
+/// Defines GPU tree drawing style as line list or lit polygon mesh.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GpuTreeRenderMode {
     Lines,
@@ -143,6 +147,7 @@ pub enum GpuTreeRenderMode {
 }
 
 impl std::fmt::Display for GpuTreeRenderMode {
+    /// Formats GPU tree render mode for UI selection controls.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
             GpuTreeRenderMode::Lines => "Lines",
@@ -154,6 +159,7 @@ impl std::fmt::Display for GpuTreeRenderMode {
 
 
 impl std::fmt::Display for GraphType {
+    /// Formats graph type names for UI selection controls.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
             GraphType::LightCone => "Light Cone Slice",
@@ -217,6 +223,7 @@ pub struct UiState {
 }
 
 impl Default for UiState {
+    /// Initializes UI state with startup defaults for simulation and panels.
     fn default() -> Self {
         Self {
             input_panel_width: 200.0,
@@ -271,6 +278,7 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Applies persisted app settings and clamps runtime values to new limits.
     pub fn apply_settings(&mut self, settings: &AppSettings) {
         self.max_particle_count = settings.max_particle_count;
         self.min_window_width = settings.window_min_width;
@@ -283,6 +291,7 @@ impl UiState {
         }
     }
 
+    /// Resets all 3D graph parameters back to their default values.
     pub fn reset_graph_params(&mut self) {
         self.graph_type = GraphType::LightCone;
         self.graph_sample_count = 1000;
@@ -291,6 +300,7 @@ impl UiState {
         self.graph_phi = 1.0;
     }
 
+    /// Resets all GPU tree parameters and cached fingerprint to defaults.
     pub fn reset_gpu_tree_params(&mut self) {
         self.gpu_tree_layout = GpuTreeLayout::Single;
         self.gpu_tree_render_mode = GpuTreeRenderMode::Polygons;
@@ -298,7 +308,7 @@ impl UiState {
         self.last_gpu_tree_fingerprint = 0;
     }
 
-    /// Simple fingerprint (hash-like) for detecting changes in GpuTree parameters
+    /// Computes a lightweight fingerprint for detecting GPU tree parameter changes.
     pub fn gpu_tree_fingerprint(&self) -> u64 {
         let mut hash = 0u64;
         hash = hash.wrapping_add(self.gpu_tree_layout as u64);
@@ -327,6 +337,7 @@ impl UiState {
         hash
     }
 
+    /// Applies panel open-state defaults when switching between major app modes.
     pub fn apply_panel_defaults_on_app_mode_change(&mut self, from: AppMode, to: AppMode) {
         if from == to {
             return;
@@ -354,6 +365,7 @@ impl UiState {
         }
     }
 
+    /// Returns the panel set available for the currently selected app mode.
     pub fn get_available_panels(&self) -> &'static [PanelKind] {
         match self.app_mode {
             AppMode::Simulation => PANELS_SIMULATION,
@@ -371,6 +383,7 @@ pub struct RandomSphereParameters {
 }
 
 impl Default for RandomSphereParameters {
+    /// Loads default random-sphere parameter values from initial-condition presets.
     fn default() -> Self {
         if let InitialCondition::RandomSphere {
             scale,
@@ -399,6 +412,7 @@ pub struct RandomCubeParameters {
 }
 
 impl Default for RandomCubeParameters {
+    /// Loads default random-cube parameter values from initial-condition presets.
     fn default() -> Self {
         if let InitialCondition::RandomCube {
             scale,
@@ -429,6 +443,7 @@ pub struct TwoSpheresParameters {
 }
 
 impl Default for TwoSpheresParameters {
+    /// Loads default two-spheres parameter values from initial-condition presets.
     fn default() -> Self {
         if let InitialCondition::TwoSpheres {
             scale,
@@ -460,6 +475,7 @@ pub struct SpiralDiskParameters {
 }
 
 impl Default for SpiralDiskParameters {
+    /// Loads default spiral-disk parameter values from initial-condition presets.
     fn default() -> Self {
         if let InitialCondition::SpiralDisk {
             scale,
@@ -486,6 +502,7 @@ pub struct SolarSystemParameters {
 }
 
 impl Default for SolarSystemParameters {
+    /// Loads default solar-system start-time values from initial-condition presets.
     fn default() -> Self {
         if let InitialCondition::SolarSystem {
             start_year,
@@ -515,6 +532,7 @@ pub struct SatelliteOrbitParameters {
 }
 
 impl Default for SatelliteOrbitParameters {
+    /// Loads default satellite-orbit parameter values from initial-condition presets.
     fn default() -> Self {
         if let InitialCondition::SatelliteOrbit {
             orbit_altitude_min,
@@ -546,6 +564,7 @@ pub struct EllipticalOrbitParameters {
 }
 
 impl Default for EllipticalOrbitParameters {
+    /// Loads default elliptical-orbit parameter values from initial-condition presets.
     fn default() -> Self {
         if let InitialCondition::EllipticalOrbit {
             scale,

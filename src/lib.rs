@@ -54,6 +54,7 @@ pub fn run() -> Result<(), EventLoopError> {
     event_loop.run_app(&mut app)
 }
 
+/// Spawns a background thread that advances simulation state and schedules redraws.
 pub fn spawn_simulation_worker(
     ui_state_clone: Arc<RwLock<UiState>>,
     simulation_manager: Arc<RwLock<SimulationManager>>,
@@ -142,6 +143,7 @@ pub fn spawn_simulation_worker(
     });
 }
 
+/// Builds the window title from crate name and version metadata.
 fn generate_window_title() -> String {
     let package_name = env!("CARGO_PKG_NAME");
     let package_version = env!("CARGO_PKG_VERSION");
@@ -176,6 +178,7 @@ pub struct App {
 }
 
 impl Default for App {
+    /// Creates application state with loaded settings and default runtime resources.
     fn default() -> Self {
         let settings = AppSettings::load();
         let mut ui_state = UiState::default();
@@ -209,6 +212,7 @@ impl Default for App {
 }
 
 impl ApplicationHandler for App {
+    /// Creates window and graphics resources when the app is resumed by the event loop.
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let ui_state = self.ui_state.write().unwrap();
 
@@ -257,6 +261,7 @@ impl ApplicationHandler for App {
         self.skip_redraw.write().unwrap().clone_from(&ui_state.skip);
     }
 
+    /// Handles window, input, rendering, and camera events for each platform event.
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -463,6 +468,7 @@ impl ApplicationHandler for App {
         }
     }
 
+    /// Performs per-frame updates before the event loop waits for new events.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
@@ -562,6 +568,7 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    /// Clears all internal mouse drag button state flags.
     fn clear_mouse_drag_flags(&mut self) {
         self.mouse_left_down = false;
         self.mouse_right_down = false;
@@ -605,6 +612,7 @@ impl App {
         }
     }
 
+    /// Handles left-button press/release and double-click camera-up reset behavior.
     fn left_button(&mut self, state: &ElementState) {
         let pressed = *state == ElementState::Pressed;
         self.mouse_left_down = pressed;
@@ -625,6 +633,7 @@ impl App {
         }
     }
 
+    /// Handles right-button press/release and double-click target-centering behavior.
     fn right_button(&mut self, state: &ElementState) {
         let pressed = *state == ElementState::Pressed;
         self.mouse_right_down = pressed;
@@ -645,6 +654,7 @@ impl App {
         }
     }
 
+    /// Handles middle-button press/release state tracking for camera roll gestures.
     fn middle_button(&mut self, state: &ElementState) {
         let pressed = *state == ElementState::Pressed;
         self.mouse_middle_down = pressed;

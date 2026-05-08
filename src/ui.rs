@@ -8,6 +8,7 @@ use std::sync::{Arc, RwLock};
 
 const MENU_POPUP_WIDTH: f32 = 180.0;
 
+/// Draws the full control UI and applies user edits to shared UI/application state.
 pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx: &egui::Context) {
     let mut uis = ui_state.write().unwrap();
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
@@ -469,6 +470,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
     }
 }
 
+/// Formats simulation time into a compact signed human-readable duration string.
 fn format_simulation_time(simulation_time: f64) -> String {
     let sign = if simulation_time < 0.0 { "-" } else { "" };
     let total_seconds = simulation_time.abs();
@@ -483,6 +485,7 @@ fn format_simulation_time(simulation_time: f64) -> String {
     )
 }
 
+/// Formats current scale and gauge ratio for display in the simulation panel.
 fn format_scale(scale_guage: f64, scale: f64) -> String {
     let scale_inv = DEFAULT_SCALE_UI / scale_guage;
     let pow10 = scale_inv.powi(4) * scale;
@@ -503,6 +506,7 @@ fn format_scale(scale_guage: f64, scale: f64) -> String {
     }
 }
 
+/// Renders the simulation-type combo box and updates dependent UI state.
 fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Simulation Type");
     let id = ui.make_persistent_id("simulation_type_combobox");
@@ -524,6 +528,7 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
         });
 }
 
+/// Renders the initial-condition type combo box and updates selected condition defaults.
 fn combobox_initial_condition_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Initial Condition Type");
     let id = ui.make_persistent_id("initial_condition_type_combobox");
@@ -569,6 +574,7 @@ fn combobox_initial_condition_type(ui: &mut egui::Ui, uis: &mut UiState) {
         });
 }
 
+/// Renders parameter controls for the random-sphere initial condition.
 fn condition_random_sphere(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.random_sphere.scale, 1e9, "Scale (m): ");
     dragvalue_normal(ui, &mut uis.random_sphere.radius, 1e9, "Sphere Radius (m)");
@@ -592,6 +598,7 @@ fn condition_random_sphere(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
+/// Renders parameter controls for the random-cube initial condition.
 fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.random_cube.scale, 1e3, "Scale (m)");
     dragvalue_normal(ui, &mut uis.random_cube.cube_size, 1e3, "Cube Size (m)");
@@ -605,6 +612,7 @@ fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
+/// Renders parameter controls for the two-spheres initial condition.
 fn condition_two_spheres(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.two_spheres.scale, 1e9, "Scale (m)");
     label_normal(ui, "Sphere 1 Center");
@@ -630,12 +638,14 @@ fn condition_two_spheres(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.two_spheres.mass_fixed, 1e20, "Mass Fixed (kg)");
 }
 
+/// Renders parameter controls for the spiral-disk initial condition.
 fn condition_spiral_disk(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.spiral_disk.scale, 1e7, "Scale (m)");
     dragvalue_normal(ui, &mut uis.spiral_disk.disk_radius, 1e7, "Disk Radius (m)");
     dragvalue_normal(ui, &mut uis.spiral_disk.mass_fixed, 1e20, "Mass Fixed (kg)");
 }
 
+/// Renders start-date controls for the solar-system initial condition.
 fn condition_solar_system(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.solar_system.start_year, 1, "Year");
     dragvalue_normal(ui, &mut uis.solar_system.start_month, 1, "Month");
@@ -643,6 +653,7 @@ fn condition_solar_system(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.solar_system.start_hour, 1, "Hour");
 }
 
+/// Renders parameter controls for the satellite-orbit initial condition.
 fn condition_satellite_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(
         ui,
@@ -677,6 +688,7 @@ fn condition_satellite_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
+/// Renders parameter controls for the elliptical-orbit initial condition.
 fn condition_elliptical_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.elliptical_orbit.scale, 1e7, "Scale (m)");
     label_normal(ui, "Central Body");
@@ -707,6 +719,7 @@ fn condition_elliptical_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
+/// Renders particle-count slider with current max-count constraints.
 fn slider_perticle_count(ui: &mut egui::Ui, uis: &mut UiState) {
     ui.style_mut().spacing.slider_width = 150.0;
     label_normal(ui, "Particle Count");
@@ -717,6 +730,7 @@ fn slider_perticle_count(ui: &mut egui::Ui, uis: &mut UiState) {
     ));
 }
 
+/// Draws reset button and flags simulation reset when clicked.
 fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
     if button_normal(ui, "Reset").clicked() {
         uis.is_reset_requested = true;
@@ -724,6 +738,7 @@ fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
     }
 }
 
+/// Renders graph-type combo box for Graph3D mode.
 fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Graph Type");
     let id = ui.make_persistent_id("graph_type_combobox");
@@ -739,6 +754,7 @@ fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {
         });
 }
 
+/// Renders controls specific to the light-cone graph mode.
 fn condition_light_cone(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Minkowski Light Cone Slice");
     dragvalue_normal(ui, &mut uis.graph_t_slice, 0.1, "t slice");
@@ -747,6 +763,7 @@ fn condition_light_cone(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Points update automatically when parameters change.");
 }
 
+/// Renders controls specific to the rapidity-field graph mode.
 fn condition_rapidity_field(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Rapidity Vector Field (from spacetime.rs)");
     dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.1, "Velocity Scale");
@@ -758,6 +775,7 @@ fn condition_rapidity_field(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
+/// Renders controls specific to the boost-exponent graph mode.
 fn condition_boost_exponent(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "BivectorBoost::exp (bivector.rs)");
     dragvalue_normal(ui, &mut uis.graph_phi, 0.1, "Rapidity φ");
@@ -770,6 +788,7 @@ fn condition_boost_exponent(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
+/// Renders controls specific to the bivector-visualization graph mode.
 fn condition_bivector_viz(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Bivector Visualization");
     dragvalue_normal(ui, &mut uis.graph_phi, 0.1, "Magnitude");
@@ -781,6 +800,7 @@ fn condition_bivector_viz(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
+/// Renders informational controls for quaternion-projection graph mode.
 fn condition_quaternion_proj(ui: &mut egui::Ui, _uis: &mut UiState) {
     label_normal(ui, "TetraQuaternion Projection (biquaternion.rs)");
     label_normal(ui, "16D algebra projected to 3D coefficients.");

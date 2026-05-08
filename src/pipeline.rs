@@ -64,6 +64,7 @@ struct AllocatedBuffer {
 }
 
 impl AllocatedBuffer {
+    /// Allocates a GPU buffer with VMA allocation and optional mapped memory.
     fn new(
         device: &ash::Device,
         allocator: &Mutex<Allocator>,
@@ -102,6 +103,7 @@ impl AllocatedBuffer {
         }
     }
 
+    /// Destroys buffer and frees associated VMA allocation.
     fn destroy(mut self, device: &ash::Device, allocator: &Mutex<Allocator>) {
         unsafe { device.destroy_buffer(self.buffer, None) };
         if let Some(alloc) = self.allocation.take() {
@@ -110,6 +112,7 @@ impl AllocatedBuffer {
     }
 }
 
+/// Creates a host-visible buffer, uploads typed data, and returns allocated handle.
 fn create_buffer_with_data<T: bytemuck::Pod>(
     device: &ash::Device,
     allocator: &Mutex<Allocator>,
@@ -138,6 +141,7 @@ fn create_buffer_with_data<T: bytemuck::Pod>(
     (buf, count)
 }
 
+/// Creates a Vulkan shader module from SPIR-V bytecode.
 fn create_shader_module(device: &ash::Device, spv: &[u8]) -> vk::ShaderModule {
     let code = ash::util::read_spv(&mut std::io::Cursor::new(spv)).unwrap();
     let ci = vk::ShaderModuleCreateInfo::default().code(&code);
@@ -180,6 +184,7 @@ pub struct ParticleRenderPipeline {
 }
 
 impl ParticleRenderPipeline {
+    /// Creates graphics and compute pipelines with all persistent rendering resources.
     pub fn new(base: &VulkanBase) -> Self {
         let device = base.device.clone();
         let allocator = Arc::clone(base.allocator.as_ref().unwrap());
@@ -236,14 +241,17 @@ impl ParticleRenderPipeline {
         }
     }
 
+    /// Returns shared allocator used for dynamic GPU buffer management.
     fn allocator(&self) -> &Mutex<Allocator> {
         &self.allocator
     }
 
+    /// Returns render pass handle used by graphics pipelines.
     pub fn render_pass(&self) -> vk::RenderPass {
         self.render_pass
     }
 
+    /// Recreates framebuffers to match current swapchain image views.
     pub fn recreate_framebuffers(&mut self, base: &VulkanBase) {
         for fb in self.framebuffers.drain(..) {
             unsafe { self.device.destroy_framebuffer(fb, None) };
@@ -256,6 +264,7 @@ impl ParticleRenderPipeline {
         );
     }
 
+    /// Records full frame rendering commands for scene geometry and UI.
     pub fn render(
         &mut self,
         command_buffer: vk::CommandBuffer,
@@ -384,6 +393,7 @@ impl ParticleRenderPipeline {
         }
     }
 
+    /// Uploads particle point data and rebuilds the particle vertex buffer.
     pub fn set_particles(&mut self, positions: &[[f32; 3]], colors: &[[f32; 4]]) {
         let mut verts: Vec<ParticleVertex> = positions
             .iter()
@@ -414,6 +424,7 @@ impl ParticleRenderPipeline {
         self.particle_draw_vertex_count = draw_n;
     }
 
+    /// Uploads graph line vertices and rebuilds the line vertex buffer.
     pub fn set_graph_lines(&mut self, vertices: &[([f32; 3], [f32; 4])]) {
         if let Some(old) = self.graph_lines_buffer.take() {
             old.destroy(&self.device, self.allocator());
@@ -440,6 +451,7 @@ impl ParticleRenderPipeline {
         self.graph_lines_vertex_count = count;
     }
 
+    /// Uploads GPU tree mesh vertices and rebuilds the tree vertex buffer.
     pub fn set_tree_vertices(&mut self, vertices: Vec<([f32; 3], [f32; 3], [f32; 4])>) {
         if let Some(old) = self.tree_buffer.take() {
             old.destroy(&self.device, self.allocator());
@@ -467,6 +479,7 @@ impl ParticleRenderPipeline {
         self.tree_draw_vertex_count = count;
     }
 
+    /// Executes compute pass to generate tree vertices and uploads the result buffer.
     pub fn compute_tree_vertices(
         &mut self,
         params: crate::tree::TreeParams,
@@ -651,6 +664,7 @@ impl ParticleRenderPipeline {
 
     // --- Camera methods ---
 
+    /// Rotates camera around target using viewport-relative yaw and pitch deltas.
     pub fn revolve_camera(&mut self, delta_yaw: f64, delta_pitch: f64) {
         self.camera.revolve(
             delta_yaw as f32 * MOUSE_LEFT_DRAG_SENS,
@@ -658,6 +672,7 @@ impl ParticleRenderPipeline {
         );
     }
 
+    /// Rotates camera view direction in place from cursor deltas.
     pub fn look_around(&mut self, dx: f64, dy: f64) {
         self.camera.look_around(
             dx as f32 * MOUSE_RIGHT_DRAG_SENS,
@@ -665,10 +680,12 @@ impl ParticleRenderPipeline {
         );
     }
 
+    /// Applies camera zoom toward or away from target.
     pub fn zoom_camera(&mut self, zoom_factor: f32) {
         self.camera.zoom(zoom_factor);
     }
 
+    /// Rotates camera roll around screen-center-aware gesture input.
     pub fn rotate_camera(
         &mut self,
         x: f64,
@@ -684,24 +701,29 @@ impl ParticleRenderPipeline {
         self.camera.rotate(delta_roll as f32);
     }
 
+    /// Triggers camera up-vector alignment animation.
     pub fn y_top(&mut self) {
         self.camera.y_top();
     }
 
+    /// Triggers camera target-centering animation toward world origin.
     pub fn center_target_on_origin(&mut self) {
         self.camera.center_target_on_origin();
     }
 
+    /// Advances camera animation state.
     pub fn update_animation(&mut self) {
         self.camera.update_animation();
     }
 
+    /// Enables or disables camera up-lock behavior.
     pub fn set_lock_camera_up(&mut self, lock: bool) {
         self.camera.set_lock_up(lock);
     }
 
     // --- Draw helpers ---
 
+    /// Records draw commands for axis and grid line geometry.
     fn draw_axes(&self, cb: vk::CommandBuffer, pc: &AxesPushConstants) {
         unsafe {
             self.device
@@ -719,6 +741,7 @@ impl ParticleRenderPipeline {
         }
     }
 
+    /// Records draw commands for optional graph line overlay geometry.
     fn draw_graph_lines(&self, cb: vk::CommandBuffer, pc: &AxesPushConstants, buffer: vk::Buffer) {
         unsafe {
             self.device
@@ -737,6 +760,7 @@ impl ParticleRenderPipeline {
         }
     }
 
+    /// Records draw commands for optional GPU tree mesh geometry.
     fn draw_tree(&self, cb: vk::CommandBuffer, pc: &AxesPushConstants, buffer: vk::Buffer) {
         unsafe {
             self.device
@@ -755,6 +779,7 @@ impl ParticleRenderPipeline {
         }
     }
 
+    /// Records draw commands for particle point geometry.
     fn draw_particles(&self, cb: vk::CommandBuffer, pc: &PushConstants) {
         if self.particle_draw_vertex_count == 0 {
             return;
@@ -779,12 +804,14 @@ impl ParticleRenderPipeline {
         }
     }
 
+    /// Computes model-view-projection transform for axes and helper geometry.
     fn compute_mvp_axes(&self, aspect_ratio: f32) -> Mat4 {
         let view = Mat4::look_at_rh(self.camera.position, self.camera.target, self.camera.up);
         let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect_ratio, 0.1, 100.0);
         proj * view
     }
 
+    /// Computes model-view-projection transform for particle-space rendering.
     fn compute_mvp_particle(&self, aspect_ratio: f32, scale_factor: f32) -> Mat4 {
         let view = Mat4::look_at_rh(self.camera.position, self.camera.target, self.camera.up);
         let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect_ratio, 0.1, 100.0);
@@ -794,6 +821,7 @@ impl ParticleRenderPipeline {
 }
 
 impl Drop for ParticleRenderPipeline {
+    /// Releases all pipeline-owned Vulkan resources and transient buffers.
     fn drop(&mut self) {
         unsafe {
             if let Err(err) = self.device.device_wait_idle() {
@@ -845,6 +873,7 @@ impl Drop for ParticleRenderPipeline {
 
 // --- Pipeline creation helpers ---
 
+/// Creates a render pass compatible with swapchain color attachments.
 fn create_render_pass(device: &ash::Device, format: vk::Format) -> vk::RenderPass {
     let attachment = vk::AttachmentDescription::default()
         .format(format)
@@ -886,6 +915,7 @@ fn create_render_pass(device: &ash::Device, format: vk::Format) -> vk::RenderPas
     unsafe { device.create_render_pass(&ci, None) }.unwrap()
 }
 
+/// Creates one framebuffer per swapchain image view.
 fn create_framebuffers(
     device: &ash::Device,
     render_pass: vk::RenderPass,
@@ -907,6 +937,7 @@ fn create_framebuffers(
         .collect()
 }
 
+/// Creates graphics pipeline layout with push constants and descriptor sets.
 fn create_pipeline_layout(
     device: &ash::Device,
     push_constant_size: u32,
@@ -922,6 +953,7 @@ fn create_pipeline_layout(
     unsafe { device.create_pipeline_layout(&ci, None) }.unwrap()
 }
 
+/// Builds a graphics pipeline from shaders and fixed-function states.
 fn create_graphics_pipeline(
     device: &ash::Device,
     render_pass: vk::RenderPass,
@@ -1007,12 +1039,14 @@ fn create_graphics_pipeline(
     pipeline
 }
 
+/// Returns standard alpha-blend state for opaque/alpha primitives.
 fn default_blend() -> vk::PipelineColorBlendAttachmentState {
     vk::PipelineColorBlendAttachmentState::default()
         .color_write_mask(vk::ColorComponentFlags::RGBA)
         .blend_enable(false)
 }
 
+/// Returns additive blend state for luminous point rendering.
 fn additive_blend() -> vk::PipelineColorBlendAttachmentState {
     vk::PipelineColorBlendAttachmentState::default()
         .color_write_mask(vk::ColorComponentFlags::RGBA)
@@ -1025,6 +1059,7 @@ fn additive_blend() -> vk::PipelineColorBlendAttachmentState {
         .alpha_blend_op(vk::BlendOp::ADD)
 }
 
+/// Defines vertex input bindings and attributes for axis vertices.
 fn axes_vertex_desc() -> (
     Vec<vk::VertexInputBindingDescription>,
     Vec<vk::VertexInputAttributeDescription>,
@@ -1051,6 +1086,7 @@ fn axes_vertex_desc() -> (
     (binding, attrs)
 }
 
+/// Defines vertex input bindings and attributes for particle vertices.
 fn particle_vertex_desc() -> (
     Vec<vk::VertexInputBindingDescription>,
     Vec<vk::VertexInputAttributeDescription>,
@@ -1077,6 +1113,7 @@ fn particle_vertex_desc() -> (
     (binding, attrs)
 }
 
+/// Defines vertex input bindings and attributes for tree mesh vertices.
 fn tree_vertex_desc() -> (
     Vec<vk::VertexInputBindingDescription>,
     Vec<vk::VertexInputAttributeDescription>,
@@ -1109,6 +1146,7 @@ fn tree_vertex_desc() -> (
     (binding, attrs)
 }
 
+/// Creates graphics pipeline specialized for axis rendering.
 fn create_axes_pipeline(
     device: &ash::Device,
     render_pass: vk::RenderPass,
@@ -1134,6 +1172,7 @@ fn create_axes_pipeline(
     (layout, pipeline)
 }
 
+/// Creates graphics pipeline specialized for particle rendering.
 fn create_particles_pipeline(
     device: &ash::Device,
     render_pass: vk::RenderPass,
@@ -1165,6 +1204,7 @@ fn create_particles_pipeline(
     (layout, pipeline)
 }
 
+/// Creates graphics pipeline specialized for tree mesh rendering.
 fn create_tree_pipeline(
     device: &ash::Device,
     render_pass: vk::RenderPass,
@@ -1193,6 +1233,7 @@ fn create_tree_pipeline(
     (layout, pipeline)
 }
 
+/// Creates compute pipeline used to procedurally generate tree vertices.
 fn create_compute_pipeline(
     device: &ash::Device,
 ) -> (vk::DescriptorSetLayout, vk::PipelineLayout, vk::Pipeline) {
@@ -1251,6 +1292,7 @@ fn create_compute_pipeline(
     (ds_layout, pipeline_layout, pipeline)
 }
 
+/// Creates descriptor pool for compute shader storage and parameter bindings.
 fn create_compute_descriptor_pool(device: &ash::Device) -> vk::DescriptorPool {
     let pool_sizes = [
         vk::DescriptorPoolSize {
@@ -1269,6 +1311,7 @@ fn create_compute_descriptor_pool(device: &ash::Device) -> vk::DescriptorPool {
     unsafe { device.create_descriptor_pool(&ci, None) }.unwrap()
 }
 
+/// Allocates and updates compute descriptor set with tree buffers and params.
 fn allocate_compute_descriptor_set(
     device: &ash::Device,
     pool: vk::DescriptorPool,
@@ -1346,6 +1389,7 @@ fn allocate_compute_descriptor_set(
 
 // --- Initial vertex data ---
 
+/// Creates vertex buffer containing static axis and grid helper geometry.
 fn create_axes_vertices(
     device: &ash::Device,
     allocator: &Mutex<Allocator>,
@@ -1390,6 +1434,7 @@ fn create_axes_vertices(
     )
 }
 
+/// Creates an initial particle buffer used before simulation data arrives.
 fn create_initial_particles(
     device: &ash::Device,
     allocator: &Mutex<Allocator>,

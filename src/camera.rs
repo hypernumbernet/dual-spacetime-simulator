@@ -16,6 +16,7 @@ pub struct OrbitCamera {
 }
 
 impl OrbitCamera {
+    /// Creates an orbit camera with an up vector consistent with the current view direction.
     pub fn new(position: Vec3, target: Vec3) -> Self {
         let up = get_closest_perp_unit_to_y(position, target);
         Self {
@@ -29,6 +30,7 @@ impl OrbitCamera {
         }
     }
 
+    /// Orbits the camera around the target using yaw and pitch deltas.
     pub fn revolve(&mut self, delta_yaw: f32, delta_pitch: f32) {
         let mut relative = self.target - self.position;
         if relative.length_squared() <= EPSILON {
@@ -50,6 +52,7 @@ impl OrbitCamera {
         }
     }
 
+    /// Rotates the viewing direction in place while keeping the camera position fixed.
     pub fn look_around(&mut self, dx: f32, dy: f32) {
         let mut relative = self.target - self.position;
         if relative.length_squared() <= EPSILON {
@@ -72,6 +75,7 @@ impl OrbitCamera {
         }
     }
 
+    /// Moves the camera toward or away from the target while preserving view direction.
     pub fn zoom(&mut self, zoom_factor: f32) {
         let direction = (self.target - self.position).normalize_or_zero();
         if direction == Vec3::ZERO {
@@ -82,6 +86,7 @@ impl OrbitCamera {
         self.position = self.target - direction * new_distance;
     }
 
+    /// Rolls the camera around the forward axis when up-lock is disabled.
     pub fn rotate(&mut self, delta_roll: f32) {
         if self.lock_up {
             return;
@@ -94,16 +99,19 @@ impl OrbitCamera {
         self.up = rotation.mul_vec3(self.up);
     }
 
+    /// Starts a short animation that aligns the camera up vector toward world-up.
     pub fn y_top(&mut self) {
         self.animating_y_top = 100;
         self.start_time = Some(Instant::now());
     }
 
+    /// Starts a short animation that shifts the camera target toward the world origin.
     pub fn center_target_on_origin(&mut self) {
         self.animating_to_origin = 100;
         self.start_time = Some(Instant::now());
     }
 
+    /// Advances camera alignment and recentering animations based on elapsed time.
     pub fn update_animation(&mut self) {
         if let Some(start) = self.start_time {
             let dt = start.elapsed().as_secs_f32();
@@ -134,6 +142,7 @@ impl OrbitCamera {
         }
     }
 
+    /// Enables or disables up-lock and reprojects the up vector when locking.
     pub fn set_lock_up(&mut self, lock: bool) {
         self.lock_up = lock;
         if self.lock_up {
@@ -142,6 +151,7 @@ impl OrbitCamera {
     }
 }
 
+/// Clamps view pitch to avoid near-vertical singularities during camera motion.
 fn clamp_pitch(relative: Vec3) -> Vec3 {
     if relative.length_squared() <= EPSILON {
         return relative;
@@ -175,6 +185,7 @@ fn clamp_pitch(relative: Vec3) -> Vec3 {
     dir * len
 }
 
+/// Returns a unit up vector perpendicular to view direction and closest to world-up.
 fn get_closest_perp_unit_to_y(position: Vec3, target: Vec3) -> Vec3 {
     let dir = (target - position).normalize_or_zero();
     if dir == Vec3::ZERO {
@@ -195,6 +206,7 @@ fn get_closest_perp_unit_to_y(position: Vec3, target: Vec3) -> Vec3 {
     }
 }
 
+/// Computes a rotated up vector and centered target direction for origin-centering animation.
 fn get_up_center_origin(position: Vec3, target: Vec3, up: Vec3) -> Option<(Vec3, Vec3)> {
     let relative = target - position;
     if relative.length_squared() <= EPSILON {
