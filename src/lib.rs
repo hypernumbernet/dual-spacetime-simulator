@@ -498,6 +498,19 @@ impl ApplicationHandler for App {
                 pipeline.set_graph_lines(&[]);
             }
         }
+        if prev != app_mode && app_mode == AppMode::Simulation {
+            // Force a fresh simulation redraw when returning from non-simulation views.
+            if let Some(pipeline) = self.render_pipeline.as_mut() {
+                pipeline.set_graph_lines(&[]);
+            }
+            self.last_graph3d_fingerprint = u64::MAX;
+            self.last_gpu_tree_fingerprint = 0;
+            *self.need_redraw.write().unwrap() = true;
+        }
+        if prev == AppMode::GpuTree && app_mode == AppMode::Graph3D {
+            // Rebuild Graph3D data even when parameters are unchanged after leaving GpuTree.
+            self.last_graph3d_fingerprint = u64::MAX;
+        }
         if app_mode == AppMode::GpuTree {
             let uis = self.ui_state.read().unwrap();
             let fp = uis.gpu_tree_fingerprint();
