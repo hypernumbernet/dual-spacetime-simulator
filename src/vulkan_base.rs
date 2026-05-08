@@ -30,11 +30,12 @@ pub struct VulkanBase {
     pub in_flight_fences: Vec<vk::Fence>,
     pub current_frame: usize,
     pub allocator: Option<Arc<Mutex<Allocator>>>,
+    pub mailbox_present_mode: bool,
 }
 
 impl VulkanBase {
     /// Creates Vulkan instance/device/swapchain resources for the provided window surface.
-    pub fn new(window: &Window) -> Self {
+    pub fn new(window: &Window, mailbox_present_mode: bool) -> Self {
         let entry = unsafe { Entry::load() }.expect("Failed to load Vulkan");
 
         let display_handle = window.display_handle().unwrap().as_raw();
@@ -89,6 +90,7 @@ impl VulkanBase {
             surface,
             window,
             vk::SwapchainKHR::null(),
+            mailbox_present_mode,
         );
         let image_views = create_image_views(&device, &images, format);
 
@@ -137,6 +139,7 @@ impl VulkanBase {
             in_flight_fences: in_flight,
             current_frame: 0,
             allocator: Some(Arc::new(Mutex::new(allocator))),
+            mailbox_present_mode,
         }
     }
 
@@ -153,6 +156,7 @@ impl VulkanBase {
             self.surface,
             window,
             self.swapchain,
+            self.mailbox_present_mode,
         );
         let old = self.swapchain;
         self.swapchain = sc;
@@ -302,6 +306,7 @@ fn create_swapchain(
     surface: vk::SurfaceKHR,
     window: &Window,
     old_swapchain: vk::SwapchainKHR,
+    mailbox_present_mode: bool,
 ) -> (vk::SwapchainKHR, Vec<vk::Image>, vk::Format, vk::Extent2D) {
     let caps = unsafe {
         surface_loader.get_physical_device_surface_capabilities(physical_device, surface)
@@ -324,7 +329,9 @@ fn create_swapchain(
         })
         .unwrap_or(&formats[0]);
 
-    let present_mode = if present_modes.contains(&vk::PresentModeKHR::MAILBOX) {
+    let present_mode = if mailbox_present_mode
+        && present_modes.contains(&vk::PresentModeKHR::MAILBOX)
+    {
         vk::PresentModeKHR::MAILBOX
     } else {
         vk::PresentModeKHR::FIFO

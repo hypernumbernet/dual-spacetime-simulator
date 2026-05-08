@@ -9,6 +9,7 @@ fn app_settings_json_roundtrip() {
         start_maximized: true,
         link_point_size_to_scale: false,
         lock_camera_up: false,
+        mailbox_present_mode: true,
     };
     let json = serde_json::to_string_pretty(&s).unwrap();
     let back: AppSettings = serde_json::from_str(&json).unwrap();

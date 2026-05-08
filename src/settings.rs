@@ -12,6 +12,7 @@ pub struct AppSettings {
     pub start_maximized: bool,
     pub link_point_size_to_scale: bool,
     pub lock_camera_up: bool,
+    pub mailbox_present_mode: bool,
 }
 
 impl Default for AppSettings {
@@ -24,6 +25,7 @@ impl Default for AppSettings {
             start_maximized: false,
             link_point_size_to_scale: true,
             lock_camera_up: true,
+            mailbox_present_mode: false,
         }
     }
 }

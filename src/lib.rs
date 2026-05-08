@@ -228,7 +228,7 @@ impl ApplicationHandler for App {
             window.set_maximized(true);
         }
 
-        let vulkan_base = VulkanBase::new(&window);
+        let vulkan_base = VulkanBase::new(&window, self.settings.mailbox_present_mode);
         let render_pipeline = ParticleRenderPipeline::new(&vulkan_base);
 
         let gui = Gui::new(
@@ -313,6 +313,15 @@ impl ApplicationHandler for App {
                     let ctx = gui.context();
                     draw_ui(&self.ui_state, &mut self.settings, &ctx);
                 });
+                let desired_mailbox_present_mode = {
+                    let ui_state = self.ui_state.read().unwrap();
+                    ui_state.mailbox_present_mode
+                };
+                if vb.mailbox_present_mode != desired_mailbox_present_mode {
+                    vb.mailbox_present_mode = desired_mailbox_present_mode;
+                    vb.recreate_swapchain(window);
+                    pipeline.recreate_framebuffers(vb);
+                }
                 gui.prepare_frame(window);
 
                 vb.wait_for_fence();

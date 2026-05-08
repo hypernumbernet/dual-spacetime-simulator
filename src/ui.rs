@@ -247,6 +247,15 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                         uis.lock_camera_up = v;
                     }
                 });
+                ui.horizontal(|ui| {
+                    let mut v = uis.mailbox_present_mode;
+                    if ui
+                        .add(Checkbox::new(&mut v, "Mailbox Present Mode"))
+                        .changed()
+                    {
+                        uis.mailbox_present_mode = v;
+                    }
+                });
                 ui.separator();
                 if button_normal(ui, "Save Settings").clicked() {
                     settings.window_min_width = uis.min_window_width;
@@ -255,6 +264,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     settings.start_maximized = uis.start_maximized;
                     settings.link_point_size_to_scale = uis.link_point_size_to_scale;
                     settings.lock_camera_up = uis.lock_camera_up;
+                    settings.mailbox_present_mode = uis.mailbox_present_mode;
                     if let Err(e) = settings.save() {
                         eprintln!("Failed to save settings: {}", e);
                     }

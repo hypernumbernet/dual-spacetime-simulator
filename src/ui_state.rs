@@ -209,6 +209,7 @@ pub struct UiState {
     pub start_maximized: bool,
     pub link_point_size_to_scale: bool,
     pub lock_camera_up: bool,
+    pub mailbox_present_mode: bool,
     pub show_grid: bool,
     pub request_exit: bool,
     pub graph_type: GraphType,
@@ -262,6 +263,7 @@ impl Default for UiState {
             start_maximized: false,
             link_point_size_to_scale: true,
             lock_camera_up: true,
+            mailbox_present_mode: false,
             show_grid: true,
             request_exit: false,
             graph_type: GraphType::LightCone,
@@ -286,6 +288,7 @@ impl UiState {
         self.start_maximized = settings.start_maximized;
         self.link_point_size_to_scale = settings.link_point_size_to_scale;
         self.lock_camera_up = settings.lock_camera_up;
+        self.mailbox_present_mode = settings.mailbox_present_mode;
         if self.particle_count > self.max_particle_count {
             self.particle_count = self.max_particle_count;
         }
