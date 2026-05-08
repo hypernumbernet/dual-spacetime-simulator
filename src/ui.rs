@@ -415,7 +415,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
 
                 ui.separator();
                 label_normal(ui, "Sample Count");
-                ui.add(Slider::new(&mut uis.graph_sample_count, 100..=5000));
+                ui.add(Slider::new(&mut uis.graph_sample_count, 1..=5000).drag_value_speed(1.0));
             });
     }
 
