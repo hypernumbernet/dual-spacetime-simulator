@@ -40,6 +40,8 @@ use winit::{
 
 const DOUBLE_CLICK_MILLIS: u64 = 400;
 const DOUBLE_CLICK_DIST: f64 = 25.0;
+const DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
+const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
 
 /// Run the desktop application (window + Vulkan + UI loop).
 pub fn run() -> Result<(), EventLoopError> {
@@ -218,6 +220,10 @@ impl ApplicationHandler for App {
 
         let window_attrs = Window::default_attributes()
             .with_title(generate_window_title())
+            .with_inner_size(winit::dpi::LogicalSize::new(
+                DEFAULT_WINDOW_WIDTH,
+                DEFAULT_WINDOW_HEIGHT,
+            ))
             .with_min_inner_size(winit::dpi::LogicalSize::new(
                 ui_state.min_window_width,
                 ui_state.min_window_height,
