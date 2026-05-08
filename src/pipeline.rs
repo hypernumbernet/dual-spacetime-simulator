@@ -175,6 +175,7 @@ pub struct ParticleRenderPipeline {
     particle_draw_vertex_count: u32,
     tree_buffer: Option<AllocatedBuffer>,
     tree_draw_vertex_count: u32,
+    retired_buffers: Vec<AllocatedBuffer>,
 
     camera: OrbitCamera,
     queue: vk::Queue,
@@ -234,6 +235,7 @@ impl ParticleRenderPipeline {
             particle_draw_vertex_count: particle_vertex_count,
             tree_buffer: None,
             tree_draw_vertex_count: 0,
+            retired_buffers: Vec::new(),
             camera,
             queue: base.graphics_queue,
             queue_family: base.graphics_queue_family,
@@ -277,6 +279,7 @@ impl ParticleRenderPipeline {
         app_mode: AppMode,
         gpu_tree_render_mode: GpuTreeRenderMode,
     ) {
+        self.flush_retired_buffers();
         let clear_values = [vk::ClearValue {
             color: vk::ClearColorValue {
                 float32: [0.0, 0.0, 0.0, 1.0],
@@ -420,14 +423,14 @@ impl ParticleRenderPipeline {
             "particle_vertices",
         );
         let old = std::mem::replace(&mut self.particle_buffer, new_buf);
-        old.destroy(&self.device, &alloc);
+        self.retire_buffer(old);
         self.particle_draw_vertex_count = draw_n;
     }
 
     /// Uploads graph line vertices and rebuilds the line vertex buffer.
     pub fn set_graph_lines(&mut self, vertices: &[([f32; 3], [f32; 4])]) {
         if let Some(old) = self.graph_lines_buffer.take() {
-            old.destroy(&self.device, self.allocator());
+            self.retire_buffer(old);
         }
         if vertices.is_empty() {
             self.graph_lines_vertex_count = 0;
@@ -454,7 +457,7 @@ impl ParticleRenderPipeline {
     /// Uploads GPU tree mesh vertices and rebuilds the tree vertex buffer.
     pub fn set_tree_vertices(&mut self, vertices: Vec<([f32; 3], [f32; 3], [f32; 4])>) {
         if let Some(old) = self.tree_buffer.take() {
-            old.destroy(&self.device, self.allocator());
+            self.retire_buffer(old);
         }
         if vertices.is_empty() {
             self.tree_draw_vertex_count = 0;
@@ -818,6 +821,22 @@ impl ParticleRenderPipeline {
         let model = Mat4::from_scale(Vec3::splat(scale_factor));
         proj * view * model
     }
+
+    /// Defers buffer destruction until a synchronized frame boundary.
+    fn retire_buffer(&mut self, buffer: AllocatedBuffer) {
+        self.retired_buffers.push(buffer);
+    }
+
+    /// Releases deferred buffers after `wait_for_fence` has completed for the frame.
+    fn flush_retired_buffers(&mut self) {
+        if self.retired_buffers.is_empty() {
+            return;
+        }
+        let allocator = Arc::clone(&self.allocator);
+        for retired in self.retired_buffers.drain(..) {
+            retired.destroy(&self.device, &allocator);
+        }
+    }
 }
 
 impl Drop for ParticleRenderPipeline {
@@ -834,6 +853,7 @@ impl Drop for ParticleRenderPipeline {
             if let Some(buf) = self.tree_buffer.take() {
                 buf.destroy(&self.device, self.allocator());
             }
+            self.flush_retired_buffers();
 
             if let Some(alloc) = self.particle_buffer.allocation.take() {
                 self.allocator().lock().unwrap().free(alloc).unwrap();

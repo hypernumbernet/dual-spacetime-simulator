@@ -27,6 +27,7 @@ use crate::ui::draw_ui;
 use crate::ui_state::{AppMode, DragOwner, GpuTreeRenderMode, UiState};
 use crate::vulkan_base::VulkanBase;
 use ash::vk;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use winit::{
@@ -42,6 +43,13 @@ const DOUBLE_CLICK_MILLIS: u64 = 400;
 const DOUBLE_CLICK_DIST: f64 = 25.0;
 const DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
+
+struct Graph3dBuildResult {
+    fp: u64,
+    positions: Vec<[f32; 3]>,
+    colors: Vec<[f32; 4]>,
+    line_vertices: Vec<([f32; 3], [f32; 4])>,
+}
 
 /// Run the desktop application (window + Vulkan + UI loop).
 pub fn run() -> Result<(), EventLoopError> {
@@ -174,6 +182,7 @@ pub struct App {
     last_right_click_pos: Option<(f64, f64)>,
     settings: AppSettings,
     last_graph3d_fingerprint: u64,
+    graph3d_pending_rx: Option<Receiver<Graph3dBuildResult>>,
     last_gpu_tree_fingerprint: u64,
     prev_app_mode: AppMode,
     drag_owner: DragOwner,
@@ -206,6 +215,7 @@ impl Default for App {
             last_right_click_pos: None,
             settings,
             last_graph3d_fingerprint: u64::MAX,
+            graph3d_pending_rx: None,
             last_gpu_tree_fingerprint: 0,
             prev_app_mode: AppMode::default(),
             drag_owner: DragOwner::None,
@@ -494,6 +504,7 @@ impl ApplicationHandler for App {
         let app_mode = self.ui_state.read().unwrap().app_mode;
         let prev = self.prev_app_mode;
         if prev == AppMode::Graph3D && app_mode != AppMode::Graph3D {
+            self.graph3d_pending_rx = None;
             if let Some(pipeline) = self.render_pipeline.as_mut() {
                 pipeline.set_graph_lines(&[]);
             }
@@ -558,17 +569,43 @@ impl ApplicationHandler for App {
                 uis.graph_phi,
             );
             drop(uis);
-            if fp != self.last_graph3d_fingerprint {
-                let (pos, col) = crate::graph3d::build_points(gt, n, t, vs, phi);
-                let line_verts = crate::graph3d::build_graph_line_vertices(gt, n, t, vs, phi);
-                if let Some(pipeline) = self.render_pipeline.as_mut() {
-                    pipeline.set_particles(&pos, &col);
-                    pipeline.set_graph_lines(&line_verts);
+
+            if let Some(rx) = self.graph3d_pending_rx.as_ref() {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        self.graph3d_pending_rx = None;
+                        if result.fp == fp {
+                            if let Some(pipeline) = self.render_pipeline.as_mut() {
+                                pipeline.set_particles(&result.positions, &result.colors);
+                                pipeline.set_graph_lines(&result.line_vertices);
+                            }
+                            self.last_graph3d_fingerprint = result.fp;
+                        }
+                    }
+                    Err(TryRecvError::Empty) => {}
+                    Err(TryRecvError::Disconnected) => {
+                        self.graph3d_pending_rx = None;
+                    }
                 }
-                self.last_graph3d_fingerprint = fp;
+            }
+
+            if fp != self.last_graph3d_fingerprint && self.graph3d_pending_rx.is_none() {
+                let (tx, rx) = mpsc::channel::<Graph3dBuildResult>();
+                std::thread::spawn(move || {
+                    let (positions, colors) = crate::graph3d::build_points(gt, n, t, vs, phi);
+                    let line_vertices = crate::graph3d::build_graph_line_vertices(gt, n, t, vs, phi);
+                    let _ = tx.send(Graph3dBuildResult {
+                        fp,
+                        positions,
+                        colors,
+                        line_vertices,
+                    });
+                });
+                self.graph3d_pending_rx = Some(rx);
             }
             return;
         }
+        self.graph3d_pending_rx = None;
         self.last_graph3d_fingerprint = u64::MAX;
         self.last_gpu_tree_fingerprint = 0;
         if *self.need_redraw.read().unwrap() == false {
