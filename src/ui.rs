@@ -7,11 +7,14 @@ use egui::{Checkbox, ComboBox, Slider};
 use std::sync::{Arc, RwLock};
 
 const MENU_POPUP_WIDTH: f32 = 180.0;
+const PANEL_DEFAULT_X: f32 = 16.0;
+const PANEL_MENU_OFFSET_Y: f32 = 16.0;
 
 /// Draws the full control UI and applies user edits to shared UI/application state.
 pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx: &egui::Context) {
     let mut uis = ui_state.write().unwrap();
-    egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+    let menu_bar_height = egui::TopBottomPanel::top("menu_bar")
+        .show(ctx, |ui| {
         egui::menu::bar(ui, |ui| {
             ui.menu_button("File", |ui| {
                 ui.set_min_width(MENU_POPUP_WIDTH);
@@ -139,7 +142,10 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 ui.label(format!("FPS {}", uis.fps));
             });
         });
-    });
+        })
+        .response
+        .rect
+        .height();
 
     let from_mode = uis.last_app_mode_for_panel_sync;
     let to_mode = uis.app_mode;
@@ -152,6 +158,10 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
         egui::Window::new("Simulation")
             .resizable(false)
             .collapsible(true)
+            .default_pos(egui::pos2(
+                PANEL_DEFAULT_X,
+                menu_bar_height + PANEL_MENU_OFFSET_Y,
+            ))
             .default_width(uis.input_panel_width)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -366,6 +376,10 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
         egui::Window::new("3D Graph")
             .resizable(false)
             .collapsible(true)
+            .default_pos(egui::pos2(
+                PANEL_DEFAULT_X,
+                menu_bar_height + PANEL_MENU_OFFSET_Y,
+            ))
             .default_width(uis.input_panel_width)
             .show(ctx, |ui| {
                 combobox_graph_type(ui, &mut uis);
@@ -399,6 +413,10 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
         egui::Window::new("GPU Tree")
             .resizable(false)
             .collapsible(true)
+            .default_pos(egui::pos2(
+                PANEL_DEFAULT_X,
+                menu_bar_height + PANEL_MENU_OFFSET_Y,
+            ))
             .default_width(uis.input_panel_width)
             .show(ctx, |ui| {
                 label_normal(ui, "Real-Time GPU Tree Generation");
