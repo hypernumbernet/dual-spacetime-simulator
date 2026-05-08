@@ -15,133 +15,133 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
     let mut uis = ui_state.write().unwrap();
     let menu_bar_height = egui::TopBottomPanel::top("menu_bar")
         .show(ctx, |ui| {
-        egui::menu::bar(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                ui.set_min_width(MENU_POPUP_WIDTH);
-                if ui.button("Exit").clicked() {
-                    uis.request_exit = true;
-                    ui.close_menu();
-                }
-            });
-
-            ui.menu_button("Mode", |ui| {
-                ui.set_min_width(MENU_POPUP_WIDTH);
-                if ui
-                    .selectable_label(
-                        uis.app_mode == crate::ui_state::AppMode::Simulation,
-                        "Simulation Mode",
-                    )
-                    .clicked()
-                {
-                    uis.app_mode = crate::ui_state::AppMode::Simulation;
-                    ui.close_menu();
-                }
-                if ui
-                    .selectable_label(
-                        uis.app_mode == crate::ui_state::AppMode::Graph3D,
-                        "3D Graph Mode",
-                    )
-                    .clicked()
-                {
-                    uis.app_mode = crate::ui_state::AppMode::Graph3D;
-                    uis.is_running = false;
-                    ui.close_menu();
-                }
-                if ui
-                    .selectable_label(
-                        uis.app_mode == crate::ui_state::AppMode::GpuTree,
-                        "GPU Tree",
-                    )
-                    .clicked()
-                {
-                    uis.app_mode = crate::ui_state::AppMode::GpuTree;
-                    uis.is_running = false;
-                    ui.close_menu();
-                }
-            });
-
-            ui.menu_button("Panel", |ui| {
-                ui.set_min_width(MENU_POPUP_WIDTH);
-                let available = uis.get_available_panels();
-                if available.contains(&PanelKind::Simulation) {
-                    if ui
-                        .checkbox(
-                            &mut uis.is_simulation_panel_open,
-                            PanelKind::Simulation.label(),
-                        )
-                        .clicked()
-                    {
-                        ui.close_menu();
-                    }
-                }
-                if available.contains(&PanelKind::InitialCondition) {
-                    if ui
-                        .checkbox(
-                            &mut uis.is_initial_condition_panel_open,
-                            PanelKind::InitialCondition.label(),
-                        )
-                        .clicked()
-                    {
-                        ui.close_menu();
-                    }
-                }
-                if available.contains(&PanelKind::Graph3D) {
-                    if ui
-                        .checkbox(&mut uis.is_graph3d_panel_open, PanelKind::Graph3D.label())
-                        .clicked()
-                    {
-                        ui.close_menu();
-                    }
-                }
-                if available.contains(&PanelKind::GpuTree) {
-                    if ui
-                        .checkbox(&mut uis.is_gpu_tree_panel_open, PanelKind::GpuTree.label())
-                        .clicked()
-                    {
-                        ui.close_menu();
-                    }
-                }
-                if available.contains(&PanelKind::Settings) {
-                    if ui
-                        .checkbox(&mut uis.is_settings_panel_open, PanelKind::Settings.label())
-                        .clicked()
-                    {
-                        ui.close_menu();
-                    }
-                }
-            });
-
-            ui.menu_button("View", |ui| {
-                ui.set_min_width(MENU_POPUP_WIDTH);
-                if ui.checkbox(&mut uis.show_grid, "Show Grid").clicked() {
-                    ui.close_menu();
-                }
-            });
-
-            if uis.app_mode == AppMode::Simulation {
-                ui.menu_button("Simulation", |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
                     ui.set_min_width(MENU_POPUP_WIDTH);
-                    if ui
-                        .button(if uis.is_running { "Pause" } else { "Start" })
-                        .clicked()
-                    {
-                        uis.is_running = !uis.is_running;
-                        ui.close_menu();
-                    }
-                    if ui.button("Reset").clicked() {
-                        uis.is_reset_requested = true;
-                        uis.is_resetting = true;
+                    if ui.button("Exit").clicked() {
+                        uis.request_exit = true;
                         ui.close_menu();
                     }
                 });
-            }
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(format!("Frame {}", uis.frame));
-                ui.separator();
-                ui.label(format!("FPS {}", uis.fps));
+                ui.menu_button("Mode", |ui| {
+                    ui.set_min_width(MENU_POPUP_WIDTH);
+                    if ui
+                        .selectable_label(
+                            uis.app_mode == crate::ui_state::AppMode::Simulation,
+                            "Simulation Mode",
+                        )
+                        .clicked()
+                    {
+                        uis.app_mode = crate::ui_state::AppMode::Simulation;
+                        ui.close_menu();
+                    }
+                    if ui
+                        .selectable_label(
+                            uis.app_mode == crate::ui_state::AppMode::Graph3D,
+                            "3D Graph Mode",
+                        )
+                        .clicked()
+                    {
+                        uis.app_mode = crate::ui_state::AppMode::Graph3D;
+                        uis.is_running = false;
+                        ui.close_menu();
+                    }
+                    if ui
+                        .selectable_label(
+                            uis.app_mode == crate::ui_state::AppMode::GpuTree,
+                            "GPU Tree",
+                        )
+                        .clicked()
+                    {
+                        uis.app_mode = crate::ui_state::AppMode::GpuTree;
+                        uis.is_running = false;
+                        ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("Panel", |ui| {
+                    ui.set_min_width(MENU_POPUP_WIDTH);
+                    let available = uis.get_available_panels();
+                    if available.contains(&PanelKind::Simulation) {
+                        if ui
+                            .checkbox(
+                                &mut uis.is_simulation_panel_open,
+                                PanelKind::Simulation.label(),
+                            )
+                            .clicked()
+                        {
+                            ui.close_menu();
+                        }
+                    }
+                    if available.contains(&PanelKind::InitialCondition) {
+                        if ui
+                            .checkbox(
+                                &mut uis.is_initial_condition_panel_open,
+                                PanelKind::InitialCondition.label(),
+                            )
+                            .clicked()
+                        {
+                            ui.close_menu();
+                        }
+                    }
+                    if available.contains(&PanelKind::Graph3D) {
+                        if ui
+                            .checkbox(&mut uis.is_graph3d_panel_open, PanelKind::Graph3D.label())
+                            .clicked()
+                        {
+                            ui.close_menu();
+                        }
+                    }
+                    if available.contains(&PanelKind::GpuTree) {
+                        if ui
+                            .checkbox(&mut uis.is_gpu_tree_panel_open, PanelKind::GpuTree.label())
+                            .clicked()
+                        {
+                            ui.close_menu();
+                        }
+                    }
+                    if available.contains(&PanelKind::Settings) {
+                        if ui
+                            .checkbox(&mut uis.is_settings_panel_open, PanelKind::Settings.label())
+                            .clicked()
+                        {
+                            ui.close_menu();
+                        }
+                    }
+                });
+
+                ui.menu_button("View", |ui| {
+                    ui.set_min_width(MENU_POPUP_WIDTH);
+                    if ui.checkbox(&mut uis.show_grid, "Show Grid").clicked() {
+                        ui.close_menu();
+                    }
+                });
+
+                if uis.app_mode == AppMode::Simulation {
+                    ui.menu_button("Simulation", |ui| {
+                        ui.set_min_width(MENU_POPUP_WIDTH);
+                        if ui
+                            .button(if uis.is_running { "Pause" } else { "Start" })
+                            .clicked()
+                        {
+                            uis.is_running = !uis.is_running;
+                            ui.close_menu();
+                        }
+                        if ui.button("Reset").clicked() {
+                            uis.is_reset_requested = true;
+                            uis.is_resetting = true;
+                            ui.close_menu();
+                        }
+                    });
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(format!("Frame {}", uis.frame));
+                    ui.separator();
+                    ui.label(format!("FPS {}", uis.fps));
+                });
             });
-        });
         })
         .response
         .rect
@@ -396,8 +396,8 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                 ui.separator();
 
                 match uis.graph_type {
-                    GraphType::LightCone => {
-                        condition_light_cone(ui, &mut uis);
+                    GraphType::SphericalFibonacciLattice => {
+                        condition_spherical_fibonacci_lattice(ui, &mut uis);
                     }
                     GraphType::RapidityField => {
                         condition_rapidity_field(ui, &mut uis);
@@ -774,7 +774,11 @@ fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {
         .selected_text(format!("{}", uis.graph_type))
         .width(ui.available_width())
         .show_ui(ui, |ui| {
-            selectable_value(ui, &mut uis.graph_type, GraphType::LightCone);
+            selectable_value(
+                ui,
+                &mut uis.graph_type,
+                GraphType::SphericalFibonacciLattice,
+            );
             selectable_value(ui, &mut uis.graph_type, GraphType::RapidityField);
             selectable_value(ui, &mut uis.graph_type, GraphType::BoostExponent);
             selectable_value(ui, &mut uis.graph_type, GraphType::BivectorVisualization);
@@ -782,13 +786,23 @@ fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {
         });
 }
 
-/// Renders controls specific to the light-cone graph mode.
-fn condition_light_cone(ui: &mut egui::Ui, uis: &mut UiState) {
-    label_normal(ui, "Minkowski Light Cone Slice");
-    dragvalue_normal(ui, &mut uis.graph_t_slice, 0.1, "t slice");
-    label_normal(ui, "Visualizes hyperboloid x²+y²+z² = t²");
+/// Renders controls specific to spherical Fibonacci lattice graph mode.
+fn condition_spherical_fibonacci_lattice(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Spherical Fibonacci Lattice");
+    dragvalue_normal(ui, &mut uis.graph_radius, 0.01, "Radius");
+    label_normal(
+        ui,
+        "Deterministic spherical sampling using a Fibonacci lattice.",
+    );
     ui.separator();
-    label_normal(ui, "Points update automatically when parameters change.");
+    label_normal(
+        ui,
+        "Uses golden-angle azimuth progression with near-equal-area latitude spacing.",
+    );
+    label_normal(
+        ui,
+        "Generates quasi-uniform points on the sphere, then scales by radius.",
+    );
 }
 
 /// Renders controls specific to the rapidity-field graph mode.

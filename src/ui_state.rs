@@ -114,7 +114,7 @@ impl std::fmt::Display for SimulationType {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum GraphType {
-    LightCone,
+    SphericalFibonacciLattice,
     RapidityField,
     BoostExponent,
     BivectorVisualization,
@@ -157,12 +157,11 @@ impl std::fmt::Display for GpuTreeRenderMode {
     }
 }
 
-
 impl std::fmt::Display for GraphType {
     /// Formats graph type names for UI selection controls.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
-            GraphType::LightCone => "Light Cone Slice",
+            GraphType::SphericalFibonacciLattice => "Spherical Fibonacci Lattice",
             GraphType::RapidityField => "Rapidity Field",
             GraphType::BoostExponent => "Boost Exponent",
             GraphType::BivectorVisualization => "Bivector Visualization",
@@ -214,7 +213,7 @@ pub struct UiState {
     pub request_exit: bool,
     pub graph_type: GraphType,
     pub graph_sample_count: u32,
-    pub graph_t_slice: f64,
+    pub graph_radius: f64,
     pub graph_velocity_scale: f64,
     pub graph_phi: f64,
     pub gpu_tree_layout: GpuTreeLayout,
@@ -266,9 +265,9 @@ impl Default for UiState {
             mailbox_present_mode: false,
             show_grid: true,
             request_exit: false,
-            graph_type: GraphType::LightCone,
+            graph_type: GraphType::SphericalFibonacciLattice,
             graph_sample_count: 1000,
-            graph_t_slice: 0.0,
+            graph_radius: 1.0,
             graph_velocity_scale: 1.0,
             graph_phi: 1.0,
             gpu_tree_layout: GpuTreeLayout::Single,
@@ -296,9 +295,9 @@ impl UiState {
 
     /// Resets all 3D graph parameters back to their default values.
     pub fn reset_graph_params(&mut self) {
-        self.graph_type = GraphType::LightCone;
+        self.graph_type = GraphType::SphericalFibonacciLattice;
         self.graph_sample_count = 1000;
-        self.graph_t_slice = 0.0;
+        self.graph_radius = 1.0;
         self.graph_velocity_scale = 1.0;
         self.graph_phi = 1.0;
     }

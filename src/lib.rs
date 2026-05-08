@@ -546,14 +546,14 @@ impl ApplicationHandler for App {
             let fp = crate::graph3d::graph_params_fingerprint(
                 uis.graph_type,
                 uis.graph_sample_count,
-                uis.graph_t_slice,
+                uis.graph_radius,
                 uis.graph_velocity_scale,
                 uis.graph_phi,
             );
             let (gt, n, t, vs, phi) = (
                 uis.graph_type,
                 uis.graph_sample_count,
-                uis.graph_t_slice,
+                uis.graph_radius,
                 uis.graph_velocity_scale,
                 uis.graph_phi,
             );

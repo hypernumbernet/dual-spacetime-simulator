@@ -30,7 +30,7 @@ fn clamp_samples(n: u32) -> usize {
 /// Converts each graph type into a stable numeric tag for hashing.
 fn graph_type_tag(gt: GraphType) -> u8 {
     match gt {
-        GraphType::LightCone => 0,
+        GraphType::SphericalFibonacciLattice => 0,
         GraphType::RapidityField => 1,
         GraphType::BoostExponent => 2,
         GraphType::BivectorVisualization => 3,
@@ -68,7 +68,7 @@ pub fn build_points(
     let mut colors = Vec::with_capacity(n);
 
     match graph_type {
-        GraphType::LightCone => {
+        GraphType::SphericalFibonacciLattice => {
             let t = graph_t_slice;
             let r = t.abs();
             for i in 0..n {
@@ -160,7 +160,9 @@ pub fn build_graph_line_vertices(
     _graph_phi: f64,
 ) -> Vec<([f32; 3], [f32; 4])> {
     match graph_type {
-        GraphType::LightCone => build_light_cone_line_vertices(graph_sample_count, graph_t_slice),
+        GraphType::SphericalFibonacciLattice => {
+            build_light_cone_line_vertices(graph_sample_count, graph_t_slice)
+        }
         _ => Vec::new(),
     }
 }
