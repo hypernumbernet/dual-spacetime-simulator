@@ -29,7 +29,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     if ui
                         .selectable_label(
                             uis.app_mode == crate::ui_state::AppMode::Simulation,
-                            "Simulation Mode",
+                            "Simulation",
                         )
                         .clicked()
                     {
@@ -39,7 +39,7 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     if ui
                         .selectable_label(
                             uis.app_mode == crate::ui_state::AppMode::Graph3D,
-                            "3D Graph Mode",
+                            "3D Graph",
                         )
                         .clicked()
                     {

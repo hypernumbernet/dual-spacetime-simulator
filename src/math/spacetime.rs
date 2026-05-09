@@ -1,4 +1,4 @@
-use glam::DVec3;
+use glam::{DMat4, DVec3, DVec4};
 use std::f64;
 
 const EPSILON: f64 = 1e-10;
@@ -7,6 +7,44 @@ const EPSILON: f64 = 1e-10;
 pub fn fuzzy_compare(a: f64, b: f64) -> bool {
     (a - b).abs() < EPSILON
 }
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum LorentzMatrixError {
+    SuperluminalBeta { beta: f64 },
+    NonFiniteGamma { beta: f64 },
+}
+
+impl LorentzMatrixError {
+    /// Returns the beta value (`|v|/c`) that caused the error.
+    pub fn beta(self) -> f64 {
+        match self {
+            Self::SuperluminalBeta { beta } | Self::NonFiniteGamma { beta } => beta,
+        }
+    }
+}
+
+impl std::fmt::Display for LorentzMatrixError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SuperluminalBeta { beta } => {
+                write!(
+                    f,
+                    "Lorentz transformation failed: superluminal beta (|v|/c) = {} (must be < 1)",
+                    beta
+                )
+            }
+            Self::NonFiniteGamma { beta } => {
+                write!(
+                    f,
+                    "Lorentz transformation failed: gamma is non-finite for beta (|v|/c) = {}",
+                    beta
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for LorentzMatrixError {}
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Spacetime {
@@ -230,6 +268,60 @@ impl std::fmt::Display for Spacetime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}, {}, {}, {}", self.t, self.x, self.y, self.z)
     }
+}
+
+/// Lorentz boost as a 4×4 matrix acting on `(t, x, y, z)` column vectors.
+///
+/// `speed_of_light_inv` is `1/c`. Returns an error when `|v|/c >= 1` or `γ` is non-finite.
+pub fn lorentz_transformation_matrix(
+    v: DVec3,
+    speed_of_light_inv: f64,
+) -> Result<DMat4, LorentzMatrixError> {
+    let vx = v.x;
+    let vy = v.y;
+    let vz = v.z;
+    let vv = vx * vx + vy * vy + vz * vz;
+    if vv == 0.0 {
+        return Ok(DMat4::IDENTITY);
+    }
+
+    let beta = vv.sqrt() * speed_of_light_inv;
+    if beta >= 1.0 {
+        return Err(LorentzMatrixError::SuperluminalBeta { beta });
+    }
+
+    let gamma = 1.0 / (1.0 - beta * beta).sqrt();
+    if !gamma.is_finite() {
+        return Err(LorentzMatrixError::NonFiniteGamma { beta });
+    }
+
+    let gc = -gamma * speed_of_light_inv;
+    let gxc = vx * gc;
+    let gyc = vy * gc;
+    let gzc = vz * gc;
+    let g1 = gamma - 1.0;
+
+    let col0 = DVec4::new(gamma, gxc, gyc, gzc);
+    let col1 = DVec4::new(
+        gxc,
+        1.0 + g1 * (vx * vx / vv),
+        g1 * (vx * vy / vv),
+        g1 * (vx * vz / vv),
+    );
+    let col2 = DVec4::new(
+        gyc,
+        g1 * (vx * vy / vv),
+        1.0 + g1 * (vy * vy / vv),
+        g1 * (vy * vz / vv),
+    );
+    let col3 = DVec4::new(
+        gzc,
+        g1 * (vx * vz / vv),
+        g1 * (vy * vz / vv),
+        1.0 + g1 * (vz * vz / vv),
+    );
+
+    Ok(DMat4::from_cols(col0, col1, col2, col3))
 }
 
 /// Converts a velocity vector into a rapidity vector.

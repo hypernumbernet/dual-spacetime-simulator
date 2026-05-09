@@ -1,9 +1,41 @@
 //! Extra integration coverage for `math::spacetime` (see also crate-local `#[cfg(test)]`).
 
 use dual_spacetime_simulator::math::spacetime::{
-    rapidity_from_momentum, rapidity_vector, Spacetime,
+    lorentz_transformation_matrix, rapidity_from_momentum, rapidity_vector, Spacetime,
 };
-use glam::DVec3;
+use glam::{DMat4, DVec3, DVec4};
+
+#[test]
+fn lorentz_transformation_matrix_zero_velocity_is_identity() {
+    let m = lorentz_transformation_matrix(DVec3::ZERO, 1.0).unwrap();
+    assert_eq!(m, DMat4::IDENTITY);
+}
+
+#[test]
+fn lorentz_transformation_matrix_x_boost_beta_half() {
+    let c_inv = 1.0_f64;
+    let v = DVec3::new(0.5, 0.0, 0.0);
+    let m = lorentz_transformation_matrix(v, c_inv).unwrap();
+    let beta = 0.5_f64;
+    let gamma = 1.0 / (1.0 - beta * beta).sqrt();
+    let gc = -gamma * c_inv;
+    let gxc = v.x * gc;
+    let g1 = gamma - 1.0;
+
+    let expected = DMat4::from_cols(
+        DVec4::new(gamma, gxc, 0.0, 0.0),
+        DVec4::new(gxc, 1.0 + g1, 0.0, 0.0),
+        DVec4::new(0.0, 0.0, 1.0, 0.0),
+        DVec4::new(0.0, 0.0, 0.0, 1.0),
+    );
+    assert_eq!(m, expected);
+}
+
+#[test]
+fn lorentz_transformation_matrix_rejects_light_speed() {
+    let m = lorentz_transformation_matrix(DVec3::new(1.0, 0.0, 0.0), 1.0);
+    assert!(m.is_err());
+}
 
 #[test]
 fn lorentz_transformation_v_zero_is_noop() {
