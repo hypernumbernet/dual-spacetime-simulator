@@ -399,11 +399,11 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     GraphType::SphericalFibonacciLattice => {
                         condition_spherical_fibonacci_lattice(ui, &mut uis);
                     }
-                    GraphType::RapidityField => {
-                        condition_rapidity_field(ui, &mut uis);
+                    GraphType::RapidityFieldMatrix => {
+                        condition_rapidity_field_matrix(ui, &mut uis);
                     }
-                    GraphType::BoostExponent => {
-                        condition_boost_exponent(ui, &mut uis);
+                    GraphType::RapidityFieldBiquaternion => {
+                        condition_rapidity_field_biquaternion(ui, &mut uis);
                     }
                     GraphType::BivectorVisualization => {
                         condition_bivector_viz(ui, &mut uis);
@@ -779,8 +779,12 @@ fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {
                 &mut uis.graph_type,
                 GraphType::SphericalFibonacciLattice,
             );
-            selectable_value(ui, &mut uis.graph_type, GraphType::RapidityField);
-            selectable_value(ui, &mut uis.graph_type, GraphType::BoostExponent);
+            selectable_value(ui, &mut uis.graph_type, GraphType::RapidityFieldMatrix);
+            selectable_value(
+                ui,
+                &mut uis.graph_type,
+                GraphType::RapidityFieldBiquaternion,
+            );
             selectable_value(ui, &mut uis.graph_type, GraphType::BivectorVisualization);
             selectable_value(ui, &mut uis.graph_type, GraphType::QuaternionProjection);
         });
@@ -805,29 +809,20 @@ fn condition_spherical_fibonacci_lattice(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
-/// Renders controls specific to the rapidity-field graph mode.
-fn condition_rapidity_field(ui: &mut egui::Ui, uis: &mut UiState) {
-    label_normal(ui, "Rapidity Vector Field (from spacetime.rs)");
-    dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.1, "Velocity Scale");
+/// Renders controls specific to the rapidity-field graph mode by matrix.
+fn condition_rapidity_field_matrix(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Rapidity Vector Field by matrix");
+    dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.01, "Velocity Scale");
     label_normal(ui, "Maps v -> rapidity η = artanh(|v|)");
     ui.separator();
-    label_normal(
-        ui,
-        "Boost bivector (i,j,k) from sampled velocities; updates live.",
-    );
+    label_normal(ui, "Calculation of Lorentz boost using matrices.");
 }
 
-/// Renders controls specific to the boost-exponent graph mode.
-fn condition_boost_exponent(ui: &mut egui::Ui, uis: &mut UiState) {
-    label_normal(ui, "BivectorBoost::exp (bivector.rs)");
-    dragvalue_normal(ui, &mut uis.graph_phi, 0.1, "Rapidity φ");
-    dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.1, "Direction Scale");
-    label_normal(ui, "Exponential map of boost bivector.");
-    ui.separator();
-    label_normal(
-        ui,
-        "Vector part of exp(boost); scalar shades color; updates live.",
-    );
+/// Renders controls specific to the rapidity-field graph mode by biquaternion.
+fn condition_rapidity_field_biquaternion(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Rapidity Vector Field by biquaternion");
+    dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.01, "Velocity Scale");
+    label_normal(ui, "Calculation of Lorentz boost using biquaternions.");
 }
 
 /// Renders controls specific to the bivector-visualization graph mode.

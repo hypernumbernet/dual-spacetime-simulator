@@ -115,8 +115,8 @@ impl std::fmt::Display for SimulationType {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum GraphType {
     SphericalFibonacciLattice,
-    RapidityField,
-    BoostExponent,
+    RapidityFieldMatrix,
+    RapidityFieldBiquaternion,
     BivectorVisualization,
     QuaternionProjection,
 }
@@ -162,8 +162,8 @@ impl std::fmt::Display for GraphType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
             GraphType::SphericalFibonacciLattice => "Spherical Fibonacci Lattice",
-            GraphType::RapidityField => "Rapidity Field",
-            GraphType::BoostExponent => "Boost Exponent",
+            GraphType::RapidityFieldMatrix => "Rapidity Field by matrix",
+            GraphType::RapidityFieldBiquaternion => "Rapidity Field by biquaternion",
             GraphType::BivectorVisualization => "Bivector Visualization",
             GraphType::QuaternionProjection => "Quaternion Projection",
         };

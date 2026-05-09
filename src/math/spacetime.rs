@@ -233,12 +233,12 @@ impl Spacetime {
 
     /// Applies a Lorentz transformation from velocity and inverse light speed.
     pub fn lorentz_transformation_v(&mut self, v: DVec3, speed_of_light_inv: f64) {
-        let l = v.length_squared();
-        if l == 0.0 {
+        let speed = v.length();
+        if speed == 0.0 {
             return;
         }
-        let a = (l * speed_of_light_inv).atanh();
-        let dir = v / l;
+        let a = (speed * speed_of_light_inv).atanh();
+        let dir = v / speed;
         let g = Self::exp(0.5 * a, dir);
         self.lorentz_transformation(g);
     }
