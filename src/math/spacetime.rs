@@ -204,11 +204,11 @@ impl Spacetime {
 
     /// Applies a Lorentz transformation represented as a spacetime versor.
     #[inline(always)]
-    pub fn lorentz_transformation(&mut self, g: Spacetime) {
-        let p = g.t;
-        let q = g.x;
-        let r = g.y;
-        let s = g.z;
+    pub fn apply_lorentz_transform(&mut self, boost_versor: Spacetime) {
+        let p = boost_versor.t;
+        let q = boost_versor.x;
+        let r = boost_versor.y;
+        let s = boost_versor.z;
 
         let w = self.t;
         let x = self.x;
@@ -232,26 +232,30 @@ impl Spacetime {
     }
 
     /// Applies a Lorentz transformation from velocity and inverse light speed.
-    pub fn lorentz_transformation_v(&mut self, v: DVec3, speed_of_light_inv: f64) {
-        let speed = v.length();
+    pub fn apply_lorentz_transform_by_velocity(
+        &mut self,
+        velocity: DVec3,
+        inverse_light_speed: f64,
+    ) {
+        let speed = velocity.length();
         if speed == 0.0 {
             return;
         }
-        let a = (speed * speed_of_light_inv).atanh();
-        let dir = v / speed;
+        let a = (speed * inverse_light_speed).atanh();
+        let dir = velocity / speed;
         let g = Self::exp(0.5 * a, dir);
-        self.lorentz_transformation(g);
+        self.apply_lorentz_transform(g);
     }
 
     /// Applies a Lorentz transformation directly from rapidity vector.
-    pub fn lorentz_transformation_rapidity(&mut self, rapidity: DVec3) {
+    pub fn apply_lorentz_transform_by_rapidity(&mut self, rapidity: DVec3) {
         let a = rapidity.length_squared();
         if a == 0.0 {
             return;
         }
         let dir = rapidity / a;
         let g = Self::exp(0.5 * a, dir);
-        self.lorentz_transformation(g);
+        self.apply_lorentz_transform(g);
     }
 
     /// Compares two spacetime values using tolerance-based component checks.
@@ -273,19 +277,19 @@ impl std::fmt::Display for Spacetime {
 /// Lorentz boost as a 4×4 matrix acting on `(t, x, y, z)` column vectors.
 ///
 /// `speed_of_light_inv` is `1/c`. Returns an error when `|v|/c >= 1` or `γ` is non-finite.
-pub fn lorentz_transformation_matrix(
-    v: DVec3,
-    speed_of_light_inv: f64,
+pub fn lorentz_boost_matrix_from_velocity(
+    velocity: DVec3,
+    inverse_light_speed: f64,
 ) -> Result<DMat4, LorentzMatrixError> {
-    let vx = v.x;
-    let vy = v.y;
-    let vz = v.z;
+    let vx = velocity.x;
+    let vy = velocity.y;
+    let vz = velocity.z;
     let vv = vx * vx + vy * vy + vz * vz;
     if vv == 0.0 {
         return Ok(DMat4::IDENTITY);
     }
 
-    let beta = vv.sqrt() * speed_of_light_inv;
+    let beta = vv.sqrt() * inverse_light_speed;
     if beta >= 1.0 {
         return Err(LorentzMatrixError::SuperluminalBeta { beta });
     }
@@ -295,7 +299,7 @@ pub fn lorentz_transformation_matrix(
         return Err(LorentzMatrixError::NonFiniteGamma { beta });
     }
 
-    let gc = -gamma * speed_of_light_inv;
+    let gc = -gamma * inverse_light_speed;
     let gxc = vx * gc;
     let gyc = vy * gc;
     let gzc = vz * gc;
@@ -325,14 +329,14 @@ pub fn lorentz_transformation_matrix(
 }
 
 /// Converts a velocity vector into a rapidity vector.
-pub fn rapidity_vector(v: DVec3, speed_of_light_inv: f64) -> DVec3 {
-    let speed = v.length_squared();
+pub fn rapidity_vector(velocity: DVec3, inverse_light_speed: f64) -> DVec3 {
+    let speed = velocity.length_squared();
     if speed == 0.0 {
         return DVec3::ZERO;
     }
-    let a = (speed * speed_of_light_inv).atanh();
+    let a = (speed * inverse_light_speed).atanh();
     let b = a / speed;
-    DVec3::new(b * v.x, b * v.y, b * v.z)
+    DVec3::new(b * velocity.x, b * velocity.y, b * velocity.z)
 }
 
 /// Converts a momentum vector into a rapidity vector.
@@ -411,10 +415,10 @@ mod tests {
     }
 
     #[test]
-    fn test_lorentz_transformation() {
+    fn test_apply_lorentz_transform() {
         let mut st = Spacetime::new(1.0, 0.0, 0.0, 0.0);
         let g = Spacetime::identity();
-        st.lorentz_transformation(g);
+        st.apply_lorentz_transform(g);
         assert_eq!(st, Spacetime::new(1.0, 0.0, 0.0, 0.0)); // No change
 
         // Add more physics-based tests as needed, e.g., boost along x-axis.

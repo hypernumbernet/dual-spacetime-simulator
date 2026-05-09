@@ -1,7 +1,7 @@
 //! 3D Graph mode: sample points from UI parameters for the particle buffer.
 
 use crate::math::biquaternion::TetraQuaternion;
-use crate::math::spacetime::{Spacetime, lorentz_transformation_matrix};
+use crate::math::spacetime::{Spacetime, lorentz_boost_matrix_from_velocity};
 use crate::ui_state::GraphType;
 use glam::{DVec3, DVec4};
 use std::hash::{Hash, Hasher};
@@ -246,7 +246,7 @@ fn build_rapidity_field_line_vertices_with(
 
 /// Computes Lorentz boost using matrix multiplication.
 fn rapidity_point_matrix(v: DVec3, speed_of_light_inv: f64, base: DVec4) -> Option<DVec4> {
-    lorentz_transformation_matrix(v, speed_of_light_inv)
+    lorentz_boost_matrix_from_velocity(v, speed_of_light_inv)
         .ok()
         .map(|matrix| matrix * base)
 }
@@ -254,7 +254,7 @@ fn rapidity_point_matrix(v: DVec3, speed_of_light_inv: f64, base: DVec4) -> Opti
 /// Computes Lorentz boost using biquaternion multiplication.
 fn rapidity_point_biquaternion(v: DVec3, speed_of_light_inv: f64, base: DVec4) -> Option<DVec4> {
     let mut st = Spacetime::new(base.x, base.y, base.z, base.w);
-    st.lorentz_transformation_v(-v, speed_of_light_inv);
+    st.apply_lorentz_transform_by_velocity(-v, speed_of_light_inv);
     Some(DVec4::new(st.t, st.x, st.y, st.z))
 }
 

@@ -155,7 +155,7 @@ impl SimulationEngine for SimulationLorentzTransformation {
         let ct = delta_seconds * LIGHT_SPEED / self.scale;
         self.particles.par_iter_mut().for_each(|particle| {
             let mut st = Spacetime::from_t(ct);
-            st.lorentz_transformation_rapidity(particle.velocity);
+            st.apply_lorentz_transform_by_rapidity(particle.velocity);
             let tau = ct / st.t;
             particle.position += DVec3::new(st.x * tau, st.y * tau, st.z * tau);
         });
