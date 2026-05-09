@@ -276,7 +276,7 @@ impl std::fmt::Display for Spacetime {
 
 /// Lorentz boost as a 4×4 matrix acting on `(t, x, y, z)` column vectors.
 ///
-/// `speed_of_light_inv` is `1/c`. Returns an error when `|v|/c >= 1` or `γ` is non-finite.
+/// `inverse_light_speed` is `1/c`. Returns an error when `|v|/c >= 1` or `γ` is non-finite.
 pub fn lorentz_boost_matrix_from_velocity(
     velocity: DVec3,
     inverse_light_speed: f64,
@@ -355,16 +355,16 @@ pub fn rapidity_vector(velocity: DVec3, inverse_light_speed: f64) -> DVec3 {
 ///
 /// v / c = p / sqrt(m^2 c^2 + p^2) = tanh(a) = pc / E
 /// tanh(a) < 1 (p -> ∞)
-pub fn rapidity_from_momentum(p: DVec3, m: f64, speed_of_light: f64) -> DVec3 {
-    let pn = p.length_squared();
+pub fn rapidity_from_momentum(momentum: DVec3, mass: f64, speed_of_light: f64) -> DVec3 {
+    let pn = momentum.length_squared();
     if pn == 0.0 {
         return DVec3::ZERO;
     }
     let pr = pn.sqrt();
-    let l = pr / (m * m * speed_of_light * speed_of_light + pn).sqrt();
+    let l = pr / (mass * mass * speed_of_light * speed_of_light + pn).sqrt();
     let a = l.atanh();
     let b = a / pr;
-    DVec3::new(b * p.x, b * p.y, b * p.z)
+    DVec3::new(b * momentum.x, b * momentum.y, b * momentum.z)
 }
 
 #[cfg(test)]

@@ -813,9 +813,11 @@ fn condition_spherical_fibonacci_lattice(ui: &mut egui::Ui, uis: &mut UiState) {
 fn condition_rapidity_field_matrix(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Rapidity Vector Field by matrix");
     dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.01, "Velocity Scale");
-    label_normal(ui, "Maps v -> rapidity η = artanh(|v|)");
     ui.separator();
-    label_normal(ui, "Calculation of Lorentz boost using matrices.");
+    label_normal(
+        ui,
+        "Lorentz boost using matrices (standard 4x4 representation)",
+    );
 }
 
 /// Renders controls specific to the rapidity-field graph mode by biquaternion.

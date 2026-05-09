@@ -176,7 +176,7 @@ fn build_rapidity_field_line_vertices_with(
 ) -> Vec<([f32; 3], [f32; 4])> {
     const RATE_XZ: f64 = 0.07;
     const RATE_Y: f64 = 0.05;
-    const SPEED_OF_LIGHT_INV: f64 = 1.0;
+    const INVERSE_LIGHT_SPEED: f64 = 1.0;
     const MIN_GRID_SIZE: i32 = 6;
     const MAX_GRID_SIZE: i32 = 20;
     const GRID_BUCKET_COUNT: i32 = ((MAX_GRID_SIZE - MIN_GRID_SIZE) / 2) + 1; // 6,8,10,...,20
@@ -199,7 +199,7 @@ fn build_rapidity_field_line_vertices_with(
                     scale * RATE_Y * i as f64,
                     scale * RATE_XZ * j as f64,
                 );
-                if let Some(current) = compute_point(speed, SPEED_OF_LIGHT_INV, spacetime_org) {
+                if let Some(current) = compute_point(speed, INVERSE_LIGHT_SPEED, spacetime_org) {
                     if let Some(previous) = prev {
                         push_line(&mut out, previous, current, RAPIDITY_PILLAR_COLOR);
                     }
@@ -215,7 +215,7 @@ fn build_rapidity_field_line_vertices_with(
         let mut prev: Option<DVec4> = None;
         for j in (-grid_size..=grid_size).step_by(2) {
             let speed = DVec3::new(scale * RATE_XZ * j as f64, 0.0, scale * RATE_XZ * k as f64);
-            if let Some(current) = compute_point(speed, SPEED_OF_LIGHT_INV, spacetime_org) {
+            if let Some(current) = compute_point(speed, INVERSE_LIGHT_SPEED, spacetime_org) {
                 if let Some(previous) = prev {
                     push_line(&mut out, previous, current, RAPIDITY_GRID_U_COLOR);
                 }
@@ -230,7 +230,7 @@ fn build_rapidity_field_line_vertices_with(
         let mut prev: Option<DVec4> = None;
         for j in (-grid_size..=grid_size).step_by(2) {
             let speed = DVec3::new(scale * RATE_XZ * k as f64, 0.0, scale * RATE_XZ * j as f64);
-            if let Some(current) = compute_point(speed, SPEED_OF_LIGHT_INV, spacetime_org) {
+            if let Some(current) = compute_point(speed, INVERSE_LIGHT_SPEED, spacetime_org) {
                 if let Some(previous) = prev {
                     push_line(&mut out, previous, current, RAPIDITY_GRID_V_COLOR);
                 }
@@ -245,16 +245,20 @@ fn build_rapidity_field_line_vertices_with(
 }
 
 /// Computes Lorentz boost using matrix multiplication.
-fn rapidity_point_matrix(v: DVec3, speed_of_light_inv: f64, base: DVec4) -> Option<DVec4> {
-    lorentz_boost_matrix_from_velocity(v, speed_of_light_inv)
+fn rapidity_point_matrix(velocity: DVec3, inverse_light_speed: f64, base: DVec4) -> Option<DVec4> {
+    lorentz_boost_matrix_from_velocity(velocity, inverse_light_speed)
         .ok()
         .map(|matrix| matrix * base)
 }
 
 /// Computes Lorentz boost using biquaternion multiplication.
-fn rapidity_point_biquaternion(v: DVec3, speed_of_light_inv: f64, base: DVec4) -> Option<DVec4> {
+fn rapidity_point_biquaternion(
+    velocity: DVec3,
+    inverse_light_speed: f64,
+    base: DVec4,
+) -> Option<DVec4> {
     let mut st = Spacetime::new(base.x, base.y, base.z, base.w);
-    st.apply_lorentz_transform_by_velocity(-v, speed_of_light_inv);
+    st.apply_lorentz_transform_by_velocity(-velocity, inverse_light_speed);
     Some(DVec4::new(st.t, st.x, st.y, st.z))
 }
 
