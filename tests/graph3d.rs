@@ -6,27 +6,26 @@ use dual_spacetime_simulator::ui_state::GraphType;
 #[test]
 fn build_points_respects_sample_clamp() {
     let n = 100;
-    let (pos, col) = build_points(GraphType::SphericalFibonacciLattice, n, 1.0, 1.0, 1.0);
+    let (pos, col) = build_points(GraphType::SphericalFibonacciLattice, n, 1.0, 1.0);
     assert_eq!(pos.len(), n as usize);
     assert_eq!(col.len(), n as usize);
 }
 
 #[test]
 fn fingerprint_stable_for_same_inputs() {
-    let a = graph_params_fingerprint(GraphType::RapidityFieldBiquaternion, 200, 0.1, 2.0, 0.5);
-    let b = graph_params_fingerprint(GraphType::RapidityFieldBiquaternion, 200, 0.1, 2.0, 0.5);
+    let a = graph_params_fingerprint(GraphType::RapidityFieldBiquaternion, 200, 0.1, 2.0);
+    let b = graph_params_fingerprint(GraphType::RapidityFieldBiquaternion, 200, 0.1, 2.0);
     assert_eq!(a, b);
 }
 
 #[test]
-fn fingerprint_changes_with_phi_bits() {
-    let a = graph_params_fingerprint(GraphType::BivectorVisualization, 50, 0.0, 1.0, 1.0);
+fn fingerprint_changes_with_t_slice_bits() {
+    let a = graph_params_fingerprint(GraphType::SphericalFibonacciLattice, 50, 1.0, 1.0);
     let b = graph_params_fingerprint(
-        GraphType::BivectorVisualization,
+        GraphType::SphericalFibonacciLattice,
         50,
-        0.0,
-        1.0,
         1.0 + f64::EPSILON,
+        1.0,
     );
     assert_ne!(a, b);
 }
@@ -34,13 +33,13 @@ fn fingerprint_changes_with_phi_bits() {
 #[test]
 fn light_cone_lines_have_two_vertices_per_sample() {
     let n = 32;
-    let lines = build_graph_line_vertices(GraphType::SphericalFibonacciLattice, n, 2.0, 0.0, 0.0);
+    let lines = build_graph_line_vertices(GraphType::SphericalFibonacciLattice, n, 2.0, 0.0);
     assert_eq!(lines.len(), n as usize * 2);
 }
 
 #[test]
 fn rapidity_field_lines_have_expected_vertex_count() {
-    let lines = build_graph_line_vertices(GraphType::RapidityFieldMatrix, 100, 1.0, 1.0, 1.0);
+    let lines = build_graph_line_vertices(GraphType::RapidityFieldMatrix, 100, 1.0, 1.0);
     let grid_size = 6;
     let axis_count = (grid_size + 1) as usize;
     let expected_vertices =
@@ -51,15 +50,15 @@ fn rapidity_field_lines_have_expected_vertex_count() {
 
 #[test]
 fn rapidity_field_lines_increase_with_sample_count() {
-    let low = build_graph_line_vertices(GraphType::RapidityFieldMatrix, 1, 1.0, 1.0, 1.0);
-    let high = build_graph_line_vertices(GraphType::RapidityFieldMatrix, 5000, 1.0, 1.0, 1.0);
+    let low = build_graph_line_vertices(GraphType::RapidityFieldMatrix, 1, 1.0, 1.0);
+    let high = build_graph_line_vertices(GraphType::RapidityFieldMatrix, 5000, 1.0, 1.0);
     assert!(high.len() > low.len());
 }
 
 #[test]
 fn rapidity_field_biquaternion_lines_have_expected_vertex_count() {
     let lines =
-        build_graph_line_vertices(GraphType::RapidityFieldBiquaternion, 100, 1.0, 1.0, 1.0);
+        build_graph_line_vertices(GraphType::RapidityFieldBiquaternion, 100, 1.0, 1.0);
     let grid_size = 6;
     let axis_count = (grid_size + 1) as usize;
     let expected_vertices =
@@ -70,9 +69,9 @@ fn rapidity_field_biquaternion_lines_have_expected_vertex_count() {
 
 #[test]
 fn rapidity_field_biquaternion_matches_matrix_lines() {
-    let matrix = build_graph_line_vertices(GraphType::RapidityFieldMatrix, 100, 1.0, 1.0, 1.0);
+    let matrix = build_graph_line_vertices(GraphType::RapidityFieldMatrix, 100, 1.0, 1.0);
     let biquaternion =
-        build_graph_line_vertices(GraphType::RapidityFieldBiquaternion, 100, 1.0, 1.0, 1.0);
+        build_graph_line_vertices(GraphType::RapidityFieldBiquaternion, 100, 1.0, 1.0);
     assert_eq!(matrix.len(), biquaternion.len());
 
     for (matrix_v, biquat_v) in matrix.iter().zip(biquaternion.iter()) {

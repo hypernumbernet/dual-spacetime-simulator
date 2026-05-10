@@ -405,12 +405,6 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     GraphType::RapidityFieldBiquaternion => {
                         condition_rapidity_field_biquaternion(ui, &mut uis);
                     }
-                    GraphType::BivectorVisualization => {
-                        condition_bivector_viz(ui, &mut uis);
-                    }
-                    GraphType::QuaternionProjection => {
-                        condition_quaternion_proj(ui, &mut uis);
-                    }
                 }
 
                 ui.separator();
@@ -785,8 +779,6 @@ fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {
                 &mut uis.graph_type,
                 GraphType::RapidityFieldBiquaternion,
             );
-            selectable_value(ui, &mut uis.graph_type, GraphType::BivectorVisualization);
-            selectable_value(ui, &mut uis.graph_type, GraphType::QuaternionProjection);
         });
 }
 
@@ -825,24 +817,4 @@ fn condition_rapidity_field_biquaternion(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Rapidity Vector Field by biquaternion");
     dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.01, "Velocity Scale");
     label_normal(ui, "Calculation of Lorentz boost using biquaternions.");
-}
-
-/// Renders controls specific to the bivector-visualization graph mode.
-fn condition_bivector_viz(ui: &mut egui::Ui, uis: &mut UiState) {
-    label_normal(ui, "Bivector Visualization");
-    dragvalue_normal(ui, &mut uis.graph_phi, 0.1, "Magnitude");
-    label_normal(ui, "Planes and rotation axes from bivectors.");
-    ui.separator();
-    label_normal(
-        ui,
-        "Sampled boost directions scaled by magnitude; updates live.",
-    );
-}
-
-/// Renders informational controls for quaternion-projection graph mode.
-fn condition_quaternion_proj(ui: &mut egui::Ui, _uis: &mut UiState) {
-    label_normal(ui, "TetraQuaternion Projection (biquaternion.rs)");
-    label_normal(ui, "16D algebra projected to 3D coefficients.");
-    ui.separator();
-    label_normal(ui, "I,J,K coeffs of basis products; updates live.");
 }

@@ -117,8 +117,6 @@ pub enum GraphType {
     SphericalFibonacciLattice,
     RapidityFieldMatrix,
     RapidityFieldBiquaternion,
-    BivectorVisualization,
-    QuaternionProjection,
 }
 
 /// Defines whether GPU trees render as one instance or a full XZ-grid forest.
@@ -164,8 +162,6 @@ impl std::fmt::Display for GraphType {
             GraphType::SphericalFibonacciLattice => "Spherical Fibonacci Lattice",
             GraphType::RapidityFieldMatrix => "Rapidity Field by matrix",
             GraphType::RapidityFieldBiquaternion => "Rapidity Field by biquaternion",
-            GraphType::BivectorVisualization => "Bivector Visualization",
-            GraphType::QuaternionProjection => "Quaternion Projection",
         };
         write!(f, "{}", text)
     }
@@ -215,7 +211,6 @@ pub struct UiState {
     pub graph_sample_count: u32,
     pub graph_radius: f64,
     pub graph_velocity_scale: f64,
-    pub graph_phi: f64,
     pub gpu_tree_layout: GpuTreeLayout,
     pub gpu_tree_render_mode: GpuTreeRenderMode,
     pub gpu_tree_params: TreeParams,
@@ -269,7 +264,6 @@ impl Default for UiState {
             graph_sample_count: 1000,
             graph_radius: 1.0,
             graph_velocity_scale: 1.0,
-            graph_phi: 1.0,
             gpu_tree_layout: GpuTreeLayout::Single,
             gpu_tree_render_mode: GpuTreeRenderMode::Polygons,
             gpu_tree_params: TreeParams::default(),
@@ -299,7 +293,6 @@ impl UiState {
         self.graph_sample_count = 1000;
         self.graph_radius = 1.0;
         self.graph_velocity_scale = 1.0;
-        self.graph_phi = 1.0;
     }
 
     /// Resets all GPU tree parameters and cached fingerprint to defaults.

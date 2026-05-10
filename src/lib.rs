@@ -559,14 +559,12 @@ impl ApplicationHandler for App {
                 uis.graph_sample_count,
                 uis.graph_radius,
                 uis.graph_velocity_scale,
-                uis.graph_phi,
             );
-            let (gt, n, t, vs, phi) = (
+            let (gt, n, t, vs) = (
                 uis.graph_type,
                 uis.graph_sample_count,
                 uis.graph_radius,
                 uis.graph_velocity_scale,
-                uis.graph_phi,
             );
             drop(uis);
 
@@ -592,8 +590,8 @@ impl ApplicationHandler for App {
             if fp != self.last_graph3d_fingerprint && self.graph3d_pending_rx.is_none() {
                 let (tx, rx) = mpsc::channel::<Graph3dBuildResult>();
                 std::thread::spawn(move || {
-                    let (positions, colors) = crate::graph3d::build_points(gt, n, t, vs, phi);
-                    let line_vertices = crate::graph3d::build_graph_line_vertices(gt, n, t, vs, phi);
+                    let (positions, colors) = crate::graph3d::build_points(gt, n, t, vs);
+                    let line_vertices = crate::graph3d::build_graph_line_vertices(gt, n, t, vs);
                     let _ = tx.send(Graph3dBuildResult {
                         fp,
                         positions,
