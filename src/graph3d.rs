@@ -1,6 +1,6 @@
 //! 3D Graph mode: sample points from UI parameters for the particle buffer.
 
-use crate::math::biquaternion::TetraQuaternion;
+use crate::math::biquaternion::Biquaternion;
 use crate::math::spacetime::{Spacetime, lorentz_boost_matrix_from_velocity};
 use crate::ui_state::GraphType;
 use glam::{DVec3, DVec4};
@@ -104,7 +104,7 @@ pub fn build_points(
             for i in 0..n {
                 let a = i % 15;
                 let b = ((i / 15) + (i % 7)) % 15;
-                let q = TetraQuaternion::basis(a) * TetraQuaternion::basis(b);
+                let q = Biquaternion::basis(a) * Biquaternion::basis(b);
                 let ijk = q.ijk_coeffs();
                 let px = ijk[0] * mag;
                 let py = ijk[1] * mag;

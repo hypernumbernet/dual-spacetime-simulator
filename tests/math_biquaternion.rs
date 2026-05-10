@@ -1,14 +1,14 @@
-use dual_spacetime_simulator::math::biquaternion::TetraQuaternion;
+use dual_spacetime_simulator::math::biquaternion::Biquaternion;
 
-fn approx_eq(a: TetraQuaternion, b: TetraQuaternion) -> bool {
+fn approx_eq(a: Biquaternion, b: Biquaternion) -> bool {
     a.max_abs_diff(&b) < 1e-9
 }
 
 #[test]
 fn one_is_multiplicative_identity() {
-    let one = TetraQuaternion::one();
+    let one = Biquaternion::one();
     for i in 0..15 {
-        let e = TetraQuaternion::basis(i);
+        let e = Biquaternion::basis(i);
         assert!(approx_eq(one * e, e));
         assert!(approx_eq(e * one, e));
     }
@@ -20,9 +20,9 @@ fn multiplication_is_associative_on_basis_triples() {
     for &i in &indices {
         for &j in &indices {
             for &k in &indices {
-                let a = TetraQuaternion::basis(i);
-                let b = TetraQuaternion::basis(j);
-                let c = TetraQuaternion::basis(k);
+                let a = Biquaternion::basis(i);
+                let b = Biquaternion::basis(j);
+                let c = Biquaternion::basis(k);
                 let left = (a * b) * c;
                 let right = a * (b * c);
                 let d = left.max_abs_diff(&right);

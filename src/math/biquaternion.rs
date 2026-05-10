@@ -95,11 +95,11 @@ const MUL_TABLE: [[(i8, usize); 15]; 15] = compute_mul_table();
 const DIM: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TetraQuaternion {
+pub struct Biquaternion {
     coeffs: [f64; DIM],
 }
 
-impl TetraQuaternion {
+impl Biquaternion {
     /// Creates a tetraquaternion from a real coefficient and 15 basis coefficients.
     pub fn new(real: f64, bases: [f64; 15]) -> Self {
         let mut coeffs = [0.0; DIM];
@@ -124,7 +124,7 @@ impl TetraQuaternion {
     }
 }
 
-impl Add for TetraQuaternion {
+impl Add for Biquaternion {
     type Output = Self;
     /// Adds two tetraquaternions component-wise.
     fn add(self, rhs: Self) -> Self {
@@ -136,7 +136,7 @@ impl Add for TetraQuaternion {
     }
 }
 
-impl Mul for TetraQuaternion {
+impl Mul for Biquaternion {
     type Output = Self;
     /// Multiplies two tetraquaternions using the precomputed basis multiplication table.
     fn mul(self, rhs: Self) -> Self {
@@ -161,7 +161,7 @@ impl Mul for TetraQuaternion {
     }
 }
 
-impl AddAssign for TetraQuaternion {
+impl AddAssign for Biquaternion {
     /// Accumulates tetraquaternion coefficients by component-wise addition.
     fn add_assign(&mut self, rhs: Self) {
         for i in 0..DIM {
@@ -170,7 +170,7 @@ impl AddAssign for TetraQuaternion {
     }
 }
 
-impl Sub for TetraQuaternion {
+impl Sub for Biquaternion {
     type Output = Self;
     /// Subtracts two tetraquaternions component-wise.
     fn sub(self, rhs: Self) -> Self {
@@ -182,7 +182,7 @@ impl Sub for TetraQuaternion {
     }
 }
 
-impl SubAssign for TetraQuaternion {
+impl SubAssign for Biquaternion {
     /// Applies in-place component-wise subtraction.
     fn sub_assign(&mut self, rhs: Self) {
         for i in 0..DIM {
@@ -191,14 +191,14 @@ impl SubAssign for TetraQuaternion {
     }
 }
 
-impl MulAssign for TetraQuaternion {
+impl MulAssign for Biquaternion {
     /// Applies in-place tetraquaternion multiplication.
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-impl TetraQuaternion {
+impl Biquaternion {
     /// Returns true when all coefficients are numerically near zero.
     pub fn is_zero(&self) -> bool {
         self.coeffs.iter().all(|&c| c.abs() < 1e-10)
@@ -321,9 +321,9 @@ mod tests {
 
     #[test]
     fn test_tetraquaternion_mul() {
-        let j = TetraQuaternion::basis(0); // j
-        let ki = TetraQuaternion::basis(1); // kI
-        let ii = TetraQuaternion::basis(4); // iI
+        let j = Biquaternion::basis(0); // j
+        let ki = Biquaternion::basis(1); // kI
+        let ii = Biquaternion::basis(4); // iI
 
         // j * kI = +iI
         let product1 = j * ki;
@@ -341,8 +341,8 @@ mod tests {
 
     #[test]
     fn test_addition() {
-        let a = TetraQuaternion::new(1.0, [0.0; 15]);
-        let b = TetraQuaternion::basis(0);
+        let a = Biquaternion::new(1.0, [0.0; 15]);
+        let b = Biquaternion::basis(0);
         let sum = a + b;
         assert_eq!(sum.coeffs[0], 1.0);
         assert_eq!(sum.coeffs[1], 1.0);
@@ -350,16 +350,16 @@ mod tests {
 
     #[test]
     fn test_identity() {
-        let one = TetraQuaternion::one();
-        let j = TetraQuaternion::basis(0);
+        let one = Biquaternion::one();
+        let j = Biquaternion::basis(0);
         assert_eq!(one * j, j);
         assert_eq!(j * one, j);
     }
 
     #[test]
     fn test_rotation_composition() {
-        let rot1 = TetraQuaternion::basis(0);
-        let rot2 = TetraQuaternion::basis(10);
+        let rot1 = Biquaternion::basis(0);
+        let rot2 = Biquaternion::basis(10);
         let composed = rot1 * rot2; // j*k = +i
 
         assert!((composed.coeffs[15] - 1.0).abs() < 1e-10);
