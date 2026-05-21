@@ -1,11 +1,16 @@
 [workspace]
 resolver = "2"
-members = ["crates/dst-math", "crates/dual-spacetime-simulator"]
+members = [
+    "crates/dst-math",
+    "crates/dst-expand",
+    "crates/dual-spacetime-simulator",
+]
 
 [workspace.package]
 edition = "2024"
 
 [workspace.dependencies]
+dst-expand = { path = "crates/dst-expand" }
 dst-math = { path = "crates/dst-math" }
 glam = "0.30.8"
 

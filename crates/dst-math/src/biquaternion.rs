@@ -219,10 +219,20 @@ impl Biquaternion {
     }
 }
 
-const BASIS_NAMES: [&str; 15] = [
+/// Human-readable labels for the 15 non-scalar basis elements (index `0..15`).
+pub const BASIS_LABELS: [&str; 15] = [
     " j ", "kI ", "kJ ", "kK ", "iI ", "iJ ", "iK ", " I ", " J ", " K ", " k ", "jI ", "jJ ",
     "jK ", " i ",
 ];
+
+/// One entry of the precomputed basis multiplication table.
+///
+/// Returns `(sign, out_index)` where `out_index == 0` is the scalar part and `1..=15` map to
+/// `Biquaternion::coeffs` indices (same convention as internal `MUL_TABLE`).
+pub fn basis_mul(left: usize, right: usize) -> (i8, usize) {
+    assert!(left < 15 && right < 15);
+    MUL_TABLE[left][right]
+}
 
 /// Formats the multiplication table into an aligned printable string.
 fn _to_mul_table_string() -> String {
@@ -232,7 +242,7 @@ fn _to_mul_table_string() -> String {
     }
     result.push_str("\n");
     result.push_str("   | ");
-    for name in BASIS_NAMES {
+    for name in BASIS_LABELS {
         result.push_str(&format!(" {:>3}", name));
     }
     result.push_str("\n");
@@ -242,7 +252,7 @@ fn _to_mul_table_string() -> String {
     }
     result.push('\n');
     for row in 0..15 {
-        result.push_str(&format!("{:>2}", BASIS_NAMES[row]));
+        result.push_str(&format!("{:>2}", BASIS_LABELS[row]));
         result.push_str("|");
         for col in 0..15 {
             let (sign, basis) = MUL_TABLE[row][col];
@@ -251,7 +261,7 @@ fn _to_mul_table_string() -> String {
             } else {
                 let mut cell = String::new();
                 cell.push_str(if sign > 0 { "+" } else { "-" });
-                cell.push_str(BASIS_NAMES[basis - 1].trim());
+                cell.push_str(BASIS_LABELS[basis - 1].trim());
                 format!("{:>4}", cell)
             };
             result.push_str(&cell);

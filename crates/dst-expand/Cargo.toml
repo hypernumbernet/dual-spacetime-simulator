@@ -1,0 +1,17 @@
+[package]
+name = "dst-expand"
+version = "0.1.0"
+edition.workspace = true
+description = "Symbolic expansion of dual-spacetime algebra (basis products, sandwich forms)"
+default-run = "dst-expand"
+
+[lib]
+name = "dst_expand"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dst-expand"
+path = "src/main.rs"
+
+[dependencies]
+dst-math.workspace = true

@@ -17,9 +17,10 @@
 | クレート | パス | 内容 |
 |----------|------|------|
 | `dst-math` | `crates/dst-math` | 双四元数・ビベクトル・`Spacetime` / ローレンツ変換（`glam` のみ依存） |
+| `dst-expand` | `crates/dst-expand` | 基底積・サンドイッチ積の記号展開（`dst-math` の乗法表を利用） |
 | `dual-spacetime-simulator` | `crates/dual-spacetime-simulator` | Vulkan + egui アプリ。`dst-math` を path 依存 |
 
-シミュレータは `dst_math::...` で数学 API を参照します。数学の単体テストは `cargo test -p dst-math` で実行します。
+シミュレータは `dst_math::...` で数学 API を参照します。数学の単体テストは `cargo test -p dst-math`、展開は `cargo test -p dst-expand` で実行します。
 
 ---
 
@@ -113,6 +114,15 @@
 - **`biquaternion`**, **`bivector`**：Graph3D（双四元数ベースのラピディティ可視化など）
 
 テストは `cargo test -p dst-math`（`crates/dst-math/tests/` とモジュール内 `#[cfg(test)]`）。
+
+---
+
+## 6b. 展開クレート（`crates/dst-expand`）
+
+`dst-math` の `BASIS_LABELS` と `basis_mul` を使い、基底モノミアルやサンドイッチ積を文字列の和として展開します。
+
+- ライブラリ: `expand_basis_product`, `expand_sandwich`, `format_expanded`
+- CLI: `dst-expand table | mul <i> <j> | sandwich <l> <m> <r>`
 
 ---
 

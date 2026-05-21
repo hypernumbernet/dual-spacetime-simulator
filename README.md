@@ -10,9 +10,8 @@
 | パス | クレート | 役割 |
 |------|----------|------|
 | `crates/dst-math` | `dst-math` | 双四元数・ビベクトル・時空 / ローレンツ変換 |
+| `crates/dst-expand` | `dst-expand` | 基底積・サンドイッチ積の記号展開 CLI / ライブラリ |
 | `crates/dual-spacetime-simulator` | `dual-spacetime-simulator` | Vulkan + egui シミュレータ（本アプリ） |
-
-将来、代数的式の全成分展開用クレート（例: `crates/dst-expand`）を `members` に追加する想定です。
 
 ## ビルド・実行
 
@@ -31,10 +30,18 @@ cargo run -p dual-spacetime-simulator --release
 
 `cargo build -p dual-spacetime-simulator --release` でも同じ設定（ルート `Cargo.toml` の `[profile.release]`）でビルドできます。
 
-数学クレートのみテストする場合:
+数学・展開クレートのみテストする場合:
 
 ```powershell
 cargo test -p dst-math
+cargo test -p dst-expand
+```
+
+記号展開 CLI（例: 基底 `i` と `j` の積、インデックス 14 と 0）:
+
+```powershell
+cargo run -p dst-expand -- mul 14 0
+cargo run -p dst-expand -- table
 ```
 
 ワークスペース全体:
