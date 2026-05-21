@@ -1,6 +1,7 @@
 //! Pretty-printing for [`ExpandedProduct`](crate::biquaternion::ExpandedProduct).
 
 use crate::biquaternion::{BasisMonomial, ExpandedProduct};
+use crate::coeff_format::format_coeff_display;
 use dst_math::biquaternion::BASIS_LABELS;
 
 /// Formats an expanded product as a sum of basis monomials.
@@ -8,28 +9,72 @@ pub fn format_expanded(exp: &ExpandedProduct) -> String {
     if exp.terms.is_empty() {
         return "0".to_string();
     }
-    exp.terms
-        .iter()
-        .map(format_term)
-        .collect::<Vec<_>>()
-        .join(" + ")
-        .replace("+ -", "- ")
+    let parts: Vec<String> = exp.terms.iter().map(format_term).collect();
+    let mut out = parts[0].clone();
+    for part in parts.iter().skip(1) {
+        if part.starts_with('-') && !part.starts_with("(-") {
+            out.push_str(" - ");
+            out.push_str(part.strip_prefix('-').unwrap_or(part).trim_start());
+        } else {
+            out.push_str(" + ");
+            out.push_str(part);
+        }
+    }
+    out
+}
+
+fn coeff_needs_parens(coeff: &str) -> bool {
+    coeff.contains('+') || coeff.chars().skip(1).any(|c| c == '-')
 }
 
 fn format_term(term: &crate::biquaternion::ExpandedTerm) -> String {
+    let coeff = format_coeff_display(&term.coeff.0);
     let mono = format_monomial(&term.monomial);
-    if term.coeff.0 == "1" {
+    if coeff == "1" {
         mono
-    } else if term.coeff.0 == "-1" {
+    } else if coeff == "-1" {
         if mono == "1" {
             "-1".to_string()
         } else {
             format!("-{mono}")
         }
     } else if mono == "1" {
-        term.coeff.0.clone()
+        if coeff_needs_parens(&coeff) {
+            format!("({coeff})")
+        } else {
+            coeff
+        }
     } else {
-        format!("{}*{}", term.coeff.0, mono)
+        let coeff_part = if coeff_needs_parens(&coeff) {
+            format!("({coeff})")
+        } else {
+            coeff
+        };
+        format!("{coeff_part}{mono}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::biquaternion::{BasisMonomial, Coefficient, ExpandedProduct, ExpandedTerm};
+
+    #[test]
+    fn format_sum_coeff_in_parens_before_basis() {
+        use crate::expand_expr;
+        let exp = expand_expr("(b-ai)(a+bi)").unwrap();
+        assert_eq!(format_expanded(&exp), "2ab + (-aa+bb)[i]");
+    }
+
+    #[test]
+    fn format_strips_coeff_parens_and_signs() {
+        let exp = ExpandedProduct {
+            terms: vec![ExpandedTerm {
+                coeff: Coefficient("-(b)*(c)".into()),
+                monomial: BasisMonomial::basis(4),
+            }],
+        };
+        assert_eq!(format_expanded(&exp), "-bc[iI]");
     }
 }
 

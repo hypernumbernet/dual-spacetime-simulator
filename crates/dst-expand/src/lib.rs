@@ -4,6 +4,7 @@
 //! expansions) without evaluating numeric coefficients.
 
 pub mod biquaternion;
+pub mod coeff_format;
 pub mod expr;
 pub mod format;
 
