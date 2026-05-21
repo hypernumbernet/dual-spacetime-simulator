@@ -1,0 +1,8 @@
+[package]
+name = "dst-math"
+version = "0.1.0"
+edition.workspace = true
+description = "Dual spacetime algebra: biquaternions, bivectors, and Lorentz/spacetime utilities"
+
+[dependencies]
+glam.workspace = true

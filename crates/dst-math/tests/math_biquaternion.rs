@@ -1,4 +1,4 @@
-use dual_spacetime_simulator::math::biquaternion::Biquaternion;
+use dst_math::biquaternion::Biquaternion;
 
 fn approx_eq(a: Biquaternion, b: Biquaternion) -> bool {
     a.max_abs_diff(&b) < 1e-9

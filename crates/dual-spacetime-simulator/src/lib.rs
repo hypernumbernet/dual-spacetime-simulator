@@ -5,7 +5,6 @@ pub mod camera;
 pub mod graph3d;
 pub mod initial_condition;
 pub mod integration;
-pub mod math;
 pub mod pipeline;
 pub mod settings;
 pub mod simulation;

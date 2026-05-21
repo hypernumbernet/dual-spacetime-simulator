@@ -1,0 +1,33 @@
+[package]
+name = "dual-spacetime-simulator"
+version = "0.2.0"
+edition.workspace = true
+
+[lib]
+name = "dual_spacetime_simulator"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dual-spacetime-simulator"
+path = "src/main.rs"
+
+[dependencies]
+ahash = "0.8.12"
+ash = { version = "0.38", features = ["loaded"] }
+ash-window = "0.13"
+bytemuck = { version = "1.25.0", features = ["derive"] }
+dst-math.workspace = true
+egui = "0.31.1"
+egui-ash-renderer = { version = "0.8", default-features = false }
+egui-winit = { version = "0.31.1", default-features = false }
+glam.workspace = true
+gpu-allocator = { version = "0.27", default-features = false, features = ["vulkan"] }
+num_cpus = "1.17.0"
+rand = "0.9.2"
+rand_distr = "0.5.1"
+raw-window-handle = "0.6"
+rayon = "1.11.0"
+satkit = "0.9.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+winit = "0.30.12"

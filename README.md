@@ -3,6 +3,17 @@
 四次元時空や相対論モチーフの可視化を、粒子シミュレーションと 3D 描画で試すデスクトップアプリです。  
 描画は **Vulkan（ash）**、UI は **egui** を使用しています。
 
+共有の代数学ライブラリは **`crates/dst-math`** にあり、Cargo workspace の path 依存で各クレートから利用します。
+
+## リポジトリ構成
+
+| パス | クレート | 役割 |
+|------|----------|------|
+| `crates/dst-math` | `dst-math` | 双四元数・ビベクトル・時空 / ローレンツ変換 |
+| `crates/dual-spacetime-simulator` | `dual-spacetime-simulator` | Vulkan + egui シミュレータ（本アプリ） |
+
+将来、代数的式の全成分展開用クレート（例: `crates/dst-expand`）を `members` に追加する想定です。
+
 ## ビルド・実行
 
 ### 必要な環境
@@ -15,10 +26,22 @@
 ### 実行コマンド
 
 ```powershell
-cargo run --release
+cargo run -p dual-spacetime-simulator --release
 ```
 
-`cargo build --release` でも同じ設定（`lto = true`, `codegen-units = 1`, `panic = "abort"`）でビルドできます。
+`cargo build -p dual-spacetime-simulator --release` でも同じ設定（ルート `Cargo.toml` の `[profile.release]`）でビルドできます。
+
+数学クレートのみテストする場合:
+
+```powershell
+cargo test -p dst-math
+```
+
+ワークスペース全体:
+
+```powershell
+cargo test --workspace
+```
 
 ## 現在の主要依存
 
@@ -30,21 +53,21 @@ cargo run --release
 
 ## アーキテクチャ概要
 
-### アプリ進行 (`src/main.rs`)
+### アプリ進行 (`crates/dual-spacetime-simulator/src/main.rs`)
 
 - `winit` の `ApplicationHandler` 実装 `App` がイベントループを管理
 - `resumed` で `VulkanBase` と `ParticleRenderPipeline`、`Gui` を初期化
 - シミュレーション更新は別スレッドで実行し、描画タイミングと分離
 - `UiState` と `SimulationManager` は `Arc<RwLock<...>>` で共有
 
-### Vulkan 初期化 (`src/vulkan_base.rs`)
+### Vulkan 初期化 (`crates/dual-spacetime-simulator/src/vulkan_base.rs`)
 
 - `ash` で Vulkan インスタンス / サーフェス / 論理デバイスを構築
 - グラフィックス + プレゼント可能なキューファミリを選択
 - スワップチェーン、イメージビュー、コマンドプール、同期オブジェクトを管理
 - メモリ割り当ては `gpu-allocator` を使用
 
-### 描画パイプライン (`src/pipeline.rs`)
+### 描画パイプライン (`crates/dual-spacetime-simulator/src/pipeline.rs`)
 
 - 1 つのレンダーパス内でシーン描画後に egui を重ねる構成
 - グラフィックスパイプラインは以下を用途別に保持:
@@ -53,7 +76,7 @@ cargo run --release
   - GPU Tree (`LineList` / `TriangleList` をモードで切替)
 - GPU Tree 用のコンピュートパイプラインを持ち、木構造頂点の生成更新を実行
 
-### UI 統合 (`src/integration.rs`, `src/ui.rs`, `src/ui_state.rs`)
+### UI 統合 (`crates/dual-spacetime-simulator/src/integration.rs` など)
 
 - `egui-winit` で入力処理、`egui-ash-renderer` で Vulkan コマンドに描画を記録
 - モード切替、各種パネル表示、設定保存 (`AppSettings`) を UI から操作
@@ -67,7 +90,7 @@ cargo run --release
 
 ## シェーダ
 
-シェーダは `src/shaders/` 配下の GLSL を `build.rs` で `glslc` コンパイルし、  
+シェーダは `crates/dual-spacetime-simulator/src/shaders/` 配下の GLSL を `build.rs` で `glslc` コンパイルし、  
 実行時には `include_bytes!(concat!(env!("OUT_DIR"), ...))` で `.spv` を読み込みます。
 
 主なファイル:

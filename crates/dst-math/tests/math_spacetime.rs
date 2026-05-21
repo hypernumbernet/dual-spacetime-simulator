@@ -1,6 +1,6 @@
-//! Extra integration coverage for `math::spacetime` (see also crate-local `#[cfg(test)]`).
+//! Extra integration coverage for `spacetime` (see also crate-local `#[cfg(test)]`).
 
-use dual_spacetime_simulator::math::spacetime::{
+use dst_math::spacetime::{
     Spacetime, lorentz_boost_matrix_from_velocity, rapidity_from_momentum, rapidity_vector,
 };
 use glam::{DMat4, DVec3, DVec4};

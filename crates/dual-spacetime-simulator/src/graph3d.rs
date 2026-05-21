@@ -1,6 +1,6 @@
 //! 3D Graph mode: sample points from UI parameters for the particle buffer.
 
-use crate::math::spacetime::{Spacetime, lorentz_boost_matrix_from_velocity};
+use dst_math::spacetime::{Spacetime, lorentz_boost_matrix_from_velocity};
 use crate::ui_state::GraphType;
 use glam::{DVec3, DVec4};
 use std::hash::{Hash, Hasher};

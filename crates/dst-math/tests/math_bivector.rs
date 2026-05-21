@@ -1,4 +1,4 @@
-use dual_spacetime_simulator::math::bivector::BivectorBoost;
+use dst_math::bivector::BivectorBoost;
 
 #[test]
 fn norm_squared_matches_norm_squared() {

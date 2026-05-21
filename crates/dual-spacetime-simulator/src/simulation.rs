@@ -3,7 +3,7 @@ use rayon::prelude::*;
 use std::sync::{Arc, RwLock};
 
 use crate::initial_condition::InitialCondition;
-use crate::math::spacetime::{Spacetime, rapidity_from_momentum};
+use dst_math::spacetime::{Spacetime, rapidity_from_momentum};
 use crate::ui_state::SimulationType;
 
 pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
@@ -273,7 +273,7 @@ impl SimulationManager {
             .into_iter()
             .map(|p| Particle {
                 position: p.position,
-                velocity: crate::math::spacetime::rapidity_vector(p.velocity, ls),
+                velocity: dst_math::spacetime::rapidity_vector(p.velocity, ls),
                 mass: p.mass,
                 color: p.color,
             })
