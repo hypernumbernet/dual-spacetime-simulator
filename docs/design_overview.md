@@ -121,8 +121,8 @@
 
 `dst-math` の `BASIS_LABELS` と `basis_mul` を使い、基底モノミアルやサンドイッチ積を文字列の和として展開します。
 
-- ライブラリ: `expand_basis_product`, `expand_sandwich`, `format_expanded`
-- CLI: `dst-expand table | mul <i> <j> | sandwich <l> <m> <r>`
+- ライブラリ: `expand_basis_product`, `expand_sandwich`, `expand_expr`, `format_expanded`
+- CLI: `dst-expand table | mul <i> <j> | sandwich <l> <m> <r> | expr <expression>`
 
 ---
 

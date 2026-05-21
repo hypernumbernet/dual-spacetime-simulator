@@ -1,5 +1,7 @@
 //! Symbolic basis products and sandwich expansions for the 15+1 tetraquaternion basis.
 
+use std::collections::BTreeMap;
+
 use dst_math::biquaternion::{BASIS_LABELS, basis_mul};
 
 /// Coefficient factor in a symbolic term (variable name or numeric literal as text).
@@ -178,7 +180,38 @@ fn multiply_expanded(left: &ExpandedProduct, right: &ExpandedProduct) -> Expande
     out
 }
 
-fn multiply_coeff_text(a: &str, b: &str) -> String {
+/// Merges terms that share the same basis monomial into one term per monomial.
+pub fn combine_like_terms(exp: ExpandedProduct) -> ExpandedProduct {
+    let mut grouped: BTreeMap<Vec<usize>, Vec<String>> = BTreeMap::new();
+    for term in exp.terms {
+        grouped
+            .entry(term.monomial.factors)
+            .or_default()
+            .push(term.coeff.0);
+    }
+    let terms = grouped
+        .into_iter()
+        .map(|(factors, coeffs)| ExpandedTerm {
+            coeff: combine_coeff_sum(&coeffs).into(),
+            monomial: BasisMonomial { factors },
+        })
+        .collect();
+    ExpandedProduct { terms }
+}
+
+fn combine_coeff_sum(coeffs: &[String]) -> String {
+    match coeffs.len() {
+        0 => "0".to_string(),
+        1 => coeffs[0].clone(),
+        _ => coeffs
+            .iter()
+            .map(|c| format!("({c})"))
+            .collect::<Vec<_>>()
+            .join("+"),
+    }
+}
+
+pub(crate) fn multiply_coeff_text(a: &str, b: &str) -> String {
     if a == "1" {
         return b.to_string();
     }
@@ -243,6 +276,26 @@ mod tests {
         } else {
             assert_eq!(exp.terms[0].monomial.factors, vec![out - 1]);
         }
+    }
+
+    #[test]
+    fn combine_like_terms_merges_same_monomial() {
+        let exp = ExpandedProduct {
+            terms: vec![
+                ExpandedTerm {
+                    coeff: Coefficient::named("a"),
+                    monomial: BasisMonomial::basis(0),
+                },
+                ExpandedTerm {
+                    coeff: Coefficient::named("b"),
+                    monomial: BasisMonomial::basis(0),
+                },
+            ],
+        };
+        let merged = combine_like_terms(exp);
+        assert_eq!(merged.terms.len(), 1);
+        assert_eq!(merged.terms[0].coeff.0, "(a)+(b)");
+        assert_eq!(merged.terms[0].monomial.factors, vec![0]);
     }
 
     #[test]

@@ -4,11 +4,14 @@
 //! expansions) without evaluating numeric coefficients.
 
 pub mod biquaternion;
+pub mod expr;
 pub mod format;
 
 pub use format::format_expanded;
 
 pub use biquaternion::{
-    BasisMonomial, Coefficient, ExpandedProduct, expand_basis_monomial, expand_basis_product,
-    expand_sandwich, mul_table_markdown,
+    BasisMonomial, Coefficient, ExpandedProduct, combine_like_terms, expand_basis_monomial,
+    expand_basis_product, expand_sandwich, mul_table_markdown,
 };
+
+pub use expr::{ParseError, expand_expr, parse_expr};

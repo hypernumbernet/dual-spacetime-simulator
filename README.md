@@ -42,6 +42,7 @@ cargo test -p dst-expand
 ```powershell
 cargo run -p dst-expand -- mul 14 0
 cargo run -p dst-expand -- table
+cargo run -p dst-expand -- expr "(ai+bkI)(cj+dkK)"
 ```
 
 ワークスペース全体:

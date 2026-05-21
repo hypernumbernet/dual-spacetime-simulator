@@ -1,7 +1,8 @@
 //! CLI for symbolic basis / sandwich expansions.
 
 use dst_expand::{
-    BasisMonomial, Coefficient, expand_basis_product, expand_sandwich, mul_table_markdown,
+    BasisMonomial, Coefficient, expand_basis_product, expand_expr, expand_sandwich,
+    mul_table_markdown,
 };
 use dst_expand::format_expanded;
 use std::env;
@@ -12,10 +13,12 @@ fn usage() -> &'static str {
      Usage:\n\
        dst-expand table              Print 15×15 basis multiplication table (Markdown)\n\
        dst-expand mul <i> <j>        Expand product of basis i and j (0..14)\n\
-       dst-expand sandwich <l> <m> <r>  Expand sandwich with unit coefficients\n\n\
+       dst-expand sandwich <l> <m> <r>  Expand sandwich with unit coefficients\n\
+       dst-expand expr <expression>  Expand a coefficient-bearing expression\n\n\
      Examples:\n\
        dst-expand mul 4 5\n\
-       dst-expand sandwich 14 0 14\n"
+       dst-expand sandwich 14 0 14\n\
+       dst-expand expr \"(ai+bkI)(cj+dkK)\"\n"
 }
 
 fn parse_basis_index(arg: &str) -> Result<usize, ExitCode> {
@@ -84,6 +87,26 @@ fn main() -> ExitCode {
             );
             println!("{}", format_expanded(&exp));
             ExitCode::SUCCESS
+        }
+        "expr" => {
+            let Some(expression) = args.next() else {
+                eprintln!("error: missing expression");
+                return ExitCode::from(2);
+            };
+            if args.next().is_some() {
+                eprintln!("error: expr takes a single expression argument");
+                return ExitCode::from(2);
+            }
+            match expand_expr(&expression) {
+                Ok(exp) => {
+                    println!("{}", format_expanded(&exp));
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::from(2)
+                }
+            }
         }
         "-h" | "--help" | "help" => {
             print!("{}", usage());
