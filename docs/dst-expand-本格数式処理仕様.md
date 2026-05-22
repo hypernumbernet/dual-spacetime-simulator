@@ -18,6 +18,51 @@
 
 ## 2. 現状分析
 
+### 2.0 Phase 0: 現行 CLI 仕様（実装済み）
+
+Phase 0 は **tetraquaternion（15 非スカラー基底 + スカラー）** の記号展開 CLI を安定化することを目的とする。G(3,1,1) / PGA / REPL など Phase 1 以降の機能は本節の対象外である。
+
+#### 2.0.1 サブコマンド
+
+| コマンド | 引数 | 成功時 stdout | 終了コード |
+|---------|------|--------------|-----------|
+| （引数なし） | なし | usage 全文 | 0 |
+| `help` / `-h` / `--help` | なし | usage 全文 | 0 |
+| `table` | なし（余分な引数不可） | 15×15 Markdown 乗法表 | 0 |
+| `mul <i> <j>` | 基底インデックス 2 個（`0..14`） | 展開結果 1 行 | 0 |
+| `sandwich <l> <m> <r>` | 基底インデックス 3 個（`0..14`） | サンドイッチ積の展開結果 1 行 | 0 |
+| `expr <expression>` | 式文字列 1 個 | 式展開結果 1 行 | 0 |
+
+未知のサブコマンド: stderr に `error: unknown command ...`、stdout に usage、終了コード `2`。
+
+#### 2.0.2 エラー方針
+
+- ユーザー入力エラー（引数不足・過剰、範囲外インデックス、式パース失敗）は **stderr** に `error:` で始まるメッセージを出力し、終了コード **2** を返す。
+- 成功時は **stdout** のみに結果を出力し、stderr は空とする。
+- `mul` の引数不足は従来どおり個別メッセージを維持する:
+  - 0 個: `error: missing left basis index`
+  - 1 個: `error: missing right basis index`
+  - 3 個以上: `error: mul takes exactly 2 argument(s)`
+- `sandwich` の引数個数不一致: `error: sandwich requires exactly 3 basis indices`（不足）または `error: sandwich takes exactly 3 argument(s)`（過剰）
+- `expr` の引数個数不一致: `error: missing expression` / `error: expr takes exactly 1 argument(s)`
+- `table` の余分な引数: `error: table takes exactly 0 argument(s)`
+- 基底インデックス範囲外: `error: basis index must be 0..14, got ...`
+- 式パース失敗: `error: at offset N: ...`（`ParseError` の表示形式）
+
+#### 2.0.3 `expr` 式言語（Phase 0）
+
+- 15 基底ラベル: `j`, `kI`, `kJ`, `kK`, `iI`, `iJ`, `iK`, `I`, `J`, `K`, `k`, `jI`, `jJ`, `jK`, `i`（長いラベル優先で字句解析）
+- 係数: ASCII 識別子・数値リテラル（記号簡約は `coeff_format` が担当）
+- 演算: 暗黙積、`+` / `-` 加減、括弧、明示 `*`
+- 出力: `[label]` 形式の基底モノミアル和（例: `[j]`, `-1`, `2ab + (-aa+bb)[i]`）
+
+#### 2.0.4 テスト方針
+
+- `crates/dst-expand/tests/cli_smoke.rs` に CLI contract test を置く。
+- テストは **仕様に忠実** に書き、stdout / stderr / 終了コードを検証する。
+- ライブラリ API（`expand_basis_product`, `expand_expr`, `format_expanded`）との一致もクロスチェックする。
+- Phase 1 以降の機能（REPL、G(3,1,1)、LaTeX 出力など）は CLI テスト対象外とし、追加時に別テストスイートを設ける。
+
 ### 2.1 既存機能
 - 15基底の Cl(3,1) 乗法表に基づく `expand_basis_product`
 - サンドイッチ積 `expand_sandwich`
@@ -55,7 +100,7 @@
 
 ## 4. 主要ターゲット機能（優先度順）
 
-### 4.1 統一代数基盤の構築（最優先）
+### 4.1 統一代数基盤の構築（Phase 1 以降・最優先）
 - 各代数系に対する `Algebra` trait または enum で文脈を管理
   - `Clifford { p, q, r }`
   - `CayleyDickson { dimension: usize }`（2,4,8,16,...）
@@ -96,7 +141,7 @@
 - 研究ノート向け Unicode テキスト出力（上付き・下付き、色分け）
 - REPL からの直接可視化リクエスト（将来的に egui 連携）
 
-### 4.8 インタラクティブ環境
+### 4.8 インタラクティブ環境（Phase 2 以降）
 - `dst-expand repl` で対話的計算
 - コンテキスト切り替え（`use G(3,1,1)` や `use HxH`）
 - 履歴、自動 LaTeX スニペット保存
@@ -194,8 +239,11 @@ crates/dst-expand/
 
 ## 7. 開発ロードマップ
 
-### Phase 0
-- 既存機能安定化 + 本仕様書合意
+### Phase 0（現行・本 PR スコープ）
+- tetraquaternion 記号展開 CLI（`table` / `mul` / `sandwich` / `expr`）の契約明文化
+- 引数検証の厳密化（余分な引数の拒否、`sandwich` の 4 引数以上バグ修正）
+- CLI contract test の網羅（`tests/cli_smoke.rs`）
+- 本仕様書 2.0 節との整合
 
 ### Phase 1（短期）
 - 統一 `Algebra` 基盤と G(3,1,1) 32基底

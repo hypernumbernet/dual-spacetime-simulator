@@ -3,6 +3,7 @@
 //! Builds human-readable sums of basis monomials (for sandwich products and full component
 //! expansions) without evaluating numeric coefficients.
 
+pub mod algebra;
 pub mod biquaternion;
 pub mod coeff_format;
 pub mod expr;
