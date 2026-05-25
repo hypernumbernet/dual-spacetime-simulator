@@ -155,14 +155,13 @@ cargo run -p dst-expand -- <subcommand> [args...]
 ### 4.1 統一代数基盤の構築（Phase 1 以降・最優先）
 - 各代数系に対する `Algebra` trait または enum で文脈を管理
   - `Pga` — G(3,1,1) Projective Geometric Algebra
-  - `G { p, q, r }` — 一般幾何代数 Cl(p, q, r)
   - `CayleyDickson { dimension: usize }`（2,4,8,16,...）
   - `TensorProduct { left: Algebra, right: Algebra }`
 - 基底要素の名前解決（Clifford では `e0,e1,...`、`i,j,k` もエイリアス、Cayley-Dickson では `e0..e7` など）
 - 乗法表の動的生成とキャッシュ
 
 ### 4.2 G(3,1,1) PGA の完全サポート
-- 32次元 Clifford 代数の基底（スカラー + 5ベクトル + 10 bivector + 10 trivector + 5 quadvector + pseudoscalar）
+- 32次元 射影幾何代数（Projective Geometric Algebra）の基底（スカラー + 5ベクトル + 10 bivector + 10 trivector + 5 quadvector + pseudoscalar）
 - null 方向 \(e_4\) と null bivector \(N_\mu = e_4 \wedge e_\mu\) の特殊処理
 - 10次元 bivector 生成子（hyperbolic / cyclic / null）の分類と操作
 
@@ -441,7 +440,7 @@ crates/dst-expand/
 - 基本 multivector 演算（加算、幾何積、グレード射影、reverse、conjugate）
 - メトリック: \(e_0^2=-1\), \(e_1^2=e_2^2=e_3^2=+1\), \(e_4^2=0\)
 - 単体テスト: `crates/dst-math/tests/math_pga.rs`（20+ ケース）
-- **CLI / REPL 拡張は Phase 2**（Phase 0 biquaternion CLI は後方互換のまま維持）
+- **CLI / REPL 拡張**（Phase 0 biquaternion CLI は後方互換のまま維持）
 
 #### Phase 1 成功基準（自動テスト）
 

@@ -1,56 +1,23 @@
-//! Parser for coefficient-bearing biquaternion expressions.
+//! Parser for coefficient-bearing G(3,1,1) PGA expressions (generators e0..e4).
 
-use crate::biquaternion::{
-    BasisMonomial, Coefficient, ExpandedProduct, ExpandedTerm, combine_like_terms,
-    expand_basis_monomial, multiply_coeff_text,
+use crate::biquaternion::Coefficient;
+use crate::expr::ParseError;
+use crate::pga::{
+    BasisMonomial, ExpandedProduct, ExpandedTerm, combine_like_terms, expand_generator_monomial,
 };
-use dst_math::biquaternion::BASIS_LABELS;
+use crate::biquaternion::multiply_coeff_text;
 
-/// Error while parsing an expression.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ParseError {
-    pub message: String,
-    pub offset: usize,
-}
-
-impl ParseError {
-    pub(crate) fn new(offset: usize, message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            offset,
-        }
-    }
-}
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "at offset {}: {}", self.offset, self.message)
-    }
-}
-
-impl std::error::Error for ParseError {}
-
-/// Basis label and index, sorted by label length descending for longest-match lexing.
-const BASIS_TOKENS: [(&str, usize); 15] = [
-    ("kI", 1),
-    ("kJ", 2),
-    ("kK", 3),
-    ("iI", 4),
-    ("iJ", 5),
-    ("iK", 6),
-    ("jI", 11),
-    ("jJ", 12),
-    ("jK", 13),
-    ("I", 7),
-    ("J", 8),
-    ("K", 9),
-    ("j", 0),
-    ("k", 10),
-    ("i", 14),
+/// PGA generator label and index (0..5), sorted by label length descending.
+const GENERATOR_TOKENS: [(&str, usize); 5] = [
+    ("e0", 0),
+    ("e1", 1),
+    ("e2", 2),
+    ("e3", 3),
+    ("e4", 4),
 ];
 
-/// Parses an expression into an expanded product (without combining like terms).
-pub fn parse_expr(input: &str) -> Result<ExpandedProduct, ParseError> {
+/// Parses a PGA expression into an expanded product (without combining like terms).
+pub fn parse_pga_expr(input: &str) -> Result<ExpandedProduct, ParseError> {
     let mut p = Parser::new(input);
     let exp = p.parse_expr()?;
     p.skip_ws();
@@ -60,9 +27,9 @@ pub fn parse_expr(input: &str) -> Result<ExpandedProduct, ParseError> {
     Ok(exp)
 }
 
-/// Parses and expands an expression, merging like basis monomials.
-pub fn expand_expr(input: &str) -> Result<ExpandedProduct, ParseError> {
-    parse_expr(input).map(combine_like_terms)
+/// Parses and expands a PGA expression, merging like basis monomials.
+pub fn expand_pga_expr(input: &str) -> Result<ExpandedProduct, ParseError> {
+    parse_pga_expr(input).map(combine_like_terms)
 }
 
 struct Parser<'a> {
@@ -178,13 +145,13 @@ impl<'a> Parser<'a> {
         let start = self.pos;
         let coeff = self.try_parse_coeff();
         let mut factors = Vec::new();
-        while let Some(idx) = self.try_parse_basis() {
+        while let Some(idx) = self.try_parse_generator() {
             factors.push(idx);
         }
         if coeff.is_none() && factors.is_empty() {
             return Err(self.error(format!(
-                "expected term (coefficient and/or basis); known bases: {}",
-                basis_hint()
+                "expected term (coefficient and/or generator); known generators: {}",
+                generator_hint()
             )));
         }
         let coeff = coeff.unwrap_or_else(|| "1".to_string());
@@ -192,13 +159,19 @@ impl<'a> Parser<'a> {
             return Err(ParseError::new(start, "empty coefficient"));
         }
         let monomial = BasisMonomial { factors };
-        if monomial.factors.len() <= 1 {
+        if monomial.factors.is_empty() {
             return Ok(ExpandedTerm {
                 coeff: Coefficient(coeff),
                 monomial,
             });
         }
-        let mut exp = expand_basis_monomial(&monomial);
+        let mut exp = expand_generator_monomial(&monomial);
+        if exp.terms.is_empty() {
+            return Ok(ExpandedTerm {
+                coeff: Coefficient("0".into()),
+                monomial: BasisMonomial::scalar(),
+            });
+        }
         let mut term = exp.terms.pop().expect("expanded monomial has one term");
         term.coeff = multiply_coeff_text(&coeff, &term.coeff.0).into();
         Ok(term)
@@ -215,13 +188,13 @@ impl<'a> Parser<'a> {
         }
         let end = self.ident_run_end();
         let slice = &self.input[start..end];
-        if self.only_bases_in_range(start, end) {
+        if self.only_generators_in_range(start, end) {
             return None;
         }
         for k in 1..slice.len() {
             let coeff_part = &slice[..k];
             let rest = start + k;
-            if self.only_bases_in_range(rest, end) {
+            if self.only_generators_in_range(rest, end) {
                 self.pos = rest;
                 return Some(coeff_part.to_string());
             }
@@ -249,13 +222,13 @@ impl<'a> Parser<'a> {
         pos
     }
 
-    fn only_bases_in_range(&self, start: usize, end: usize) -> bool {
+    fn only_generators_in_range(&self, start: usize, end: usize) -> bool {
         if start >= end {
             return false;
         }
         let mut pos = start;
         while pos < end {
-            match self.basis_match_at(pos) {
+            match self.generator_match_at(pos) {
                 Some((len, _)) => pos += len,
                 None => return false,
             }
@@ -263,10 +236,10 @@ impl<'a> Parser<'a> {
         true
     }
 
-    fn try_parse_basis(&mut self) -> Option<usize> {
+    fn try_parse_generator(&mut self) -> Option<usize> {
         let start = self.pos;
         self.skip_ws();
-        if let Some((len, idx)) = self.basis_match_at(self.pos) {
+        if let Some((len, idx)) = self.generator_match_at(self.pos) {
             self.pos += len;
             return Some(idx);
         }
@@ -276,9 +249,9 @@ impl<'a> Parser<'a> {
         None
     }
 
-    fn basis_match_at(&self, pos: usize) -> Option<(usize, usize)> {
+    fn generator_match_at(&self, pos: usize) -> Option<(usize, usize)> {
         let rest = &self.input[pos..];
-        for &(label, idx) in &BASIS_TOKENS {
+        for &(label, idx) in &GENERATOR_TOKENS {
             if rest.starts_with(label) {
                 return Some((label.len(), idx));
             }
@@ -320,10 +293,10 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn basis_hint() -> String {
-    BASIS_LABELS
+fn generator_hint() -> String {
+    GENERATOR_TOKENS
         .iter()
-        .map(|l| l.trim())
+        .map(|(label, _)| *label)
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -331,82 +304,89 @@ fn basis_hint() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::biquaternion::{expand_basis_monomial, expand_basis_product};
+    use crate::pga::{expand_basis_product, expand_generator_monomial};
 
     #[test]
-    fn parse_single_basis() {
-        let exp = parse_expr("j").unwrap();
+    fn parse_single_generator() {
+        let exp = parse_pga_expr("e0").unwrap();
         assert_eq!(exp.terms.len(), 1);
         assert_eq!(exp.terms[0].coeff.0, "1");
-        assert_eq!(exp.terms[0].monomial.factors, vec![0]);
+        assert_eq!(exp.terms[0].monomial.factors, vec![1]);
     }
 
     #[test]
-    fn parse_coeff_basis() {
-        let exp = parse_expr("ai").unwrap();
+    fn parse_coeff_generator() {
+        let exp = parse_pga_expr("ae0").unwrap();
         assert_eq!(exp.terms[0].coeff.0, "a");
-        assert_eq!(exp.terms[0].monomial.factors, vec![14]);
+        assert_eq!(exp.terms[0].monomial.factors, vec![1]);
     }
 
     #[test]
-    fn parse_product_matches_mul() {
-        let exp = parse_expr("ij").unwrap();
-        let table = expand_basis_product(14, 0);
+    fn parse_e0_squared() {
+        let exp = expand_pga_expr("(e0)(e0)").unwrap();
         assert_eq!(exp.terms.len(), 1);
-        assert_eq!(exp.terms[0].coeff.0, table.terms[0].coeff.0);
-        assert_eq!(
-            exp.terms[0].monomial.factors,
-            table.terms[0].monomial.factors
-        );
+        assert_eq!(exp.terms[0].coeff.0, "-1");
+        assert!(exp.terms[0].monomial.factors.is_empty());
+    }
+
+    #[test]
+    fn parse_e4_squared_is_zero() {
+        let exp = expand_pga_expr("e4e4").unwrap();
+        assert!(exp.terms.is_empty());
+    }
+
+    #[test]
+    fn parse_anticommute_sum_is_zero() {
+        let exp = expand_pga_expr("e0e1 + e1e0").unwrap();
+        assert!(exp.terms.is_empty());
     }
 
     #[test]
     fn parse_sum_two_terms() {
-        let exp = parse_expr("ai+bkI").unwrap();
+        let exp = parse_pga_expr("ae0+be1").unwrap();
         assert_eq!(exp.terms.len(), 2);
         assert_eq!(exp.terms[0].coeff.0, "a");
-        assert_eq!(exp.terms[0].monomial.factors, vec![14]);
+        assert_eq!(exp.terms[0].monomial.factors, vec![1]);
         assert_eq!(exp.terms[1].coeff.0, "b");
-        assert_eq!(exp.terms[1].monomial.factors, vec![1]);
+        assert_eq!(exp.terms[1].monomial.factors, vec![2]);
     }
 
     #[test]
-    fn parse_parenthesized_product_expands() {
-        let exp = expand_expr("(ai+bkI)(cj+dkK)").unwrap();
-        assert!(!exp.terms.is_empty());
-        let manual_left = parse_expr("ai+bkI").unwrap();
-        let manual_right = parse_expr("cj+dkK").unwrap();
-        let mut manual = manual_left;
-        manual.mul_assign(&manual_right);
-        let manual = combine_like_terms(manual);
-        assert_eq!(exp.terms.len(), manual.terms.len());
+    fn parse_product_matches_mul() {
+        let exp = parse_pga_expr("e0e1").unwrap();
+        let table = expand_basis_product(1, 2);
+        assert_eq!(exp.terms.len(), table.terms.len());
+        if !exp.terms.is_empty() {
+            assert_eq!(exp.terms[0].coeff.0, table.terms[0].coeff.0);
+            assert_eq!(exp.terms[0].monomial.factors, table.terms[0].monomial.factors);
+        }
     }
 
     #[test]
     fn parse_unclosed_paren_errors() {
-        assert!(parse_expr("(ai").is_err());
+        assert!(parse_pga_expr("(e0").is_err());
     }
 
     #[test]
     fn expand_expr_combines_like_terms() {
-        let exp = expand_expr("(a)+(a)").unwrap();
+        let exp = expand_pga_expr("(a)+(a)").unwrap();
         assert_eq!(exp.terms.len(), 1);
         assert_eq!(exp.terms[0].coeff.0, "(a)+(a)");
     }
 
     #[test]
     fn parse_explicit_star() {
-        let a = parse_expr("a*i").unwrap();
-        let b = parse_expr("ai").unwrap();
+        let a = parse_pga_expr("a*e0").unwrap();
+        let b = parse_pga_expr("ae0").unwrap();
         assert_eq!(a.terms, b.terms);
     }
 
     #[test]
-    fn parse_ki_is_k_then_i() {
-        let exp = parse_expr("ki").unwrap();
-        let table = expand_basis_monomial(&BasisMonomial {
-            factors: vec![10, 14],
+    fn parse_generator_product_via_monomial() {
+        let exp = parse_pga_expr("e0e1").unwrap();
+        let table = expand_generator_monomial(&BasisMonomial {
+            factors: vec![0, 1],
         });
-        assert_eq!(exp.terms.len(), table.terms.len());
+        assert_eq!(exp.terms, table.terms);
     }
 }
