@@ -1,3 +1,4 @@
 /target
 .vscode/*
 .cursor/*
+/docs/*.tex
