@@ -2,4 +2,5 @@
 
 pub mod biquaternion;
 pub mod bivector;
+pub mod pga;
 pub mod spacetime;

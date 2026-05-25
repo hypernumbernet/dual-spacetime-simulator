@@ -56,18 +56,70 @@ Phase 0 は **biquaternion（15 非スカラー基底 + スカラー）** の記
 - 演算: 暗黙積、`+` / `-` 加減、括弧、明示 `*`
 - 出力: `[label]` 形式の基底モノミアル和（例: `[j]`, `-1`, `2ab + (-aa+bb)[i]`）
 
-#### 2.0.4 テスト方針
+**字句解析の注意**:
 
-- `crates/dst-expand/tests/cli_smoke.rs` に CLI contract test を置く。
-- テストは **仕様に忠実** に書き、stdout / stderr / 終了コードを検証する。
-- ライブラリ API（`expand_basis_product`, `expand_expr`, `format_expanded`）との一致もクロスチェックする。
-- Phase 1 以降の機能（REPL、G(3,1,1)、LaTeX 出力など）は CLI テスト対象外とし、追加時に別テストスイートを設ける。
+- 長いラベルを優先するため、`ki` は基底 `k`（インデックス 10）と `i`（14）の積として解釈される（単一トークン `kI` ではない）。
+- 係数と基底の境界は最長一致で切り分ける。例: `ai` → 係数 `a` + 基底 `i`、`2ab` → 係数 `2ab`（識別子全体）。
+- 同一モノミアル内に複数基底が連続する場合（例: `iI*j` または `iIj`）、左から順に Cl(3,1) 互換の乗法表で展開する。
 
-### 2.1 既存機能
-- 15基底の Cl(3,1) 乗法表に基づく `expand_basis_product`
-- サンドイッチ積 `expand_sandwich`
-- 簡易式パーサ `expand_expr`
-- 様々な形式の乗法表出力
+**未サポート（Phase 1 以降）**: 外積 `^`、逆元 `~` / `inv()`、`exp` / `log`、サンドイッチ演算子 `>>`、G(3,1,1) 用の `e0`..`e4` 表記（5.4 節参照）。
+
+#### 2.0.4 基底インデックス対応表
+
+`mul` / `sandwich` は 0..14 の整数インデックス、`expr` は右列のラベル文字列を使う。いずれも `dst-math` の biquaternion 15 基底（四元数サイド ⊗ 四元数レーン）に対応する。
+
+| インデックス | ラベル | 構成（side ⊗ lane） |
+|-------------|--------|---------------------|
+| 0 | `j` | j ⊗ 1 |
+| 1 | `kI` | k ⊗ i |
+| 2 | `kJ` | k ⊗ j |
+| 3 | `kK` | k ⊗ k |
+| 4 | `iI` | i ⊗ i |
+| 5 | `iJ` | i ⊗ j |
+| 6 | `iK` | i ⊗ k |
+| 7 | `I` | 1 ⊗ i |
+| 8 | `J` | 1 ⊗ j |
+| 9 | `K` | 1 ⊗ k |
+| 10 | `k` | k ⊗ 1 |
+| 11 | `jI` | j ⊗ i |
+| 12 | `jJ` | j ⊗ j |
+| 13 | `jK` | j ⊗ k |
+| 14 | `i` | i ⊗ 1 |
+
+スカラー部（16 次元目）は `[label]` を付けず `-1` や `2ab` のように出力する。
+
+#### 2.0.5 ビルドと起動
+
+リポジトリルートから:
+
+```bash
+cargo build -p dst-expand
+cargo run -p dst-expand -- <subcommand> [args...]
+```
+
+インストール済みバイナリを使う場合は `dst-expand` を直接呼び出す。引数なし、または `help` / `-h` / `--help` で usage が表示される。
+
+#### 2.0.6 使用例と API
+
+コマンドの実行例および Rust ライブラリ API の詳細は **5.5 節「式の例」** および `tests/cli_smoke.rs` の cross-check テストを参照。代表的な挙動は以下の通り。
+
+- `mul 0 0` → `-1`（j × j）
+- `expr "(b-ai)(a+bi)"` → `2ab + (-aa+bb)[i]`
+- `sandwich 14 0 14` → `[j]`（i · j · i）
+
+エラーはすべて `stderr` に `error:` 接頭辞付きで出力され、終了コード 2 を返す（2.0.2 節参照）。
+
+#### 2.0.7 出力形式とテスト
+
+出力は `[label]` 形式の基底モノミアル和（例: `b[kI] + a[i]`）。詳細は `format.rs` / `coeff_format.rs` を参照。テストは `tests/cli_smoke.rs` の CLI contract test で stdout / stderr / 終了コードを検証（2.0.2 節のエラー方針に準拠）。
+
+#### 2.0.8 テスト方針（Phase 0）
+
+`tests/cli_smoke.rs` に CLI contract test を置き、仕様（2.0.1〜2.0.2）に忠実に stdout / stderr / 終了コードを検証。ライブラリ API との一致も cross-check。Phase 1 以降の機能は対象外。
+
+### 2.1 既存機能（Phase 0 実装済み）
+
+`biquaternion.rs`（記号展開・テーブル）、`expr.rs`（パーサ）、`format.rs` / `coeff_format.rs`（表示）、`main.rs`（CLI）、`algebra/mod.rs`（`Algebra` enum スタブ）、`dst-math`（数値テーブル）。詳細は 6.1 節のモジュール構成を参照。
 
 ### 2.2 限界と課題
 - 現在の基底は Cl(3,1) の 16 次元止まりで、G(3,1,1) の 32 次元構造（特に null 方向 \(e_4\)）に対応していない
@@ -102,7 +154,8 @@ Phase 0 は **biquaternion（15 非スカラー基底 + スカラー）** の記
 
 ### 4.1 統一代数基盤の構築（Phase 1 以降・最優先）
 - 各代数系に対する `Algebra` trait または enum で文脈を管理
-  - `Clifford { p, q, r }`
+  - `Pga` — G(3,1,1) Projective Geometric Algebra
+  - `G { p, q, r }` — 一般幾何代数 Cl(p, q, r)
   - `CayleyDickson { dimension: usize }`（2,4,8,16,...）
   - `TensorProduct { left: Algebra, right: Algebra }`
 - 基底要素の名前解決（Clifford では `e0,e1,...`、`i,j,k` もエイリアス、Cayley-Dickson では `e0..e7` など）
@@ -112,6 +165,70 @@ Phase 0 は **biquaternion（15 非スカラー基底 + スカラー）** の記
 - 32次元 Clifford 代数の基底（スカラー + 5ベクトル + 10 bivector + 10 trivector + 5 quadvector + pseudoscalar）
 - null 方向 \(e_4\) と null bivector \(N_\mu = e_4 \wedge e_\mu\) の特殊処理
 - 10次元 bivector 生成子（hyperbolic / cyclic / null）の分類と操作
+
+#### 4.2.1 G(3,1,1) 基底表現（Phase 1 実装済み）
+
+**実装場所**: `crates/dst-math/src/pga.rs`
+
+基底は **ビットマスク 0..31** で表現する。生成元 \(e_k\) は bit \(k\) に対応する（\(k = 0, 1, 2, 3, 4\)）。
+
+| インデックス | ラベル | グレード | 意味 |
+|-------------|--------|---------|------|
+| 0 | `1` | 0 | スカラー |
+| 1 | `e0` | 1 | 第 0 生成元 |
+| 2 | `e1` | 1 | 第 1 生成元 |
+| 4 | `e2` | 1 | 第 2 生成元 |
+| 8 | `e3` | 1 | 第 3 生成元 |
+| 16 | `e4` | 1 | null 生成元 |
+| 3 | `e0e1` | 2 | bivector |
+| … | … | … | 上位ビットの XOR 積 |
+| 31 | `e0e1e2e3e4` | 5 | pseudoscalar |
+
+**メトリック（Double Spacetime Theory 向け割り当て）**:
+
+| 生成元 | \(e_k^2\) |
+|--------|-----------|
+| \(e_0\) | \(-1\) |
+| \(e_1, e_2, e_3\) | \(+1\) |
+| \(e_4\) | \(0\)（null） |
+
+`Algebra::Pga`（[`Self::pga`] ショートカット）の名前は **`PGA`**。Phase 0 の biquaternion 15 基底は **Cl(3,1) 部分代数**（\(e_4\) なし）として位置づけ、後方互換を維持する。
+
+#### 4.2.2 乗法表生成アルゴリズム（Phase 1 実装済み）
+
+`Pga::basis_mul(i, j) -> (i8, usize)` は以下の手順で **幾何積** を計算する。
+
+1. スカラー（インデックス 0）は恒等元として透過
+2. 右因子 `b` の最下位ビット `e_k` を順に処理
+3. 左因子 `a` 内で `e_k` **より上位**のビット数に応じて反符号（反交換）
+4. `a` に `e_k` が既にあれば \(e_k^2 = \text{metric}[k]\) を適用しビットを除去、なければ追加
+5. 最終マスクと累積符号を返す
+
+32×32 テーブルは `const fn compute_pga_mul_table()` でコンパイル時生成し、`PGA_MUL_TABLE` としてキャッシュする。
+
+#### 4.2.3 Null 成分ルール（Phase 1 実装済み）
+
+- \(e_4^2 = 0\)
+- null bivector \(N_\mu = e_4 e_\mu\)（\(\mu = 0..3\)）は **自乗ゼロ**: \(N_\mu^2 = 0\)
+- \(N_\mu N_\nu + N_\nu N_\mu = 0\)（\(\mu \neq \nu\)）— 異なる null bivector は反交換
+- ヘルパ: `Pga::null_bivector_index(mu)` → 基底インデックス（例: \(\mu=0\) → `17` = `e0e4`）
+
+#### 4.2.4 Multivector 基本 API（Phase 1 実装済み）
+
+**型**: `Multivector` — `[f64; 32]` 係数配列
+
+| 操作 | メソッド / 演算子 | 説明 |
+|------|------------------|------|
+| 加算 | `+`, `-` | 成分ごと |
+| 幾何積 | `*` | 32×32 テーブル展開 |
+| スカラー倍 | `*` / `Mul<f64>` | 全成分に適用 |
+| グレード射影 | `grade(k)` | popcount = k の成分のみ残す |
+| リバース | `reverse()` | k-blade に \((-1)^{k(k-1)/2}\) |
+| 共役 | `conjugate()` | リバース + 奇数グレード符号反転 |
+| 単位元 | `Multivector::one()` | スカラー 1 |
+| 基底 | `Multivector::basis(i)` | 第 i 基底 |
+
+**未実装（Phase 2 以降）**: 外積 `^`、逆元、exp/log、Motor/Plane 高レベル型。
 
 ### 4.3 PGA / 幾何オブジェクトの高レベル API
 - `Plane`, `Line`, `Point`, `Motor`, `NullBivector` などの型
@@ -168,24 +285,68 @@ dst-expand repl --algebra "H tensor H"
 ```
 
 ### 5.3 基底要素の表記例
-- **Clifford / PGA**: `e0`, `e1`, `e2`, `e3`, `e4`（null 方向）
-  - エイリアス: `j` = `e0`, `kI` = `e1`, `iI` = `e0*e1` など（Cl(3,1) 互換）
+
+**Phase 0**: 2.0.4 節の 15 基底ラベル（`j`, `iI`, `kI` など）を使用。
+
+**Phase 1（ライブラリ API 実装済み・CLI 未対応）**
+
+- **PGA**: `e0`, `e1`, `e2`, `e3`, `e4`（null 方向）— `dst-math::pga::BASIS_LABELS` 参照
+  - エイリアス（Phase 2 CLI 向け設計目標）: `j` = `e0`, `kI` = `e1`, `iI` = `e0*e1` など（Cl(3,1) 互換）
 - **四元数 (H)**: `i`, `j`, `k` または `e1`, `e2`, `e3`
 - **八元数 (O)**: `e0`..`e7` または `e,f,g,h,i,j,k,l`
 - **テンソル積 (H⊗H)**: `i1`, `j1`, `k1`（左因子）、 `i2`, `j2`, `k2`（右因子）、または `i⊗1`, `1⊗i`
 - **混合**: `e0 + 0.5*e4` や `α*e1 + β*N0`
 
 ### 5.4 演算子の優先順位と記法
-- 積:  juxtaposition（`e0 e1`）または `*`（`e0*e1`）
-- 幾何積 / Clifford 積: デフォルトで `*`（文脈による）
-- 外積: `^`（`e0^e1`）
-- 内積: `|` または `.`（`e0|e1`）
-- 逆元: `~` または `inv()`（`~M`）
-- 指数関数: `exp(φ/2 * iI + θ/2 * N0)`
-- 対数: `log(M)`
-- サンドイッチ: `M >> X` または `sandwich(M, X)`
 
-### 5.5 式の例
+**Phase 0（実装済み）**
+
+**Phase 0（実装済み）**: 括弧 > 単項 `-` > 積（暗黙 / `*`） > 加減。
+
+**Phase 1 以降（設計目標）**: 外積 `^`、内積 `|`、逆元 `~` / `inv()`、指数 `exp`、対数 `log`、サンドイッチ `>>` など（5.5 節の未実装例参照）。
+
+### 5.5 式の例（Phase 0 / CLI 対応）
+
+**基底積・サンドイッチ（`mul` / `sandwich`）**
+
+| コマンド | 結果 | 意味 |
+|---------|------|------|
+| `mul 0 0` | `-1` | j × j |
+| `mul 14 0` | `[k]` | i × j |
+| `mul 4 5` | `-[K]` | iI × iJ |
+| `sandwich 0 0 0` | `-[j]` | j · j · j |
+| `sandwich 14 0 14` | `[j]` | i · j · i |
+
+**記号式展開（`expr`）**
+
+```
+(j)(j)                     →  -1
+ai + bkI                   →  b[kI] + a[i]
+a*i                        →  a[i]          （明示 * と暗黙積は等価）
+(ai+bkI)(cj+dkK)           →  -bc[iI] + bd[J] + ac[k] - ad[jK]
+(b-ai)(a+bi)               →  2ab + (-aa+bb)[i]
+ij                         →  [k]
+ki                         →  [j]           （k × i；ラベル kI とは別）
+```
+
+**Windows（PowerShell）での引用**
+
+```powershell
+cargo run -p dst-expand -- expr "(ai+bkI)(cj+dkK)"
+```
+
+**エラー例**
+
+```
+$ dst-expand nosuch
+error: unknown command "nosuch"   （終了コード 2、stdout に usage）
+
+$ dst-expand expr "(ai"
+error: at offset 3: expected ')'
+```
+
+**Phase 1 以降（未実装・設計目標）**
+
 ```
 > exp( (pi/2)*iI + (0.1)*N0 )
 > (e0 + e4) * (e1 + 0.5*e2)
@@ -202,14 +363,41 @@ dst-expand repl --algebra "H tensor H"
 
 ## 6. アーキテクチャ設計
 
-### 6.1 モジュール構成（予定）
+### 6.1 モジュール構成
+
+**現状（Phase 0 + Phase 1 ライブラリ）**
+
+```
+crates/dst-math/
+├── src/
+│   ├── pga.rs                 # G(3,1,1) PGA 32基底・Multivector（Phase 1）
+│   ├── biquaternion.rs        # Cl(3,1) 互換 16次元（Phase 0）
+│   └── ...
+└── tests/
+    └── math_pga.rs            # G(3,1,1) PGA 単体テスト（Phase 1）
+
+crates/dst-expand/
+├── src/
+│   ├── lib.rs                 # 公開 API の re-export
+│   ├── main.rs                # CLI（table / mul / sandwich / expr）
+│   ├── biquaternion.rs        # 記号展開コア
+│   ├── expr.rs                # 式パーサ
+│   ├── format.rs              # 展開結果の表示
+│   ├── coeff_format.rs        # 係数文字列の簡約
+│   └── algebra/
+│       └── mod.rs             # Algebra enum + mul_table 連携（Phase 1）
+├── tests/
+│   └── cli_smoke.rs           # Phase 0 CLI 契約テスト
+└── Cargo.toml
+```
+
+**予定（Phase 2 以降）**
+
 ```
 crates/dst-expand/
 ├── src/
-│   ├── lib.rs
-│   ├── cli.rs
-│   ├── algebra/               # 代数系の抽象化
-│   │   ├── mod.rs
+│   ├── cli.rs                 # main.rs から分離
+│   ├── algebra/
 │   │   ├── clifford.rs        # Cl(p,q,r) / G(3,1,1)
 │   │   ├── cayley_dickson.rs  # H, O, sedenion, doubling
 │   │   └── tensor.rs          # テンソル積
@@ -218,13 +406,11 @@ crates/dst-expand/
 │   │   ├── motor.rs
 │   │   ├── plane.rs
 │   │   └── mismatch.rs
-│   ├── format.rs
-│   ├── repl.rs
-│   └── biquaternion.rs        # 後方互換レイヤ
+│   └── repl.rs
 ├── tests/
 │   ├── pga/
 │   └── cayley_dickson/
-└── Cargo.toml
+└── ...
 ```
 
 ### 6.2 型システム
@@ -239,16 +425,35 @@ crates/dst-expand/
 
 ## 7. 開発ロードマップ
 
-### Phase 0（現行・本 PR スコープ）
+### Phase 0（現行・安定）
+
 - biquaternion 記号展開 CLI（`table` / `mul` / `sandwich` / `expr`）の契約明文化
 - 引数検証の厳密化（余分な引数の拒否、`sandwich` の 4 引数以上バグ修正）
 - CLI contract test の網羅（`tests/cli_smoke.rs`）
-- 本仕様書 2.0 節との整合
+- 係数表示の簡約（`coeff_format`）
+- `Algebra` enum スタブ（`algebra/mod.rs`）
+- 本仕様書 2.0 節・使用例との整合
 
-### Phase 1（短期）
-- 統一 `Algebra` 基盤と G(3,1,1) 32基底
-- null 成分の完全サポート
-- 基本 multivector 演算
+### Phase 1（短期・ライブラリ実装済み）
+
+- 統一 `Algebra` 基盤と G(3,1,1) PGA 32基底（`dst-math::pga`）
+- null 成分の完全サポート（\(e_4^2=0\)、\(N_\mu^2=0\) ヘルパとテスト）
+- 基本 multivector 演算（加算、幾何積、グレード射影、reverse、conjugate）
+- メトリック: \(e_0^2=-1\), \(e_1^2=e_2^2=e_3^2=+1\), \(e_4^2=0\)
+- 単体テスト: `crates/dst-math/tests/math_pga.rs`（20+ ケース）
+- **CLI / REPL 拡張は Phase 2**（Phase 0 biquaternion CLI は後方互換のまま維持）
+
+#### Phase 1 成功基準（自動テスト）
+
+| 検証項目 | 期待 |
+|---------|------|
+| 次元 | `Pga::dimension() == 32` |
+| \(e_0^2\) | \(-1\) |
+| \(e_4^2\) | \(0\) |
+| \(N_\mu^2\) | \(0\)（\(\mu=0..3\)） |
+| 結合律 | 代表基底三つ組で成立 |
+| 分配律 | \(a(b+c) = ab + ac\) |
+| reverse | \((ab)^\sim = \tilde{b}\tilde{a}\) |
 
 ### Phase 2（中期）
 - ケイリー・ディクソン（H, O）と doubling
@@ -268,8 +473,9 @@ crates/dst-expand/
 - 既存 Cl(3,1) ユーザーがシームレスに移行できる
 
 ## 9. 補足・注意事項
-- 既存 API の後方互換を最優先
-- null 成分と zero-divisor は専用の型・チェックで扱う
+- 既存 API の後方互換を最優先（Phase 0 biquaternion CLI / 記号展開は変更しない）
+- Phase 1 の PGA 実装は **`dst-math::pga`** に置き、`dst-expand::algebra` は文脈管理とテーブル参照を担当
+- null 成分と zero-divisor は専用の型・チェックで扱う（Phase 1 では `null_bivector_index` ヘルパとテストで検証）
 - データ並列は `rayon` を検討
 - 数学的正確性は ganja.js および Double Spacetime Theory 論文を参照
 
