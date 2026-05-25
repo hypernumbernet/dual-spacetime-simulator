@@ -65,7 +65,7 @@ const fn get_basis_index(s: QuatComp, l: QuatComp) -> usize {
     }
 }
 
-/// Precomputes the multiplication lookup table for all tetraquaternion basis pairs.
+/// Precomputes the multiplication lookup table for all biquaternion basis pairs.
 const fn compute_mul_table() -> [[(i8, usize); 15]; 15] {
     let mut table = [[(0i8, 0usize); 15]; 15];
     let mut left: usize = 0;
@@ -100,7 +100,7 @@ pub struct Biquaternion {
 }
 
 impl Biquaternion {
-    /// Creates a tetraquaternion from a real coefficient and 15 basis coefficients.
+    /// Creates a biquaternion from a real coefficient and 15 basis coefficients.
     pub fn new(real: f64, bases: [f64; 15]) -> Self {
         let mut coeffs = [0.0; DIM];
         coeffs[0] = real;
@@ -108,14 +108,14 @@ impl Biquaternion {
         Self { coeffs }
     }
 
-    /// Returns multiplicative identity tetraquaternion.
+    /// Returns multiplicative identity biquaternion.
     pub fn one() -> Self {
         let mut coeffs = [0.0; DIM];
         coeffs[0] = 1.0;
         Self { coeffs }
     }
 
-    /// Returns a unit tetraquaternion basis element by index.
+    /// Returns a unit biquaternion basis element by index.
     pub fn basis(index: usize) -> Self {
         assert!(index < 15, "Basis index out of range");
         let mut coeffs = [0.0; DIM];
@@ -126,7 +126,7 @@ impl Biquaternion {
 
 impl Add for Biquaternion {
     type Output = Self;
-    /// Adds two tetraquaternions component-wise.
+    /// Adds two biquaternions component-wise.
     fn add(self, rhs: Self) -> Self {
         let mut coeffs = [0.0; DIM];
         for i in 0..DIM {
@@ -138,7 +138,7 @@ impl Add for Biquaternion {
 
 impl Mul for Biquaternion {
     type Output = Self;
-    /// Multiplies two tetraquaternions using the precomputed basis multiplication table.
+    /// Multiplies two biquaternions using the precomputed basis multiplication table.
     fn mul(self, rhs: Self) -> Self {
         let mut result = [0.0; DIM];
         result[0] += self.coeffs[0] * rhs.coeffs[0];
@@ -162,7 +162,7 @@ impl Mul for Biquaternion {
 }
 
 impl AddAssign for Biquaternion {
-    /// Accumulates tetraquaternion coefficients by component-wise addition.
+    /// Accumulates biquaternion coefficients by component-wise addition.
     fn add_assign(&mut self, rhs: Self) {
         for i in 0..DIM {
             self.coeffs[i] += rhs.coeffs[i];
@@ -172,7 +172,7 @@ impl AddAssign for Biquaternion {
 
 impl Sub for Biquaternion {
     type Output = Self;
-    /// Subtracts two tetraquaternions component-wise.
+    /// Subtracts two biquaternions component-wise.
     fn sub(self, rhs: Self) -> Self {
         let mut coeffs = [0.0; DIM];
         for i in 0..DIM {
@@ -192,7 +192,7 @@ impl SubAssign for Biquaternion {
 }
 
 impl MulAssign for Biquaternion {
-    /// Applies in-place tetraquaternion multiplication.
+    /// Applies in-place biquaternion multiplication.
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
@@ -330,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tetraquaternion_mul() {
+    fn test_biquaternion_mul() {
         let j = Biquaternion::basis(0); // j
         let ki = Biquaternion::basis(1); // kI
         let ii = Biquaternion::basis(4); // iI

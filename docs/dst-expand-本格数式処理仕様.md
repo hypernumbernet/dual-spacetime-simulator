@@ -20,7 +20,7 @@
 
 ### 2.0 Phase 0: 現行 CLI 仕様（実装済み）
 
-Phase 0 は **tetraquaternion（15 非スカラー基底 + スカラー）** の記号展開 CLI を安定化することを目的とする。G(3,1,1) / PGA / REPL など Phase 1 以降の機能は本節の対象外である。
+Phase 0 は **biquaternion（15 非スカラー基底 + スカラー）** の記号展開 CLI を安定化することを目的とする。G(3,1,1) / PGA / REPL など Phase 1 以降の機能は本節の対象外である。
 
 #### 2.0.1 サブコマンド
 
@@ -240,7 +240,7 @@ crates/dst-expand/
 ## 7. 開発ロードマップ
 
 ### Phase 0（現行・本 PR スコープ）
-- tetraquaternion 記号展開 CLI（`table` / `mul` / `sandwich` / `expr`）の契約明文化
+- biquaternion 記号展開 CLI（`table` / `mul` / `sandwich` / `expr`）の契約明文化
 - 引数検証の厳密化（余分な引数の拒否、`sandwich` の 4 引数以上バグ修正）
 - CLI contract test の網羅（`tests/cli_smoke.rs`）
 - 本仕様書 2.0 節との整合

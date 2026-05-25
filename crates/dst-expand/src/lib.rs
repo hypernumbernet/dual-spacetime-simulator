@@ -1,4 +1,4 @@
-//! Symbolic expansion of tetraquaternion / biquaternion products using `dst-math` tables.
+//! Symbolic expansion of biquaternion products using `dst-math` tables.
 //!
 //! Builds human-readable sums of basis monomials (for sandwich products and full component
 //! expansions) without evaluating numeric coefficients.

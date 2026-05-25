@@ -9,7 +9,7 @@ use std::process::Command;
 const EXIT_OK: i32 = 0;
 const EXIT_USAGE_ERROR: i32 = 2;
 
-const USAGE_MARKER: &str = "dst-expand — symbolic tetraquaternion expansion";
+const USAGE_MARKER: &str = "dst-expand — symbolic biquaternion expansion";
 const USAGE_TABLE: &str = "dst-expand table";
 const USAGE_MUL: &str = "dst-expand mul <i> <j>";
 const USAGE_SANDWICH: &str = "dst-expand sandwich <l> <m> <r>";
@@ -71,10 +71,7 @@ fn assert_stdout_trimmed(out: &CliOutput, expected: &str, context: &str) {
 }
 
 fn assert_usage_text(text: &str, context: &str) {
-    assert!(
-        text.contains(USAGE_MARKER),
-        "{context}: missing banner"
-    );
+    assert!(text.contains(USAGE_MARKER), "{context}: missing banner");
     assert!(text.contains(USAGE_TABLE), "{context}: missing table usage");
     assert!(text.contains(USAGE_MUL), "{context}: missing mul usage");
     assert!(
@@ -284,16 +281,13 @@ fn sandwich_example_from_usage_i_j_i() {
 
 #[test]
 fn sandwich_rejects_fewer_than_three_indices() {
-    let cases: [&[&str]; 3] = [
-        &["sandwich"],
-        &["sandwich", "0"],
-        &["sandwich", "0", "0"],
-    ];
+    let cases: [&[&str]; 3] = [&["sandwich"], &["sandwich", "0"], &["sandwich", "0", "0"]];
     for args in cases {
         let out = run(&args);
         assert_usage_error(&out, "sandwich too few");
         assert!(
-            out.stderr.contains("sandwich requires exactly 3 basis indices"),
+            out.stderr
+                .contains("sandwich requires exactly 3 basis indices"),
             "args={args:?} stderr={:?}",
             out.stderr
         );
@@ -436,11 +430,7 @@ fn mul_cli_matches_library_format_expanded() {
         let expected = format_expanded(&expand_basis_product(left, right));
         let out = run(&["mul", &left.to_string(), &right.to_string()]);
         assert_ok(&out, "mul cross-check");
-        assert_stdout_trimmed(
-            &out,
-            &expected,
-            &format!("mul {left} {right} vs library"),
-        );
+        assert_stdout_trimmed(&out, &expected, &format!("mul {left} {right} vs library"));
     }
 }
 
@@ -452,10 +442,6 @@ fn expr_cli_matches_library_format_expanded() {
         let expected = format_expanded(&expand_expr(expression).expect("library expand"));
         let out = run(&["expr", expression]);
         assert_ok(&out, "expr cross-check");
-        assert_stdout_trimmed(
-            &out,
-            &expected,
-            &format!("expr {expression:?} vs library"),
-        );
+        assert_stdout_trimmed(&out, &expected, &format!("expr {expression:?} vs library"));
     }
 }

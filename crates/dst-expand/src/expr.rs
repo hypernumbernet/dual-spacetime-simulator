@@ -1,4 +1,4 @@
-//! Parser for coefficient-bearing tetraquaternion expressions.
+//! Parser for coefficient-bearing biquaternion expressions.
 
 use crate::biquaternion::{
     BasisMonomial, Coefficient, ExpandedProduct, ExpandedTerm, combine_like_terms,
@@ -170,9 +170,7 @@ impl<'a> Parser<'a> {
             return Ok(exp);
         }
         let term = self.parse_term()?;
-        Ok(ExpandedProduct {
-            terms: vec![term],
-        })
+        Ok(ExpandedProduct { terms: vec![term] })
     }
 
     fn parse_term(&mut self) -> Result<ExpandedTerm, ParseError> {
@@ -201,10 +199,7 @@ impl<'a> Parser<'a> {
             });
         }
         let mut exp = expand_basis_monomial(&monomial);
-        let mut term = exp
-            .terms
-            .pop()
-            .expect("expanded monomial has one term");
+        let mut term = exp.terms.pop().expect("expanded monomial has one term");
         term.coeff = multiply_coeff_text(&coeff, &term.coeff.0).into();
         Ok(term)
     }
@@ -323,7 +318,6 @@ impl<'a> Parser<'a> {
             Some(c) if c.is_ascii_alphabetic() || c == '_'
         )
     }
-
 }
 
 fn basis_hint() -> String {
@@ -337,7 +331,7 @@ fn basis_hint() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::biquaternion::{expand_basis_product, expand_basis_monomial};
+    use crate::biquaternion::{expand_basis_monomial, expand_basis_product};
 
     #[test]
     fn parse_single_basis() {
@@ -360,7 +354,10 @@ mod tests {
         let table = expand_basis_product(14, 0);
         assert_eq!(exp.terms.len(), 1);
         assert_eq!(exp.terms[0].coeff.0, table.terms[0].coeff.0);
-        assert_eq!(exp.terms[0].monomial.factors, table.terms[0].monomial.factors);
+        assert_eq!(
+            exp.terms[0].monomial.factors,
+            table.terms[0].monomial.factors
+        );
     }
 
     #[test]

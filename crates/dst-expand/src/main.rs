@@ -20,7 +20,7 @@ const EXIT_SUCCESS: u8 = 0;
 const EXIT_USAGE_ERROR: u8 = 2;
 
 fn usage() -> &'static str {
-    "dst-expand — symbolic tetraquaternion expansion\n\n\
+    "dst-expand — symbolic biquaternion expansion\n\n\
      Usage:\n\
        dst-expand table              Print 15×15 basis multiplication table (Markdown)\n\
        dst-expand mul <i> <j>        Expand product of basis i and j (0..14)\n\

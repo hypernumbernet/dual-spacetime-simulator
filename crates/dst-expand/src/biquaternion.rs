@@ -1,4 +1,4 @@
-//! Symbolic basis products and sandwich expansions for the 15+1 tetraquaternion basis.
+//! Symbolic basis products and sandwich expansions for the 15+1 biquaternion basis.
 
 use std::collections::BTreeMap;
 
@@ -47,7 +47,9 @@ pub struct BasisMonomial {
 impl BasisMonomial {
     /// Scalar monomial (no basis factors).
     pub fn scalar() -> Self {
-        Self { factors: Vec::new() }
+        Self {
+            factors: Vec::new(),
+        }
     }
 
     /// Single basis element `BASIS_LABELS[i]`.
