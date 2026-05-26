@@ -187,6 +187,29 @@ pub struct App {
     drag_owner: DragOwner,
 }
 
+impl Drop for App {
+    /// Waits for all pending GPU work to finish before dropping GUI and pipeline resources.
+    ///
+    /// The last frame's command buffer may still be executing on the GPU when the event loop
+    /// exits (e.g. via CloseRequested or request_exit). The gui (egui renderer) and
+    /// render_pipeline own Vulkan resources (vertex buffers, textures, descriptor sets,
+    /// pipelines, etc.) that are referenced by in-flight command buffers.
+    ///
+    /// Destroying them before the work completes violates Vulkan's rules and commonly
+    /// results in ERROR_DEVICE_LOST (visible in the Drop impls of ParticleRenderPipeline
+    /// and VulkanBase).
+    ///
+    /// We perform the wait here, while all resources are still alive. The waits inside
+    /// the individual drops will then be fast and succeed.
+    fn drop(&mut self) {
+        if let Some(vb) = &self.vulkan_base {
+            // Ignore error: on shutdown we just want to be as clean as possible.
+            // Real device loss from a bad submit would have been observable earlier too.
+            let _ = unsafe { vb.device.device_wait_idle() };
+        }
+    }
+}
+
 impl Default for App {
     /// Creates application state with loaded settings and default runtime resources.
     fn default() -> Self {
