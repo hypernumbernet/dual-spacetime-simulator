@@ -476,6 +476,7 @@ dependencies = [
  "satkit",
  "serde",
  "serde_json",
+ "vulkanvil",
  "winit",
 ]
 
@@ -596,6 +597,12 @@ dependencies = [
  "crc32fast",
  "miniz_oxide",
 ]
+
+[[package]]
+name = "font8x8"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "875488b8711a968268c7cf5d139578713097ca4635a76044e8fe8eedf831d07e"
 
 [[package]]
 name = "foreign-types"
@@ -997,9 +1004,11 @@ dependencies = [
  "ash",
  "ash-window",
  "bytemuck",
+ "font8x8",
  "glam 0.30.8",
  "gpu-allocator",
  "raw-window-handle",
+ "vulkanvil",
  "winit",
 ]
 
@@ -2188,6 +2197,18 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vulkanvil"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "ash-window",
+ "bytemuck",
+ "gpu-allocator",
+ "raw-window-handle",
+ "winit",
+]
 
 [[package]]
 name = "walkdir"
