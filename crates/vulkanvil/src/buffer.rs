@@ -1,8 +1,4 @@
-//! GPU buffer/image allocation helpers.
-//!
-//! `AllocatedBuffer` and `create_buffer_with_data` are adapted from the
-//! `dual-spacetime-simulator` crate's `pipeline.rs`. `AllocatedImage` is new
-//! (used for the depth buffer and the texture atlas).
+//! GPU buffer/image allocation helpers built on `gpu-allocator`.
 
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, Allocator};
@@ -74,25 +70,20 @@ pub fn create_buffer_with_data<T: bytemuck::Pod>(
     let byte_size = (std::mem::size_of::<T>() * data.len().max(1)) as u64;
     let buf = AllocatedBuffer::new(device, allocator, byte_size, usage, MemoryLocation::CpuToGpu, name);
 
-    if !data.is_empty() {
-        if let Some(ref alloc) = buf.allocation {
-            if let Some(mapped) = alloc.mapped_ptr() {
-                let bytes = bytemuck::cast_slice::<T, u8>(data);
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        bytes.as_ptr(),
-                        mapped.as_ptr() as *mut u8,
-                        bytes.len(),
-                    );
-                }
-            }
+    if !data.is_empty()
+        && let Some(ref alloc) = buf.allocation
+        && let Some(mapped) = alloc.mapped_ptr()
+    {
+        let bytes = bytemuck::cast_slice::<T, u8>(data);
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapped.as_ptr() as *mut u8, bytes.len());
         }
     }
     let count = data.len() as u32;
     (buf, count)
 }
 
-/// A GPU image plus its allocation and view (depth buffer / texture atlas).
+/// A GPU image plus its allocation and view (e.g. depth buffer or texture atlas).
 pub struct AllocatedImage {
     pub image: vk::Image,
     pub allocation: Option<Allocation>,
@@ -101,6 +92,7 @@ pub struct AllocatedImage {
 
 impl AllocatedImage {
     /// Creates a 2D image with a device-local allocation and a matching image view.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &ash::Device,
         allocator: &Mutex<Allocator>,

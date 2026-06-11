@@ -1,14 +1,16 @@
+//! Low-level Vulkan instance/device/swapchain/sync setup.
+
 use ash::khr::{surface, swapchain};
 use ash::{vk, Device, Entry, Instance};
 use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use std::ffi::CStr;
 use std::sync::{Arc, Mutex};
 use winit::window::Window;
 
-const MAX_FRAMES_IN_FLIGHT: usize = 2;
+pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 pub struct VulkanBase {
-    #[allow(dead_code)]
     pub entry: Entry,
     pub instance: Instance,
     pub surface_loader: surface::Instance,
@@ -38,7 +40,12 @@ pub struct VulkanBase {
 
 impl VulkanBase {
     /// Creates Vulkan instance/device/swapchain resources for the provided window surface.
-    pub fn new(window: &Window, mailbox_present_mode: bool) -> Self {
+    pub fn new(
+        window: &Window,
+        mailbox_present_mode: bool,
+        app_name: &CStr,
+        app_version: u32,
+    ) -> Self {
         let entry = unsafe { Entry::load() }.expect("Failed to load Vulkan");
 
         let display_handle = window.display_handle().unwrap().as_raw();
@@ -46,8 +53,8 @@ impl VulkanBase {
             .expect("Failed to enumerate required extensions");
 
         let app_info = vk::ApplicationInfo::default()
-            .application_name(c"DualSpacetimeSimulator")
-            .application_version(vk::make_api_version(0, 0, 2, 0))
+            .application_name(app_name)
+            .application_version(app_version)
             .engine_name(c"No Engine")
             .engine_version(vk::make_api_version(0, 1, 0, 0))
             .api_version(vk::API_VERSION_1_2);
@@ -251,7 +258,6 @@ impl VulkanBase {
     pub fn advance_frame(&mut self) {
         self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
-
 }
 
 impl Drop for VulkanBase {
@@ -278,8 +284,7 @@ impl Drop for VulkanBase {
             drop(self.allocator.take());
 
             self.cleanup_swapchain();
-            self.swapchain_loader
-                .destroy_swapchain(self.swapchain, None);
+            self.swapchain_loader.destroy_swapchain(self.swapchain, None);
             self.surface_loader.destroy_surface(self.surface, None);
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);

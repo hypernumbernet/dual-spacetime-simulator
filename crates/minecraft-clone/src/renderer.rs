@@ -2,17 +2,19 @@
 //! terrain pipeline, a translucent water pipeline, a gradient sky pipeline, the atlas
 //! descriptor set, per-chunk GPU buffers, and deferred buffer garbage collection.
 
-use crate::buffer::{create_buffer_with_data, AllocatedBuffer, AllocatedImage};
+use crate::hud::{self, TextVertex};
 use crate::mesher::{ChunkMeshData, VoxelVertex};
-use crate::texture::{create_atlas_texture, Texture};
-use crate::vulkan_base::{VulkanBase, MAX_FRAMES_IN_FLIGHT};
-use crate::world::RENDER_DISTANCE;
+use crate::texture::{create_atlas_texture, create_texture_rgba, Texture};
 use crate::worldgen::SEA_LEVEL;
 use ash::vk;
 use glam::{IVec2, Mat4, Vec3, Vec4, Vec4Swizzles};
 use gpu_allocator::vulkan::Allocator;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use vulkanvil::{
+    create_buffer_with_data, create_shader_module, AllocatedBuffer, AllocatedImage, VulkanBase,
+    MAX_FRAMES_IN_FLIGHT,
+};
 
 /// SPIR-V compiled by build.rs.
 const VOXEL_VERT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/voxel.vert.spv"));
@@ -21,12 +23,11 @@ const WATER_VERT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/wate
 const WATER_FRAG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/water.frag.spv"));
 const SKY_VERT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/sky.vert.spv"));
 const SKY_FRAG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/sky.frag.spv"));
+const TEXT_VERT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/text.vert.spv"));
+const TEXT_FRAG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/text.frag.spv"));
 
 /// Fog color / horizon tint that distant terrain fades into.
 pub const HORIZON_COLOR: [f32; 4] = [0.74, 0.84, 0.94, 1.0];
-/// Fog tracks the streamed ring so chunk pop-in stays hidden at any render distance.
-const FOG_END: f32 = (RENDER_DISTANCE * 16 - 8) as f32;
-const FOG_START: f32 = FOG_END * 0.72;
 /// Murky short-range fog used while the camera is submerged.
 const UNDERWATER_COLOR: [f32; 4] = [0.04, 0.20, 0.29, 1.0];
 const UNDERWATER_FOG_START: f32 = 3.0;
@@ -43,13 +44,21 @@ pub struct PushConstants {
 
 impl PushConstants {
     /// `time` animates waves/caustics; `underwater` switches fog to the murky in-water
-    /// preset and flags the shaders (carried in camera_pos.w).
-    pub fn new(view_proj: [[f32; 4]; 4], camera_pos: [f32; 3], time: f32, underwater: bool) -> Self {
+    /// preset and flags the shaders (carried in camera_pos.w). `render_distance` (in
+    /// chunks) drives the fog so pop-in stays hidden when the ring is resized at runtime.
+    pub fn new(
+        view_proj: [[f32; 4]; 4],
+        camera_pos: [f32; 3],
+        time: f32,
+        underwater: bool,
+        render_distance: i32,
+    ) -> Self {
         let flag = if underwater { 1.0 } else { 0.0 };
+        let fog_end = (render_distance * 16 - 8) as f32;
         let (color, start, end) = if underwater {
             (UNDERWATER_COLOR, UNDERWATER_FOG_START, UNDERWATER_FOG_END)
         } else {
-            (HORIZON_COLOR, FOG_START, FOG_END)
+            (HORIZON_COLOR, fog_end * 0.72, fog_end)
         };
         Self {
             view_proj,
@@ -101,10 +110,21 @@ pub struct Renderer {
     water_pipeline: vk::Pipeline,
     sky_pipeline_layout: vk::PipelineLayout,
     sky_pipeline: vk::Pipeline,
+    font: Texture,
+    text_desc_set: vk::DescriptorSet,
+    text_pipeline_layout: vk::PipelineLayout,
+    text_pipeline: vk::Pipeline,
+    hud_buffer: Option<(AllocatedBuffer, u32)>,
     opaque_meshes: HashMap<IVec2, ChunkMesh>,
     water_meshes: HashMap<IVec2, ChunkMesh>,
     retired: Vec<(u64, AllocatedBuffer)>,
     frame_counter: u64,
+}
+
+/// GPU-side counters for the developer HUD.
+pub struct RenderStats {
+    pub chunk_meshes: usize,
+    pub mesh_bytes: u64,
 }
 
 impl Renderer {
@@ -135,34 +155,59 @@ impl Renderer {
         let layout_ci = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         let desc_set_layout = unsafe { device.create_descriptor_set_layout(&layout_ci, None) }.unwrap();
 
+        // The HUD font texture shares the sampler-only set layout (set 0 = atlas,
+        // set 1 = font, both allocated from the same pool).
+        let font = create_texture_rgba(
+            vb,
+            &allocator,
+            &hud::generate_font_pixels(),
+            hud::FONT_W,
+            hud::FONT_H,
+            "font",
+        );
+
         let pool_size = vk::DescriptorPoolSize {
             ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            descriptor_count: 1,
+            descriptor_count: 2,
         };
         let pool_sizes = [pool_size];
         let pool_ci = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(1);
+            .max_sets(2);
         let desc_pool = unsafe { device.create_descriptor_pool(&pool_ci, None) }.unwrap();
 
-        let set_layouts = [desc_set_layout];
+        let set_layouts = [desc_set_layout, desc_set_layout];
         let alloc_ci = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(desc_pool)
             .set_layouts(&set_layouts);
-        let desc_set = unsafe { device.allocate_descriptor_sets(&alloc_ci) }.unwrap()[0];
+        let sets = unsafe { device.allocate_descriptor_sets(&alloc_ci) }.unwrap();
+        let (desc_set, text_desc_set) = (sets[0], sets[1]);
 
-        let image_info = vk::DescriptorImageInfo {
+        let atlas_info = vk::DescriptorImageInfo {
             sampler: atlas.sampler,
             image_view: atlas.image.view,
             image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         };
-        let image_infos = [image_info];
-        let write = vk::WriteDescriptorSet::default()
-            .dst_set(desc_set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(&image_infos);
-        unsafe { device.update_descriptor_sets(&[write], &[]) };
+        let atlas_infos = [atlas_info];
+        let font_info = vk::DescriptorImageInfo {
+            sampler: font.sampler,
+            image_view: font.image.view,
+            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        };
+        let font_infos = [font_info];
+        let writes = [
+            vk::WriteDescriptorSet::default()
+                .dst_set(desc_set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&atlas_infos),
+            vk::WriteDescriptorSet::default()
+                .dst_set(text_desc_set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&font_infos),
+        ];
+        unsafe { device.update_descriptor_sets(&writes, &[]) };
 
         // Shared layout for the opaque + water pipelines (frame constants + per-draw
         // chunk origin).
@@ -206,6 +251,21 @@ impl Renderer {
         let sky_pipeline_layout = unsafe { device.create_pipeline_layout(&sky_pl_ci, None) }.unwrap();
         let sky_pipeline = create_sky_pipeline(&device, render_pass, sky_pipeline_layout);
 
+        // HUD text pipeline: font sampler set + screen size push constant.
+        let text_range = vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::VERTEX,
+            offset: 0,
+            size: 8, // vec2 screen size
+        };
+        let text_ranges = [text_range];
+        let text_layouts = [desc_set_layout];
+        let text_pl_ci = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&text_layouts)
+            .push_constant_ranges(&text_ranges);
+        let text_pipeline_layout =
+            unsafe { device.create_pipeline_layout(&text_pl_ci, None) }.unwrap();
+        let text_pipeline = create_text_pipeline(&device, render_pass, text_pipeline_layout);
+
         Self {
             device,
             allocator,
@@ -222,10 +282,59 @@ impl Renderer {
             water_pipeline,
             sky_pipeline_layout,
             sky_pipeline,
+            font,
+            text_desc_set,
+            text_pipeline_layout,
+            text_pipeline,
+            hud_buffer: None,
             opaque_meshes: HashMap::new(),
             water_meshes: HashMap::new(),
             retired: Vec::new(),
             frame_counter: 0,
+        }
+    }
+
+    /// Replaces the HUD text mesh (empty text hides the HUD). The old vertex buffer
+    /// goes through the retired list so in-flight frames can still read it.
+    pub fn update_hud(&mut self, text: &str) {
+        if let Some((buf, _)) = self.hud_buffer.take() {
+            self.retired.push((self.frame_counter, buf));
+        }
+        if text.is_empty() {
+            return;
+        }
+        let verts = hud::build_text_vertices(text);
+        if verts.is_empty() {
+            return;
+        }
+        let (buf, count) = create_buffer_with_data(
+            &self.device,
+            &self.allocator,
+            &verts,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+            "hud-text",
+        );
+        self.hud_buffer = Some((buf, count));
+    }
+
+    /// Sums the GPU bytes held by per-chunk vertex/index buffers.
+    pub fn stats(&self) -> RenderStats {
+        let mut chunk_meshes = 0;
+        let mut mesh_bytes = 0u64;
+        for map in [&self.opaque_meshes, &self.water_meshes] {
+            chunk_meshes += map.len();
+            for mesh in map.values() {
+                if let Some(a) = &mesh.vertex.allocation {
+                    mesh_bytes += a.size();
+                }
+                if let Some(a) = &mesh.index.allocation {
+                    mesh_bytes += a.size();
+                }
+            }
+        }
+        RenderStats {
+            chunk_meshes,
+            mesh_bytes,
         }
     }
 
@@ -429,6 +538,33 @@ impl Renderer {
                 self.draw_mesh_culled(cb, *coord, mesh, &planes);
             }
 
+            // Developer HUD text overlay (no depth, screen-space pixels).
+            if let Some((buf, count)) = &self.hud_buffer {
+                self.device.cmd_bind_pipeline(
+                    cb,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.text_pipeline,
+                );
+                self.device.cmd_bind_descriptor_sets(
+                    cb,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.text_pipeline_layout,
+                    0,
+                    &[self.text_desc_set],
+                    &[],
+                );
+                let screen = [extent.width as f32, extent.height as f32];
+                self.device.cmd_push_constants(
+                    cb,
+                    self.text_pipeline_layout,
+                    vk::ShaderStageFlags::VERTEX,
+                    0,
+                    bytemuck::bytes_of(&screen),
+                );
+                self.device.cmd_bind_vertex_buffers(cb, 0, &[buf.buffer], &[0]);
+                self.device.cmd_draw(cb, *count, 1, 0, 0);
+            }
+
             self.device.cmd_end_render_pass(cb);
         }
     }
@@ -488,6 +624,9 @@ impl Drop for Renderer {
             for (_, buf) in self.retired.drain(..) {
                 buf.destroy(&self.device, &self.allocator);
             }
+            if let Some((buf, _)) = self.hud_buffer.take() {
+                buf.destroy(&self.device, &self.allocator);
+            }
             for map in [&mut self.opaque_meshes, &mut self.water_meshes] {
                 for (_, mesh) in map.drain() {
                     mesh.vertex.destroy(&self.device, &self.allocator);
@@ -495,6 +634,10 @@ impl Drop for Renderer {
                 }
             }
 
+            self.device.destroy_pipeline(self.text_pipeline, None);
+            self.device
+                .destroy_pipeline_layout(self.text_pipeline_layout, None);
+            self.font.destroy(&self.device, &self.allocator);
             self.device.destroy_pipeline(self.sky_pipeline, None);
             self.device
                 .destroy_pipeline_layout(self.sky_pipeline_layout, None);
@@ -660,12 +803,6 @@ fn create_framebuffers(
         .collect()
 }
 
-fn create_shader_module(device: &ash::Device, spv: &[u8]) -> vk::ShaderModule {
-    let code = ash::util::read_spv(&mut std::io::Cursor::new(spv)).unwrap();
-    let ci = vk::ShaderModuleCreateInfo::default().code(&code);
-    unsafe { device.create_shader_module(&ci, None) }.unwrap()
-}
-
 /// Builds a voxel pipeline. `translucent` enables alpha blending with depth-write off
 /// and disables culling (the water surface must be visible from below); otherwise
 /// opaque with depth write and back-face culling.
@@ -762,6 +899,114 @@ fn create_voxel_pipeline(
     let color_blending =
         vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
 
+    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+    let dynamic_state =
+        vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+    let ci = vk::GraphicsPipelineCreateInfo::default()
+        .stages(&stages)
+        .vertex_input_state(&vertex_input)
+        .input_assembly_state(&input_assembly)
+        .viewport_state(&viewport_state)
+        .rasterization_state(&rasterizer)
+        .multisample_state(&multisampling)
+        .depth_stencil_state(&depth_stencil)
+        .color_blend_state(&color_blending)
+        .dynamic_state(&dynamic_state)
+        .layout(layout)
+        .render_pass(render_pass)
+        .subpass(0);
+
+    let pipeline = unsafe {
+        device
+            .create_graphics_pipelines(vk::PipelineCache::null(), &[ci], None)
+            .unwrap()[0]
+    };
+    unsafe {
+        device.destroy_shader_module(vs, None);
+        device.destroy_shader_module(fs, None);
+    }
+    pipeline
+}
+
+/// HUD text pipeline: screen-space quads, alpha blended, no depth test/write.
+fn create_text_pipeline(
+    device: &ash::Device,
+    render_pass: vk::RenderPass,
+    layout: vk::PipelineLayout,
+) -> vk::Pipeline {
+    let vs = create_shader_module(device, TEXT_VERT);
+    let fs = create_shader_module(device, TEXT_FRAG);
+
+    let entry = c"main";
+    let stages = [
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(vs)
+            .name(entry),
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(fs)
+            .name(entry),
+    ];
+
+    let binding = vk::VertexInputBindingDescription {
+        binding: 0,
+        stride: std::mem::size_of::<TextVertex>() as u32,
+        input_rate: vk::VertexInputRate::VERTEX,
+    };
+    let bindings = [binding];
+    let attrs = [
+        vk::VertexInputAttributeDescription {
+            location: 0,
+            binding: 0,
+            format: vk::Format::R32G32_SFLOAT,
+            offset: 0,
+        },
+        vk::VertexInputAttributeDescription {
+            location: 1,
+            binding: 0,
+            format: vk::Format::R32G32_SFLOAT,
+            offset: 8,
+        },
+        vk::VertexInputAttributeDescription {
+            location: 2,
+            binding: 0,
+            format: vk::Format::R32G32B32A32_SFLOAT,
+            offset: 16,
+        },
+    ];
+    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+        .vertex_binding_descriptions(&bindings)
+        .vertex_attribute_descriptions(&attrs);
+
+    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+        .viewport_count(1)
+        .scissor_count(1);
+    let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+        .polygon_mode(vk::PolygonMode::FILL)
+        .line_width(1.0)
+        .cull_mode(vk::CullModeFlags::NONE)
+        .front_face(vk::FrontFace::COUNTER_CLOCKWISE);
+    let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(false)
+        .depth_write_enable(false);
+    let blend = vk::PipelineColorBlendAttachmentState::default()
+        .color_write_mask(vk::ColorComponentFlags::RGBA)
+        .blend_enable(true)
+        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+        .color_blend_op(vk::BlendOp::ADD)
+        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+        .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+        .alpha_blend_op(vk::BlendOp::ADD);
+    let blend_attachments = [blend];
+    let color_blending =
+        vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
     let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
     let dynamic_state =
         vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);

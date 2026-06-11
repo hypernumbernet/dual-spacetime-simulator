@@ -11,7 +11,6 @@ pub mod simulation;
 pub mod ui;
 pub mod ui_state;
 pub mod ui_styles;
-pub mod vulkan_base;
 
 use crate::initial_condition::InitialCondition;
 use crate::integration::Gui;
@@ -20,8 +19,8 @@ use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
 use crate::ui::draw_ui;
 use crate::ui_state::{AppMode, DragOwner, UiState};
-use crate::vulkan_base::VulkanBase;
 use ash::vk;
+use vulkanvil::VulkanBase;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -260,7 +259,12 @@ impl ApplicationHandler for App {
             window.set_maximized(true);
         }
 
-        let vulkan_base = VulkanBase::new(&window, self.settings.mailbox_present_mode);
+        let vulkan_base = VulkanBase::new(
+            &window,
+            self.settings.mailbox_present_mode,
+            c"DualSpacetimeSimulator",
+            vk::make_api_version(0, 0, 2, 0),
+        );
         let render_pipeline = ParticleRenderPipeline::new(&vulkan_base);
 
         let gui = Gui::new(

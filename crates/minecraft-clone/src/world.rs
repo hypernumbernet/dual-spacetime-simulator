@@ -14,24 +14,38 @@ use crate::worldgen::generate_chunk;
 use glam::{IVec2, IVec3};
 use std::collections::HashMap;
 
-/// Single knob: the gen/unload rings (and the renderer's fog) derive from this.
-pub const RENDER_DISTANCE: i32 = 50;
-const GEN_DISTANCE: i32 = RENDER_DISTANCE + 1;
-const UNLOAD_DISTANCE: i32 = RENDER_DISTANCE + 3;
+/// Default streamed ring radius; adjustable at runtime via [`World::set_render_distance`]
+/// (the gen/unload rings and the renderer's fog derive from the current value).
+pub const DEFAULT_RENDER_DISTANCE: i32 = 50;
+pub const MIN_RENDER_DISTANCE: i32 = 4;
+pub const MAX_RENDER_DISTANCE: i32 = 500;
 /// Chunks within this radius of the player keep CPU block data for collision and
 /// underwater checks; beyond it, meshed chunks drop their blocks.
 const BLOCKS_KEEP_DISTANCE: i32 = 4;
 const GEN_BUDGET: usize = 10;
 const MESH_BUDGET: usize = 4;
 const BLOCK_REGEN_BUDGET: usize = 4;
+/// Per-frame budget for regenerating dropped neighbor block data during meshing.
+const MESH_REGEN_BUDGET: usize = 8;
 
 pub struct Chunk {
     pub blocks: Option<ChunkBlocks>,
     pub meshed: bool,
 }
 
+/// Counters for the developer HUD.
+pub struct WorldStats {
+    pub loaded: usize,
+    pub meshed: usize,
+    pub resident_blocks: usize,
+    pub block_bytes: usize,
+    pub pending_gen: usize,
+    pub pending_mesh: usize,
+}
+
 pub struct World {
     chunks: HashMap<IVec2, Chunk>,
+    render_distance: i32,
     pending_gen: Vec<IVec2>,    // sorted by distance DESC; pop() = nearest
     pending_mesh: Vec<IVec2>,   // sorted by distance DESC; scan from end = nearest
     pending_blocks: Vec<IVec2>, // dropped block data to regenerate near the player
@@ -42,10 +56,57 @@ impl World {
     pub fn new() -> Self {
         Self {
             chunks: HashMap::new(),
+            render_distance: DEFAULT_RENDER_DISTANCE,
             pending_gen: Vec::new(),
             pending_mesh: Vec::new(),
             pending_blocks: Vec::new(),
             last_player_chunk: None,
+        }
+    }
+
+    pub fn render_distance(&self) -> i32 {
+        self.render_distance
+    }
+
+    /// Changes the streamed ring radius and forces a queue rebuild (and an
+    /// unload pass when shrinking) on the next `update_streaming` call.
+    pub fn set_render_distance(&mut self, distance: i32) {
+        let distance = distance.clamp(MIN_RENDER_DISTANCE, MAX_RENDER_DISTANCE);
+        if distance != self.render_distance {
+            self.render_distance = distance;
+            self.last_player_chunk = None;
+        }
+    }
+
+    fn gen_distance(&self) -> i32 {
+        self.render_distance + 1
+    }
+
+    fn unload_distance(&self) -> i32 {
+        self.render_distance + 3
+    }
+
+    /// Chunk/memory counters for the developer HUD.
+    pub fn stats(&self) -> WorldStats {
+        let mut meshed = 0;
+        let mut resident_blocks = 0;
+        let mut block_bytes = 0;
+        for chunk in self.chunks.values() {
+            if chunk.meshed {
+                meshed += 1;
+            }
+            if let Some(b) = &chunk.blocks {
+                resident_blocks += 1;
+                block_bytes += b.byte_size();
+            }
+        }
+        WorldStats {
+            loaded: self.chunks.len(),
+            meshed,
+            resident_blocks,
+            block_bytes,
+            pending_gen: self.pending_gen.len(),
+            pending_mesh: self.pending_mesh.len(),
         }
     }
 
@@ -135,7 +196,7 @@ impl World {
                     meshed: false,
                 },
             );
-            if cheb(coord, player_chunk) <= RENDER_DISTANCE {
+            if cheb(coord, player_chunk) <= self.render_distance {
                 self.pending_mesh.push(coord);
             }
             gens += 1;
@@ -145,6 +206,7 @@ impl World {
 
         // Meshing: only chunks whose own and 4 neighbors' block data is present.
         let mut meshed = 0;
+        let mut mesh_regens = 0;
         let mut i = self.pending_mesh.len();
         while meshed < MESH_BUDGET && i > 0 {
             i -= 1;
@@ -163,12 +225,29 @@ impl World {
                 coord + IVec2::new(0, -1),
                 coord + IVec2::new(0, 1),
             ];
-            let ready = chunk.blocks.is_some()
-                && neighbors
-                    .iter()
-                    .all(|n| self.chunks.get(n).is_some_and(|c| c.blocks.is_some()));
-            if !ready {
-                continue; // wait for neighbors; leave in queue
+            if !neighbors.iter().all(|n| self.chunks.contains_key(n)) {
+                continue; // wait for generation; leave in queue
+            }
+            // A present chunk may have dropped its block data: a meshed chunk at the
+            // unload boundary keeps `meshed = true` while a removed neighbor is later
+            // regenerated, and the regen ring (BLOCKS_KEEP_DISTANCE) only covers the
+            // player's vicinity. Without regenerating here, such boundary chunks stay
+            // unmeshed until the player walks right up to them — visible as straight
+            // chunk-line gaps. Worldgen is deterministic, so regenerate on the spot,
+            // budgeted to avoid frame spikes.
+            let mut blocks_ready = true;
+            for c in std::iter::once(coord).chain(neighbors) {
+                if self.chunks[&c].blocks.is_none() {
+                    if mesh_regens < MESH_REGEN_BUDGET {
+                        self.chunks.get_mut(&c).unwrap().blocks = Some(generate_chunk(c));
+                        mesh_regens += 1;
+                    } else {
+                        blocks_ready = false;
+                    }
+                }
+            }
+            if !blocks_ready {
+                continue; // regen budget exhausted; retry next frame
             }
 
             let m = {
@@ -190,9 +269,10 @@ impl World {
 
     /// Rebuilds gen/mesh/regen queues for the ring around the player.
     fn rebuild_queues(&mut self, player_chunk: IVec2) {
+        let gen_distance = self.gen_distance();
         self.pending_gen.clear();
-        for dx in -GEN_DISTANCE..=GEN_DISTANCE {
-            for dz in -GEN_DISTANCE..=GEN_DISTANCE {
+        for dx in -gen_distance..=gen_distance {
+            for dz in -gen_distance..=gen_distance {
                 let coord = player_chunk + IVec2::new(dx, dz);
                 if !self.chunks.contains_key(&coord) {
                     self.pending_gen.push(coord);
@@ -203,7 +283,7 @@ impl World {
 
         self.pending_mesh.clear();
         for (coord, chunk) in &self.chunks {
-            if !chunk.meshed && cheb(*coord, player_chunk) <= RENDER_DISTANCE {
+            if !chunk.meshed && cheb(*coord, player_chunk) <= self.render_distance {
                 self.pending_mesh.push(*coord);
             }
         }
@@ -227,11 +307,12 @@ impl World {
 
     /// Removes chunks (and their GPU meshes) beyond the unload radius.
     fn unload_distant(&mut self, player_chunk: IVec2, renderer: &mut Renderer) {
+        let unload_distance = self.unload_distance();
         let to_remove: Vec<IVec2> = self
             .chunks
             .keys()
             .copied()
-            .filter(|c| cheb(*c, player_chunk) > UNLOAD_DISTANCE)
+            .filter(|c| cheb(*c, player_chunk) > unload_distance)
             .collect();
         for coord in to_remove {
             self.chunks.remove(&coord);

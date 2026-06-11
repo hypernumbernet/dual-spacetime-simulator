@@ -1,11 +1,10 @@
 //! Procedural 64x64 RGBA texture atlas (8 tiles of 16px) and its Vulkan upload.
 
-use crate::buffer::{AllocatedBuffer, AllocatedImage};
-use crate::vulkan_base::VulkanBase;
 use ash::vk;
 use gpu_allocator::vulkan::Allocator;
 use gpu_allocator::MemoryLocation;
 use std::sync::Mutex;
+use vulkanvil::{AllocatedBuffer, AllocatedImage, VulkanBase};
 
 pub const ATLAS_PX: u32 = 64;
 const TILE: u32 = 16;
@@ -126,8 +125,19 @@ fn add(c: [f32; 3], d: f32) -> [f32; 3] {
 
 /// Generates the atlas and uploads it into a sampled GPU image (NEAREST sampler).
 pub fn create_atlas_texture(vb: &VulkanBase, allocator: &Mutex<Allocator>) -> Texture {
+    create_texture_rgba(vb, allocator, &generate_atlas_pixels(), ATLAS_PX, ATLAS_PX, "atlas")
+}
+
+/// Uploads RGBA8 pixels into a sampled GPU image via a one-time transfer (NEAREST sampler).
+pub fn create_texture_rgba(
+    vb: &VulkanBase,
+    allocator: &Mutex<Allocator>,
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    name: &str,
+) -> Texture {
     let device = &vb.device;
-    let pixels = generate_atlas_pixels();
 
     // Staging buffer.
     let staging = AllocatedBuffer::new(
@@ -136,7 +146,7 @@ pub fn create_atlas_texture(vb: &VulkanBase, allocator: &Mutex<Allocator>) -> Te
         pixels.len() as u64,
         vk::BufferUsageFlags::TRANSFER_SRC,
         MemoryLocation::CpuToGpu,
-        "atlas-staging",
+        name,
     );
     if let Some(ref alloc) = staging.allocation {
         if let Some(mapped) = alloc.mapped_ptr() {
@@ -153,12 +163,12 @@ pub fn create_atlas_texture(vb: &VulkanBase, allocator: &Mutex<Allocator>) -> Te
     let mut image = AllocatedImage::new(
         device,
         allocator,
-        ATLAS_PX,
-        ATLAS_PX,
+        width,
+        height,
         vk::Format::R8G8B8A8_UNORM,
         vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
         vk::ImageAspectFlags::COLOR,
-        "atlas-image",
+        name,
     );
 
     // One-time command buffer for transfer + layout transitions.
@@ -213,8 +223,8 @@ pub fn create_atlas_texture(vb: &VulkanBase, allocator: &Mutex<Allocator>) -> Te
         },
         image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
         image_extent: vk::Extent3D {
-            width: ATLAS_PX,
-            height: ATLAS_PX,
+            width,
+            height,
             depth: 1,
         },
     };

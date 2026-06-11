@@ -13,21 +13,22 @@ path = "src/main.rs"
 
 [dependencies]
 ahash = "0.8.12"
-ash = { version = "0.38", features = ["loaded"] }
-ash-window = "0.13"
-bytemuck = { version = "1.25.0", features = ["derive"] }
+ash.workspace = true
+ash-window.workspace = true
+bytemuck.workspace = true
 dst-math.workspace = true
 egui = "0.31.1"
 egui-ash-renderer = { version = "0.8", default-features = false }
 egui-winit = { version = "0.31.1", default-features = false }
 glam.workspace = true
-gpu-allocator = { version = "0.27", default-features = false, features = ["vulkan"] }
+gpu-allocator.workspace = true
 num_cpus = "1.17.0"
 rand = "0.9.2"
 rand_distr = "0.5.1"
-raw-window-handle = "0.6"
+raw-window-handle.workspace = true
 rayon = "1.11.0"
 satkit = "0.9.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-winit = "0.30.12"
+vulkanvil.workspace = true
+winit.workspace = true

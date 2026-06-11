@@ -1,4 +1,4 @@
-use std::env;
+﻿use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -17,6 +17,8 @@ fn main() {
         "water.frag",
         "sky.vert",
         "sky.frag",
+        "text.vert",
+        "text.frag",
     ];
 
     for shader in &shaders {

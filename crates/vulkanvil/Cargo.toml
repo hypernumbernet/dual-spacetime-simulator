@@ -1,19 +1,16 @@
 [package]
-name = "minecraft-clone"
+name = "vulkanvil"
 version = "0.1.0"
 edition.workspace = true
 
-[[bin]]
-name = "minecraft-clone"
-path = "src/main.rs"
+[lib]
+name = "vulkanvil"
+path = "src/lib.rs"
 
 [dependencies]
 ash.workspace = true
-font8x8 = "0.3"
 ash-window.workspace = true
 bytemuck.workspace = true
-glam.workspace = true
 gpu-allocator.workspace = true
 raw-window-handle.workspace = true
-vulkanvil.workspace = true
 winit.workspace = true

@@ -5,12 +5,12 @@ use crate::input::InputState;
 use crate::mesher::SUN_DIR;
 use crate::player::Player;
 use crate::renderer::{PushConstants, Renderer, SkyPushConstants};
-use crate::vulkan_base::VulkanBase;
 use crate::world::World;
 use ash::vk;
 use glam::IVec3;
 use std::sync::Arc;
 use std::time::Instant;
+use vulkanvil::VulkanBase;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
@@ -19,6 +19,15 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window};
 
 const MAX_DT: f32 = 1.0 / 30.0;
+/// Render-distance step per PageUp/PageDown press (chunks).
+const RD_STEP: i32 = 5;
+/// HUD refresh interval (seconds); also the FPS averaging window.
+const HUD_INTERVAL: f32 = 0.25;
+
+/// Formats a byte count as mebibytes for the HUD.
+fn fmt_mb(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+}
 
 /// Recreates the swapchain + size-dependent resources, unless the window has no
 /// drawable area (minimized). Creating a 0×0 swapchain is invalid and the resulting
@@ -44,6 +53,11 @@ pub struct App {
     last_frame: Option<Instant>,
     start_time: Instant,
     cursor_grabbed: bool,
+    hud_visible: bool,
+    hud_dirty: bool,
+    hud_acc: f32,
+    hud_frames: u32,
+    fps: f32,
 }
 
 impl Default for App {
@@ -58,6 +72,11 @@ impl Default for App {
             last_frame: None,
             start_time: Instant::now(),
             cursor_grabbed: false,
+            hud_visible: true,
+            hud_dirty: true,
+            hud_acc: 0.0,
+            hud_frames: 0,
+            fps: 0.0,
         }
     }
 }
@@ -104,11 +123,11 @@ impl App {
         }
 
         let now = Instant::now();
-        let dt = self
+        let raw_dt = self
             .last_frame
             .map(|t| (now - t).as_secs_f32())
-            .unwrap_or(0.0)
-            .min(MAX_DT);
+            .unwrap_or(0.0);
+        let dt = raw_dt.min(MAX_DT);
         self.last_frame = Some(now);
 
         if self.cursor_grabbed {
@@ -116,10 +135,77 @@ impl App {
             self.player.apply_mouse(dx, dy);
         }
         self.player.update(&self.input, &self.world, dt);
+
+        // Developer controls: F3 toggles the HUD, PageUp/PageDown resize the streamed ring.
+        if self.input.just_pressed(KeyCode::F3) {
+            self.hud_visible = !self.hud_visible;
+            if self.hud_visible {
+                self.hud_dirty = true;
+            } else {
+                renderer.update_hud("");
+            }
+        }
+        if self.input.just_pressed(KeyCode::PageUp) {
+            self.world
+                .set_render_distance(self.world.render_distance() + RD_STEP);
+            self.hud_dirty = true;
+        }
+        if self.input.just_pressed(KeyCode::PageDown) {
+            self.world
+                .set_render_distance(self.world.render_distance() - RD_STEP);
+            self.hud_dirty = true;
+        }
         self.input.end_frame();
 
         let player_chunk = chunk_of_pos(self.player.pos);
         self.world.update_streaming(player_chunk, renderer);
+
+        // HUD refresh on a fixed interval (the stat walks are O(loaded chunks)).
+        self.hud_acc += raw_dt;
+        self.hud_frames += 1;
+        let fps_due = self.hud_acc >= HUD_INTERVAL;
+        if fps_due {
+            self.fps = self.hud_frames as f32 / self.hud_acc;
+            self.hud_acc = 0.0;
+            self.hud_frames = 0;
+        }
+        if self.hud_visible && (fps_due || self.hud_dirty) {
+            let ws = self.world.stats();
+            let rs = renderer.stats();
+            let report = vb.allocator.as_ref().unwrap().lock().unwrap().generate_report();
+            let pos = self.player.pos;
+            let text = format!(
+                "fps {:.1} ({:.2} ms)\n\
+                 pos {:.1} {:.1} {:.1}  chunk {} {}\n\
+                 render distance {} (PgUp/PgDn {:+}, F3 hud)\n\
+                 chunks: {} loaded, {} meshed, {} with blocks\n\
+                 queues: gen {}, mesh {}\n\
+                 cpu chunk blocks: {}\n\
+                 gpu chunk meshes: {} ({})\n\
+                 gpu allocator: {} used / {} reserved",
+                self.fps,
+                if self.fps > 0.0 { 1000.0 / self.fps } else { 0.0 },
+                pos.x,
+                pos.y,
+                pos.z,
+                player_chunk.x,
+                player_chunk.y,
+                self.world.render_distance(),
+                RD_STEP,
+                ws.loaded,
+                ws.meshed,
+                ws.resident_blocks,
+                ws.pending_gen,
+                ws.pending_mesh,
+                fmt_mb(ws.block_bytes as u64),
+                rs.chunk_meshes,
+                fmt_mb(rs.mesh_bytes),
+                fmt_mb(report.total_allocated_bytes),
+                fmt_mb(report.total_reserved_bytes),
+            );
+            renderer.update_hud(&text);
+            self.hud_dirty = false;
+        }
 
         // Render.
         vb.wait_for_fence();
@@ -158,7 +244,13 @@ impl App {
                 eye.z.floor() as i32,
             ))
             .is_water();
-        let pc = PushConstants::new(view_proj, [eye.x, eye.y, eye.z], time, underwater);
+        let pc = PushConstants::new(
+            view_proj,
+            [eye.x, eye.y, eye.z],
+            time,
+            underwater,
+            self.world.render_distance(),
+        );
 
         let fwd = self.player.forward();
         let right = self.player.right();
@@ -200,7 +292,12 @@ impl ApplicationHandler for App {
             .with_inner_size(LogicalSize::new(1280.0, 800.0));
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
 
-        let vb = VulkanBase::new(&window, false);
+        let vb = VulkanBase::new(
+            &window,
+            false,
+            c"MinecraftClone",
+            vk::make_api_version(0, 0, 1, 0),
+        );
         let renderer = Renderer::new(&vb);
 
         self.window = Some(window);

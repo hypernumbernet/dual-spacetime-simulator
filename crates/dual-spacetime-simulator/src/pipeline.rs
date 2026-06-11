@@ -1,12 +1,11 @@
 ﻿use crate::camera::OrbitCamera;
 use crate::integration::Gui;
 use crate::ui_state::*;
-use crate::vulkan_base::VulkanBase;
 use ash::vk;
 use glam::{Mat4, Vec3};
-use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, Allocator};
-use gpu_allocator::MemoryLocation;
+use gpu_allocator::vulkan::Allocator;
 use std::sync::{Arc, Mutex};
+use vulkanvil::{create_buffer_with_data, create_shader_module, AllocatedBuffer, VulkanBase};
 
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
 const MOUSE_RIGHT_DRAG_SENS: f32 = 0.001f32;
@@ -41,96 +40,6 @@ struct AxesPushConstants {
 struct PushConstants {
     view_proj: [[f32; 4]; 4],
     size_scale: f32,
-}
-
-struct AllocatedBuffer {
-    buffer: vk::Buffer,
-    allocation: Option<Allocation>,
-}
-
-impl AllocatedBuffer {
-    /// Allocates a GPU buffer with VMA allocation and optional mapped memory.
-    fn new(
-        device: &ash::Device,
-        allocator: &Mutex<Allocator>,
-        size: u64,
-        usage: vk::BufferUsageFlags,
-        location: MemoryLocation,
-        name: &str,
-    ) -> Self {
-        let buffer_ci = vk::BufferCreateInfo::default()
-            .size(size.max(1))
-            .usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        let buffer = unsafe { device.create_buffer(&buffer_ci, None) }.unwrap();
-        let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
-
-        let allocation = allocator
-            .lock()
-            .unwrap()
-            .allocate(&AllocationCreateDesc {
-                name,
-                requirements,
-                location,
-                linear: true,
-                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-            })
-            .unwrap();
-
-        unsafe {
-            device
-                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
-                .unwrap();
-        }
-        Self {
-            buffer,
-            allocation: Some(allocation),
-        }
-    }
-
-    /// Destroys buffer and frees associated VMA allocation.
-    fn destroy(mut self, device: &ash::Device, allocator: &Mutex<Allocator>) {
-        unsafe { device.destroy_buffer(self.buffer, None) };
-        if let Some(alloc) = self.allocation.take() {
-            allocator.lock().unwrap().free(alloc).unwrap();
-        }
-    }
-}
-
-/// Creates a host-visible buffer, uploads typed data, and returns allocated handle.
-fn create_buffer_with_data<T: bytemuck::Pod>(
-    device: &ash::Device,
-    allocator: &Mutex<Allocator>,
-    data: &[T],
-    usage: vk::BufferUsageFlags,
-    name: &str,
-) -> (AllocatedBuffer, u32) {
-    let byte_size = (std::mem::size_of::<T>() * data.len().max(1)) as u64;
-    let buf = AllocatedBuffer::new(device, allocator, byte_size, usage, MemoryLocation::CpuToGpu, name);
-
-    if !data.is_empty() {
-        if let Some(ref alloc) = buf.allocation {
-            if let Some(mapped) = alloc.mapped_ptr() {
-                let bytes = bytemuck::cast_slice::<T, u8>(data);
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        bytes.as_ptr(),
-                        mapped.as_ptr() as *mut u8,
-                        bytes.len(),
-                    );
-                }
-            }
-        }
-    }
-    let count = data.len() as u32;
-    (buf, count)
-}
-
-/// Creates a Vulkan shader module from SPIR-V bytecode.
-fn create_shader_module(device: &ash::Device, spv: &[u8]) -> vk::ShaderModule {
-    let code = ash::util::read_spv(&mut std::io::Cursor::new(spv)).unwrap();
-    let ci = vk::ShaderModuleCreateInfo::default().code(&code);
-    unsafe { device.create_shader_module(&ci, None) }.unwrap()
 }
 
 pub struct ParticleRenderPipeline {

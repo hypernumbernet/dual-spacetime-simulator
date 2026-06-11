@@ -1,18 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! A small Minecraft-style voxel world built on the dual-spacetime-simulator crate's
-//! Vulkan 3D foundation (copied `vulkan_base` + buffer helpers).
+//! A small Minecraft-style voxel world built on the `vulkanvil` crate's
+//! Vulkan 3D foundation.
 
 mod app;
 mod block;
-mod buffer;
 mod chunk;
+mod hud;
 mod input;
 mod mesher;
 mod player;
 mod renderer;
 mod texture;
-mod vulkan_base;
 mod world;
 mod worldgen;
 

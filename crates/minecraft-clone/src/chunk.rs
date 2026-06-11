@@ -59,6 +59,12 @@ impl ChunkBlocks {
     pub fn height(&self) -> usize {
         self.height
     }
+
+    /// Heap bytes held by the block array (for the developer HUD).
+    #[inline]
+    pub fn byte_size(&self) -> usize {
+        self.data.len() * std::mem::size_of::<Block>()
+    }
 }
 
 /// World block position -> (chunk coord, local block coord within that chunk).
