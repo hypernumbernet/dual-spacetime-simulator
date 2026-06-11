@@ -4,6 +4,7 @@ members = [
     "crates/dst-math",
     "crates/dst-expand",
     "crates/dual-spacetime-simulator",
+    "crates/minecraft-clone",
 ]
 
 [workspace.package]

@@ -991,6 +991,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "minecraft-clone"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "ash-window",
+ "bytemuck",
+ "glam 0.30.8",
+ "gpu-allocator",
+ "raw-window-handle",
+ "winit",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

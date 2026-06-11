@@ -1,0 +1,17 @@
+[package]
+name = "minecraft-clone"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "minecraft-clone"
+path = "src/main.rs"
+
+[dependencies]
+ash = { version = "0.38", features = ["loaded"] }
+ash-window = "0.13"
+bytemuck = { version = "1.25.0", features = ["derive"] }
+glam.workspace = true
+gpu-allocator = { version = "0.27", default-features = false, features = ["vulkan"] }
+raw-window-handle = "0.6"
+winit = "0.30.12"

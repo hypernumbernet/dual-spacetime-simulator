@@ -1,3 +1,8 @@
+//! Low-level Vulkan instance/device/swapchain/sync setup.
+//!
+//! Copied from the `dual-spacetime-simulator` crate's `vulkan_base.rs` (the workspace's
+//! reusable 3D foundation). Only the application name differs.
+
 use ash::khr::{surface, swapchain};
 use ash::{vk, Device, Entry, Instance};
 use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
@@ -5,7 +10,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::sync::{Arc, Mutex};
 use winit::window::Window;
 
-const MAX_FRAMES_IN_FLIGHT: usize = 2;
+pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 pub struct VulkanBase {
     #[allow(dead_code)]
@@ -16,6 +21,7 @@ pub struct VulkanBase {
     pub physical_device: vk::PhysicalDevice,
     pub device: Device,
     pub graphics_queue: vk::Queue,
+    #[allow(dead_code)]
     pub graphics_queue_family: u32,
     pub swapchain_loader: swapchain::Device,
     pub swapchain: vk::SwapchainKHR,
@@ -46,8 +52,8 @@ impl VulkanBase {
             .expect("Failed to enumerate required extensions");
 
         let app_info = vk::ApplicationInfo::default()
-            .application_name(c"DualSpacetimeSimulator")
-            .application_version(vk::make_api_version(0, 0, 2, 0))
+            .application_name(c"MinecraftClone")
+            .application_version(vk::make_api_version(0, 0, 1, 0))
             .engine_name(c"No Engine")
             .engine_version(vk::make_api_version(0, 1, 0, 0))
             .api_version(vk::API_VERSION_1_2);
@@ -251,7 +257,6 @@ impl VulkanBase {
     pub fn advance_frame(&mut self) {
         self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
-
 }
 
 impl Drop for VulkanBase {
@@ -278,8 +283,7 @@ impl Drop for VulkanBase {
             drop(self.allocator.take());
 
             self.cleanup_swapchain();
-            self.swapchain_loader
-                .destroy_swapchain(self.swapchain, None);
+            self.swapchain_loader.destroy_swapchain(self.swapchain, None);
             self.surface_loader.destroy_surface(self.surface, None);
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);

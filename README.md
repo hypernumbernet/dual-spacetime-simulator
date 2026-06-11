@@ -30,6 +30,19 @@ cargo run -p dual-spacetime-simulator --release
 
 `cargo build -p dual-spacetime-simulator --release` でも同じ設定（ルート `Cargo.toml` の `[profile.release]`）でビルドできます。
 
+### バリデーションレイヤ付き実行（開発時のみ）
+
+Vulkan の使い方に誤りがないかを開発中に検証したい場合は、**Vulkan バリデーションレイヤ**を有効にして起動します。
+
+```powershell
+$env:VK_INSTANCE_LAYERS = "VK_LAYER_KHRONOS_validation"
+cargo run -p dual-spacetime-simulator
+```
+
+バリデーションレイヤは、API の呼び出し順序・同期・リソースのライフタイムなどの違反を検出し、標準エラー出力に警告（`VUID-...`）として報告してくれる開発支援機能です。実機ドライバでは見逃されがちな不正な使い方を、ハングやクラッシュとして表面化する前に発見できます。
+
+有効化は上記の環境変数（または Vulkan SDK 付属の `vkconfig`）で行う**外部の仕組み**で、バイナリ自体はレイヤを組み込みません。そのため通常実行や `--release` ビルドでは何も指定しなければ自動的にオフになり、検証によるオーバーヘッドや出力は本番に持ち込まれません。検証中は警告ゼロを目安にしてください。
+
 数学・展開クレートのみテストする場合:
 
 ```powershell
