@@ -8,22 +8,18 @@ pub mod integration;
 pub mod pipeline;
 pub mod settings;
 pub mod simulation;
-pub mod tree;
 pub mod ui;
 pub mod ui_state;
 pub mod ui_styles;
 pub mod vulkan_base;
-
-pub use pipeline::shader_blobs;
 
 use crate::initial_condition::InitialCondition;
 use crate::integration::Gui;
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
-use crate::tree::Tree;
 use crate::ui::draw_ui;
-use crate::ui_state::{AppMode, DragOwner, GpuTreeRenderMode, UiState};
+use crate::ui_state::{AppMode, DragOwner, UiState};
 use crate::vulkan_base::VulkanBase;
 use ash::vk;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -182,7 +178,6 @@ pub struct App {
     settings: AppSettings,
     last_graph3d_fingerprint: u64,
     graph3d_pending_rx: Option<Receiver<Graph3dBuildResult>>,
-    last_gpu_tree_fingerprint: u64,
     prev_app_mode: AppMode,
     drag_owner: DragOwner,
 }
@@ -238,7 +233,6 @@ impl Default for App {
             settings,
             last_graph3d_fingerprint: u64::MAX,
             graph3d_pending_rx: None,
-            last_gpu_tree_fingerprint: 0,
             prev_app_mode: AppMode::default(),
             drag_owner: DragOwner::None,
         }
@@ -391,11 +385,6 @@ impl ApplicationHandler for App {
                 let link_point_size_to_scale = ui_state.link_point_size_to_scale;
                 let show_grid = ui_state.show_grid;
                 let app_mode = ui_state.app_mode;
-                let gpu_tree_render_mode = if app_mode == AppMode::GpuTree {
-                    ui_state.gpu_tree_render_mode
-                } else {
-                    GpuTreeRenderMode::Polygons
-                };
                 drop(ui_state);
 
                 pipeline.render(
@@ -407,7 +396,6 @@ impl ApplicationHandler for App {
                     link_point_size_to_scale,
                     show_grid,
                     app_mode,
-                    gpu_tree_render_mode,
                 );
 
                 unsafe {
@@ -537,40 +525,7 @@ impl ApplicationHandler for App {
                 pipeline.set_graph_lines(&[]);
             }
             self.last_graph3d_fingerprint = u64::MAX;
-            self.last_gpu_tree_fingerprint = 0;
             *self.need_redraw.write().unwrap() = true;
-        }
-        if prev == AppMode::GpuTree && app_mode == AppMode::Graph3D {
-            // Rebuild Graph3D data even when parameters are unchanged after leaving GpuTree.
-            self.last_graph3d_fingerprint = u64::MAX;
-        }
-        if app_mode == AppMode::GpuTree {
-            let uis = self.ui_state.read().unwrap();
-            let fp = uis.gpu_tree_fingerprint();
-            let layout = uis.gpu_tree_layout;
-            let render_mode = uis.gpu_tree_render_mode;
-            let params = uis.gpu_tree_params;
-            drop(uis);
-
-            let needs_update = prev != AppMode::GpuTree || fp != self.last_gpu_tree_fingerprint;
-            if needs_update {
-                if let Some(pipeline) = self.render_pipeline.as_mut() {
-                    pipeline.set_particles(&[], &[]);
-                    pipeline.set_graph_lines(&[]);
-                    match render_mode {
-                        GpuTreeRenderMode::Lines => {
-                            let line_verts = Tree::generate_vertices_for_layout(layout, params);
-                            pipeline.set_graph_lines(&line_verts);
-                        }
-                        GpuTreeRenderMode::Polygons => {
-                            pipeline.compute_tree_vertices(params, layout);
-                        }
-                    }
-                }
-                self.last_gpu_tree_fingerprint = fp;
-            }
-            self.prev_app_mode = app_mode;
-            return;
         }
         self.prev_app_mode = app_mode;
 
@@ -627,7 +582,6 @@ impl ApplicationHandler for App {
         }
         self.graph3d_pending_rx = None;
         self.last_graph3d_fingerprint = u64::MAX;
-        self.last_gpu_tree_fingerprint = 0;
         if *self.need_redraw.read().unwrap() == false {
             return;
         }

@@ -4,7 +4,6 @@ mod common;
 
 use ash::vk;
 use ash::vk::Handle;
-use dual_spacetime_simulator::shader_blobs;
 use gpu_allocator::vulkan::{AllocationCreateDesc, AllocationScheme};
 use gpu_allocator::MemoryLocation;
 use std::ptr;
@@ -17,7 +16,6 @@ fn headless_vulkan_initializes() {
     };
     assert!(!v.physical_device.is_null());
     assert!(!v.device.handle().is_null());
-    assert!(shader_blobs::TREE_COMPUTE.len() >= 4);
 }
 
 #[test]

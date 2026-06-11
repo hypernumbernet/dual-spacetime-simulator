@@ -94,8 +94,6 @@ cargo test --workspace
 - グラフィックスパイプラインは以下を用途別に保持:
   - 軸・グリッド・グラフ線 (`LineList`)
   - 粒子 (`PointList`)
-  - GPU Tree (`LineList` / `TriangleList` をモードで切替)
-- GPU Tree 用のコンピュートパイプラインを持ち、木構造頂点の生成更新を実行
 
 ### UI 統合 (`crates/dual-spacetime-simulator/src/integration.rs` など)
 
@@ -107,7 +105,6 @@ cargo test --workspace
 
 - **Simulation**: N 体重力系ベースの粒子更新と可視化
 - **3D Graph**: 相対論モチーフの各種 3D グラフ（Light Cone など）を線描画
-- **GPU Tree**: GPU 側計算を使った木構造描画（Lines / Polygons）
 
 ## シェーダ
 
@@ -118,8 +115,6 @@ cargo test --workspace
 
 - `axes_vertex.vert` / `axes_fragment.frag`
 - `particles_vertex.vert` / `particles_fragment.frag`
-- `tree_vertex.vert` / `tree_fragment.frag`
-- `tree_compute.comp`
 - `egui_vertex.vert` / `egui_fragment.frag`
 
 ## 操作方法

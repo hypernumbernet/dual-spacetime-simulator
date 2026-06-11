@@ -47,17 +47,6 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                         uis.is_running = false;
                         ui.close_menu();
                     }
-                    if ui
-                        .selectable_label(
-                            uis.app_mode == crate::ui_state::AppMode::GpuTree,
-                            "GPU Tree",
-                        )
-                        .clicked()
-                    {
-                        uis.app_mode = crate::ui_state::AppMode::GpuTree;
-                        uis.is_running = false;
-                        ui.close_menu();
-                    }
                 });
 
                 ui.menu_button("Panel", |ui| {
@@ -88,14 +77,6 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     if available.contains(&PanelKind::Graph3D) {
                         if ui
                             .checkbox(&mut uis.is_graph3d_panel_open, PanelKind::Graph3D.label())
-                            .clicked()
-                        {
-                            ui.close_menu();
-                        }
-                    }
-                    if available.contains(&PanelKind::GpuTree) {
-                        if ui
-                            .checkbox(&mut uis.is_gpu_tree_panel_open, PanelKind::GpuTree.label())
                             .clicked()
                         {
                             ui.close_menu();
@@ -413,83 +394,6 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
             });
     }
 
-    if uis.app_mode == AppMode::GpuTree && uis.is_gpu_tree_panel_open {
-        egui::Window::new("GPU Tree")
-            .resizable(false)
-            .collapsible(true)
-            .default_pos(egui::pos2(
-                PANEL_DEFAULT_X,
-                menu_bar_height + PANEL_MENU_OFFSET_Y,
-            ))
-            .default_width(uis.input_panel_width)
-            .show(ctx, |ui| {
-                label_normal(ui, "Real-Time GPU Tree Generation");
-                ui.separator();
-
-                ComboBox::from_label("Display Layout")
-                    .selected_text(uis.gpu_tree_layout.to_string())
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut uis.gpu_tree_layout,
-                            GpuTreeLayout::Single,
-                            GpuTreeLayout::Single.to_string(),
-                        );
-                        ui.selectable_value(
-                            &mut uis.gpu_tree_layout,
-                            GpuTreeLayout::ForestOnGrid,
-                            GpuTreeLayout::ForestOnGrid.to_string(),
-                        );
-                    });
-                ui.separator();
-
-                ComboBox::from_label("Drawing Mode")
-                    .selected_text(uis.gpu_tree_render_mode.to_string())
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut uis.gpu_tree_render_mode,
-                            GpuTreeRenderMode::Lines,
-                            GpuTreeRenderMode::Lines.to_string(),
-                        );
-                        ui.selectable_value(
-                            &mut uis.gpu_tree_render_mode,
-                            GpuTreeRenderMode::Polygons,
-                            GpuTreeRenderMode::Polygons.to_string(),
-                        );
-                    });
-                ui.separator();
-
-                label_normal(ui, "Tree Generation Parameters");
-                ui.add(
-                    Slider::new(&mut uis.gpu_tree_params.trunk_height, 0.3..=2.0)
-                        .text("Trunk Height"),
-                );
-                ui.add(
-                    Slider::new(&mut uis.gpu_tree_params.trunk_radius_base, 0.02..=0.2)
-                        .text("Trunk Radius"),
-                );
-                ui.add(Slider::new(&mut uis.gpu_tree_params.max_depth, 2..=7).text("Max Depth"));
-                ui.add(
-                    Slider::new(&mut uis.gpu_tree_params.branch_factor, 2..=5)
-                        .text("Branch Factor"),
-                );
-                ui.add(
-                    Slider::new(&mut uis.gpu_tree_params.branch_angle, 0.2..=1.2)
-                        .text("Branch Angle"),
-                );
-                ui.add(Slider::new(&mut uis.gpu_tree_params.tropism, 0.0..=1.0).text("Tropism"));
-                ui.add(Slider::new(&mut uis.gpu_tree_params.seed, 0..=999).text("Seed"));
-
-                ui.separator();
-                label_normal(
-                    ui,
-                    "CPU oak-like trees on every xz grid crossing (step 0.5, same as axis floor).",
-                );
-                ui.label("Weber-Penn spline branches + leaves per tree.");
-                ui.label(
-                    "Switch to GpuTree mode in Mode menu to view. Changes update in real-time.",
-                );
-            });
-    }
 }
 
 /// Formats simulation time into a compact signed human-readable duration string.

@@ -14,9 +14,6 @@ fn main() {
         "axes_fragment.frag",
         "particles_vertex.vert",
         "particles_fragment.frag",
-        "tree_vertex.vert",
-        "tree_fragment.frag",
-        "tree_compute.comp",
         "egui_vertex.vert",
         "egui_fragment.frag",
     ];

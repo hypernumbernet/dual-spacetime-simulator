@@ -1,6 +1,5 @@
 use crate::initial_condition::{InitialCondition, InitialConditionType};
 use crate::settings::AppSettings;
-use crate::tree::TreeParams;
 use glam::DVec3;
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
@@ -9,7 +8,6 @@ pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 pub enum AppMode {
     Simulation,
     Graph3D,
-    GpuTree,
 }
 
 impl Default for AppMode {
@@ -25,7 +23,6 @@ pub enum PanelKind {
     InitialCondition,
     Settings,
     Graph3D,
-    GpuTree,
 }
 
 impl PanelKind {
@@ -36,7 +33,6 @@ impl PanelKind {
             PanelKind::InitialCondition => "Initial Condition",
             PanelKind::Settings => "Settings",
             PanelKind::Graph3D => "3D Graph",
-            PanelKind::GpuTree => "GPU Tree",
         }
     }
 }
@@ -91,8 +87,6 @@ const PANELS_SIMULATION: &[PanelKind] = &[
 
 const PANELS_GRAPH3D: &[PanelKind] = &[PanelKind::Graph3D, PanelKind::Settings];
 
-const PANELS_GPU_TREE: &[PanelKind] = &[PanelKind::GpuTree, PanelKind::Settings];
-
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SimulationType {
     Normal,
@@ -117,42 +111,6 @@ pub enum GraphType {
     SphericalFibonacciLattice,
     RapidityFieldMatrix,
     RapidityFieldBiquaternion,
-}
-
-/// Defines whether GPU trees render as one instance or a full XZ-grid forest.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum GpuTreeLayout {
-    Single,
-    ForestOnGrid,
-}
-
-impl std::fmt::Display for GpuTreeLayout {
-    /// Formats GPU tree layout option for UI selection controls.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let text = match self {
-            GpuTreeLayout::Single => "Single Tree",
-            GpuTreeLayout::ForestOnGrid => "Forest on XZ Grid",
-        };
-        write!(f, "{}", text)
-    }
-}
-
-/// Defines GPU tree drawing style as line list or lit polygon mesh.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum GpuTreeRenderMode {
-    Lines,
-    Polygons,
-}
-
-impl std::fmt::Display for GpuTreeRenderMode {
-    /// Formats GPU tree render mode for UI selection controls.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let text = match self {
-            GpuTreeRenderMode::Lines => "Lines",
-            GpuTreeRenderMode::Polygons => "Polygons",
-        };
-        write!(f, "{}", text)
-    }
 }
 
 impl std::fmt::Display for GraphType {
@@ -200,7 +158,6 @@ pub struct UiState {
     pub is_initial_condition_panel_open: bool,
     pub is_settings_panel_open: bool,
     pub is_graph3d_panel_open: bool,
-    pub is_gpu_tree_panel_open: bool,
     pub start_maximized: bool,
     pub link_point_size_to_scale: bool,
     pub lock_camera_up: bool,
@@ -211,10 +168,6 @@ pub struct UiState {
     pub graph_sample_count: u32,
     pub graph_radius: f64,
     pub graph_velocity_scale: f64,
-    pub gpu_tree_layout: GpuTreeLayout,
-    pub gpu_tree_render_mode: GpuTreeRenderMode,
-    pub gpu_tree_params: TreeParams,
-    pub last_gpu_tree_fingerprint: u64,
 }
 
 impl Default for UiState {
@@ -253,7 +206,6 @@ impl Default for UiState {
             is_initial_condition_panel_open: false,
             is_settings_panel_open: false,
             is_graph3d_panel_open: false,
-            is_gpu_tree_panel_open: false,
             start_maximized: false,
             link_point_size_to_scale: true,
             lock_camera_up: true,
@@ -264,10 +216,6 @@ impl Default for UiState {
             graph_sample_count: 1000,
             graph_radius: 1.0,
             graph_velocity_scale: 1.0,
-            gpu_tree_layout: GpuTreeLayout::Single,
-            gpu_tree_render_mode: GpuTreeRenderMode::Polygons,
-            gpu_tree_params: TreeParams::default(),
-            last_gpu_tree_fingerprint: 0,
         }
     }
 }
@@ -295,43 +243,6 @@ impl UiState {
         self.graph_velocity_scale = 1.0;
     }
 
-    /// Resets all GPU tree parameters and cached fingerprint to defaults.
-    pub fn reset_gpu_tree_params(&mut self) {
-        self.gpu_tree_layout = GpuTreeLayout::Single;
-        self.gpu_tree_render_mode = GpuTreeRenderMode::Polygons;
-        self.gpu_tree_params = TreeParams::default();
-        self.last_gpu_tree_fingerprint = 0;
-    }
-
-    /// Computes a lightweight fingerprint for detecting GPU tree parameter changes.
-    pub fn gpu_tree_fingerprint(&self) -> u64 {
-        let mut hash = 0u64;
-        hash = hash.wrapping_add(self.gpu_tree_layout as u64);
-        hash = hash.wrapping_add((self.gpu_tree_render_mode as u64) * 17);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(self.gpu_tree_params.seed as u64);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add((self.gpu_tree_params.trunk_height * 100.0) as u64);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add((self.gpu_tree_params.trunk_radius_base * 1000.0) as u64);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(self.gpu_tree_params.max_depth as u64);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(self.gpu_tree_params.branch_factor as u64);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add((self.gpu_tree_params.branch_angle * 100.0) as u64);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add((self.gpu_tree_params.tropism * 100.0) as u64);
-        hash
-    }
-
     /// Applies panel open-state defaults when switching between major app modes.
     pub fn apply_panel_defaults_on_app_mode_change(&mut self, from: AppMode, to: AppMode) {
         if from == to {
@@ -341,20 +252,11 @@ impl UiState {
             AppMode::Graph3D => {
                 self.is_simulation_panel_open = false;
                 self.is_initial_condition_panel_open = false;
-                self.is_gpu_tree_panel_open = false;
                 self.is_graph3d_panel_open = true;
                 self.reset_graph_params();
             }
-            AppMode::GpuTree => {
-                self.is_simulation_panel_open = false;
-                self.is_initial_condition_panel_open = false;
-                self.is_graph3d_panel_open = false;
-                self.is_gpu_tree_panel_open = true;
-                self.reset_gpu_tree_params();
-            }
             AppMode::Simulation => {
                 self.is_graph3d_panel_open = false;
-                self.is_gpu_tree_panel_open = false;
                 self.is_simulation_panel_open = true;
             }
         }
@@ -365,7 +267,6 @@ impl UiState {
         match self.app_mode {
             AppMode::Simulation => PANELS_SIMULATION,
             AppMode::Graph3D => PANELS_GRAPH3D,
-            AppMode::GpuTree => PANELS_GPU_TREE,
         }
     }
 }

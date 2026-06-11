@@ -1,14 +1,5 @@
-﻿/// SPIR-V blobs compiled by `build.rs` (exposed for integration tests).
-pub mod shader_blobs {
-    pub const TREE_COMPUTE: &[u8] = include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/shaders/tree_compute.comp.spv"
-    ));
-}
-
-use crate::camera::OrbitCamera;
+﻿use crate::camera::OrbitCamera;
 use crate::integration::Gui;
-use crate::tree::{AXIS_XZ_GRID_EXTENT, AXIS_XZ_GRID_LINE_COUNT, GpuTreeComputeParams};
 use crate::ui_state::*;
 use crate::vulkan_base::VulkanBase;
 use ash::vk;
@@ -22,6 +13,8 @@ const MOUSE_RIGHT_DRAG_SENS: f32 = 0.001f32;
 const SIZE_RATIO: f32 = 0.06;
 const INITIAL_POSITION: Vec3 = Vec3::new(1.6, -1.6, 3.0);
 const INITIAL_TARGET: Vec3 = Vec3::new(0.0, 0.0, 0.0);
+const AXIS_XZ_GRID_EXTENT: f32 = 2.0;
+const AXIS_XZ_GRID_LINE_COUNT: usize = 9;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -34,14 +27,6 @@ struct AxesVertex {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ParticleVertex {
     position: [f32; 3],
-    color: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct TreeVertex {
-    position: [f32; 3],
-    normal: [f32; 3],
     color: [f32; 4],
 }
 
@@ -157,15 +142,8 @@ pub struct ParticleRenderPipeline {
 
     pipeline_axes: vk::Pipeline,
     pipeline_particles: vk::Pipeline,
-    pipeline_tree: vk::Pipeline,
     layout_axes: vk::PipelineLayout,
     layout_particles: vk::PipelineLayout,
-    layout_tree: vk::PipelineLayout,
-
-    compute_pipeline: vk::Pipeline,
-    compute_layout: vk::PipelineLayout,
-    compute_desc_set_layout: vk::DescriptorSetLayout,
-    compute_desc_pool: vk::DescriptorPool,
 
     axes_buffer: AllocatedBuffer,
     axes_vertex_count: u32,
@@ -173,15 +151,9 @@ pub struct ParticleRenderPipeline {
     graph_lines_vertex_count: u32,
     particle_buffer: AllocatedBuffer,
     particle_draw_vertex_count: u32,
-    tree_buffer: Option<AllocatedBuffer>,
-    tree_draw_vertex_count: u32,
     retired_buffers: Vec<AllocatedBuffer>,
 
     camera: OrbitCamera,
-    queue: vk::Queue,
-    #[allow(dead_code)]
-    queue_family: u32,
-    command_pool: vk::CommandPool,
 }
 
 impl ParticleRenderPipeline {
@@ -200,10 +172,6 @@ impl ParticleRenderPipeline {
 
         let (layout_axes, pipeline_axes) = create_axes_pipeline(&device, render_pass);
         let (layout_particles, pipeline_particles) = create_particles_pipeline(&device, render_pass);
-        let (layout_tree, pipeline_tree) = create_tree_pipeline(&device, render_pass);
-        let (compute_desc_set_layout, compute_layout, compute_pipeline) =
-            create_compute_pipeline(&device);
-        let compute_desc_pool = create_compute_descriptor_pool(&device);
 
         let (axes_buffer, axes_vertex_count) =
             create_axes_vertices(&device, &allocator);
@@ -219,27 +187,16 @@ impl ParticleRenderPipeline {
             framebuffers,
             pipeline_axes,
             pipeline_particles,
-            pipeline_tree,
             layout_axes,
             layout_particles,
-            layout_tree,
-            compute_pipeline,
-            compute_layout,
-            compute_desc_set_layout,
-            compute_desc_pool,
             axes_buffer,
             axes_vertex_count,
             graph_lines_buffer: None,
             graph_lines_vertex_count: 0,
             particle_buffer,
             particle_draw_vertex_count: particle_vertex_count,
-            tree_buffer: None,
-            tree_draw_vertex_count: 0,
             retired_buffers: Vec::new(),
             camera,
-            queue: base.graphics_queue,
-            queue_family: base.graphics_queue_family,
-            command_pool: base.command_pool,
         }
     }
 
@@ -277,7 +234,6 @@ impl ParticleRenderPipeline {
         link_point_size_to_scale: bool,
         show_grid: bool,
         app_mode: AppMode,
-        gpu_tree_render_mode: GpuTreeRenderMode,
     ) {
         self.flush_retired_buffers();
         let clear_values = [vk::ClearValue {
@@ -357,37 +313,7 @@ impl ParticleRenderPipeline {
             }
         }
 
-        if app_mode == AppMode::GpuTree {
-            match gpu_tree_render_mode {
-                GpuTreeRenderMode::Lines => {
-                    if let Some(ref buf) = self.graph_lines_buffer {
-                        if self.graph_lines_vertex_count > 0 {
-                            let line_pc = AxesPushConstants {
-                                view_proj: view_proj.to_cols_array_2d(),
-                            };
-                            self.draw_graph_lines(command_buffer, &line_pc, buf.buffer);
-                        }
-                    }
-                }
-                GpuTreeRenderMode::Polygons => {
-                    if let Some(ref buf) = self.tree_buffer {
-                        if self.tree_draw_vertex_count > 0 {
-                            let tree_pc = AxesPushConstants {
-                                view_proj: view_proj.to_cols_array_2d(),
-                            };
-                            self.draw_tree(command_buffer, &tree_pc, buf.buffer);
-                        }
-                    }
-                }
-            }
-        }
-
-        if matches!(
-            app_mode,
-            AppMode::Simulation | AppMode::Graph3D | AppMode::GpuTree
-        ) {
-            self.draw_particles(command_buffer, &pc);
-        }
+        self.draw_particles(command_buffer, &pc);
 
         gui.draw(command_buffer, extent);
 
@@ -452,217 +378,6 @@ impl ParticleRenderPipeline {
         );
         self.graph_lines_buffer = Some(buf);
         self.graph_lines_vertex_count = count;
-    }
-
-    /// Uploads GPU tree mesh vertices and rebuilds the tree vertex buffer.
-    pub fn set_tree_vertices(&mut self, vertices: Vec<([f32; 3], [f32; 3], [f32; 4])>) {
-        if let Some(old) = self.tree_buffer.take() {
-            self.retire_buffer(old);
-        }
-        if vertices.is_empty() {
-            self.tree_draw_vertex_count = 0;
-            return;
-        }
-        let verts: Vec<TreeVertex> = vertices
-            .iter()
-            .map(|(p, n, c)| TreeVertex {
-                position: *p,
-                normal: *n,
-                color: *c,
-            })
-            .collect();
-        let (buf, count) = create_buffer_with_data(
-            &self.device,
-            self.allocator(),
-            &verts,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
-            "tree_vertices",
-        );
-        self.tree_buffer = Some(buf);
-        self.tree_draw_vertex_count = count;
-    }
-
-    /// Executes compute pass to generate tree vertices and uploads the result buffer.
-    pub fn compute_tree_vertices(
-        &mut self,
-        params: crate::tree::TreeParams,
-        layout: GpuTreeLayout,
-    ) {
-        // ForestOnGrid requires multiple trees at grid positions; use CPU for now
-        if layout == GpuTreeLayout::ForestOnGrid {
-            let cpu_verts =
-                crate::tree::Tree::generate_forest_tube_vertices_on_axis_xz_grid(params);
-            self.set_tree_vertices(cpu_verts);
-            return;
-        }
-
-        let compute_params = GpuTreeComputeParams::from(params);
-
-        let params_buf = AllocatedBuffer::new(
-            &self.device,
-            self.allocator(),
-            std::mem::size_of::<GpuTreeComputeParams>() as u64,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            MemoryLocation::CpuToGpu,
-            "compute_params",
-        );
-        if let Some(ref alloc) = params_buf.allocation {
-            if let Some(mapped) = alloc.mapped_ptr() {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        bytemuck::bytes_of(&compute_params).as_ptr(),
-                        mapped.as_ptr() as *mut u8,
-                        std::mem::size_of::<GpuTreeComputeParams>(),
-                    );
-                }
-            }
-        }
-
-        const MAX_VERTICES: usize = 65536;
-        const MAX_BRANCHES: u32 = 512;
-        let pos_size = (MAX_VERTICES * 16) as u64;
-        let norm_size = (MAX_VERTICES * 16) as u64;
-        let col_size = (MAX_VERTICES * 16) as u64;
-        let counter_size = 4u64;
-
-        let positions_buf = AllocatedBuffer::new(
-            &self.device,
-            self.allocator(),
-            pos_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            MemoryLocation::GpuToCpu,
-            "compute_positions",
-        );
-        let normals_buf = AllocatedBuffer::new(
-            &self.device,
-            self.allocator(),
-            norm_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            MemoryLocation::GpuToCpu,
-            "compute_normals",
-        );
-        let colors_buf = AllocatedBuffer::new(
-            &self.device,
-            self.allocator(),
-            col_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            MemoryLocation::GpuToCpu,
-            "compute_colors",
-        );
-        let counter_buf = AllocatedBuffer::new(
-            &self.device,
-            self.allocator(),
-            counter_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            MemoryLocation::CpuToGpu,
-            "compute_counter",
-        );
-        if let Some(ref alloc) = counter_buf.allocation {
-            if let Some(mapped) = alloc.mapped_ptr() {
-                unsafe {
-                    std::ptr::write_bytes(mapped.as_ptr() as *mut u8, 0, 4);
-                }
-            }
-        }
-
-        let desc_set = allocate_compute_descriptor_set(
-            &self.device,
-            self.compute_desc_pool,
-            self.compute_desc_set_layout,
-            &params_buf,
-            &positions_buf,
-            &normals_buf,
-            &colors_buf,
-            &counter_buf,
-        );
-
-        let alloc_ci = vk::CommandBufferAllocateInfo::default()
-            .command_pool(self.command_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
-        let cb = unsafe { self.device.allocate_command_buffers(&alloc_ci) }.unwrap()[0];
-        let begin_ci =
-            vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        unsafe {
-            self.device.begin_command_buffer(cb, &begin_ci).unwrap();
-            self.device
-                .cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, self.compute_pipeline);
-            self.device.cmd_bind_descriptor_sets(
-                cb,
-                vk::PipelineBindPoint::COMPUTE,
-                self.compute_layout,
-                0,
-                &[desc_set],
-                &[],
-            );
-            let workgroup_count = (MAX_BRANCHES + 63) / 64;
-            self.device.cmd_dispatch(cb, workgroup_count, 1, 1);
-            self.device.end_command_buffer(cb).unwrap();
-        }
-
-        let cbs = [cb];
-        let submit_info = vk::SubmitInfo::default().command_buffers(&cbs);
-        let fence_ci = vk::FenceCreateInfo::default();
-        let fence = unsafe { self.device.create_fence(&fence_ci, None) }.unwrap();
-        unsafe {
-            self.device
-                .queue_submit(self.queue, &[submit_info], fence)
-                .unwrap();
-            self.device
-                .wait_for_fences(&[fence], true, u64::MAX)
-                .unwrap();
-            self.device.destroy_fence(fence, None);
-            self.device
-                .free_command_buffers(self.command_pool, &[cb]);
-        }
-
-        let vertex_count = counter_buf
-            .allocation
-            .as_ref()
-            .and_then(|a| a.mapped_ptr())
-            .map(|mapped| unsafe { *(mapped.as_ptr() as *const u32) })
-            .unwrap_or(0);
-        let vertex_count = (vertex_count as usize).min(MAX_VERTICES) as u32;
-
-        let mut tube_verts = Vec::with_capacity(vertex_count as usize);
-        if vertex_count >= 3 {
-            let pos_ptr = positions_buf.allocation.as_ref().and_then(|a| a.mapped_ptr());
-            let norm_ptr = normals_buf.allocation.as_ref().and_then(|a| a.mapped_ptr());
-            let col_ptr = colors_buf.allocation.as_ref().and_then(|a| a.mapped_ptr());
-
-            if let (Some(p), Some(n), Some(c)) = (pos_ptr, norm_ptr, col_ptr) {
-                let usable = (vertex_count / 3) * 3;
-                for i in 0..usable as usize {
-                    let pp = unsafe { &*(p.as_ptr() as *const [f32; 4]).add(i) };
-                    let nn = unsafe { &*(n.as_ptr() as *const [f32; 4]).add(i) };
-                    let cc = unsafe { &*(c.as_ptr() as *const [f32; 4]).add(i) };
-                    tube_verts.push((
-                        [pp[0], pp[1], pp[2]],
-                        [nn[0], nn[1], nn[2]],
-                        *cc,
-                    ));
-                }
-            }
-        }
-
-        params_buf.destroy(&self.device, self.allocator());
-        positions_buf.destroy(&self.device, self.allocator());
-        normals_buf.destroy(&self.device, self.allocator());
-        colors_buf.destroy(&self.device, self.allocator());
-        counter_buf.destroy(&self.device, self.allocator());
-        unsafe {
-            self.device
-                .reset_descriptor_pool(self.compute_desc_pool, vk::DescriptorPoolResetFlags::empty())
-                .unwrap();
-        }
-
-        if tube_verts.is_empty() {
-            let tree = crate::tree::Tree::generate(params);
-            let cpu_verts = tree.generate_tube_vertices_at(Vec3::ZERO);
-            self.set_tree_vertices(cpu_verts);
-        } else {
-            self.set_tree_vertices(tube_verts);
-        }
     }
 
     // --- Camera methods ---
@@ -763,25 +478,6 @@ impl ParticleRenderPipeline {
         }
     }
 
-    /// Records draw commands for optional GPU tree mesh geometry.
-    fn draw_tree(&self, cb: vk::CommandBuffer, pc: &AxesPushConstants, buffer: vk::Buffer) {
-        unsafe {
-            self.device
-                .cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, self.pipeline_tree);
-            self.device
-                .cmd_bind_vertex_buffers(cb, 0, &[buffer], &[0]);
-            self.device.cmd_push_constants(
-                cb,
-                self.layout_tree,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                bytemuck::bytes_of(pc),
-            );
-            self.device
-                .cmd_draw(cb, self.tree_draw_vertex_count, 1, 0, 0);
-        }
-    }
-
     /// Records draw commands for particle point geometry.
     fn draw_particles(&self, cb: vk::CommandBuffer, pc: &PushConstants) {
         if self.particle_draw_vertex_count == 0 {
@@ -850,9 +546,6 @@ impl Drop for ParticleRenderPipeline {
             if let Some(buf) = self.graph_lines_buffer.take() {
                 buf.destroy(&self.device, self.allocator());
             }
-            if let Some(buf) = self.tree_buffer.take() {
-                buf.destroy(&self.device, self.allocator());
-            }
             self.flush_retired_buffers();
 
             if let Some(alloc) = self.particle_buffer.allocation.take() {
@@ -866,26 +559,14 @@ impl Drop for ParticleRenderPipeline {
             }
             self.device.destroy_buffer(self.axes_buffer.buffer, None);
 
-            self.device
-                .destroy_descriptor_pool(self.compute_desc_pool, None);
-            self.device
-                .destroy_descriptor_set_layout(self.compute_desc_set_layout, None);
-            self.device
-                .destroy_pipeline(self.compute_pipeline, None);
-            self.device
-                .destroy_pipeline_layout(self.compute_layout, None);
-
             for fb in &self.framebuffers {
                 self.device.destroy_framebuffer(*fb, None);
             }
             self.device.destroy_pipeline(self.pipeline_axes, None);
             self.device.destroy_pipeline(self.pipeline_particles, None);
-            self.device.destroy_pipeline(self.pipeline_tree, None);
             self.device.destroy_pipeline_layout(self.layout_axes, None);
             self.device
                 .destroy_pipeline_layout(self.layout_particles, None);
-            self.device
-                .destroy_pipeline_layout(self.layout_tree, None);
             self.device.destroy_render_pass(self.render_pass, None);
         }
     }
@@ -1133,39 +814,6 @@ fn particle_vertex_desc() -> (
     (binding, attrs)
 }
 
-/// Defines vertex input bindings and attributes for tree mesh vertices.
-fn tree_vertex_desc() -> (
-    Vec<vk::VertexInputBindingDescription>,
-    Vec<vk::VertexInputAttributeDescription>,
-) {
-    let binding = vec![vk::VertexInputBindingDescription {
-        binding: 0,
-        stride: std::mem::size_of::<TreeVertex>() as u32,
-        input_rate: vk::VertexInputRate::VERTEX,
-    }];
-    let attrs = vec![
-        vk::VertexInputAttributeDescription {
-            location: 0,
-            binding: 0,
-            format: vk::Format::R32G32B32_SFLOAT,
-            offset: 0,
-        },
-        vk::VertexInputAttributeDescription {
-            location: 1,
-            binding: 0,
-            format: vk::Format::R32G32B32_SFLOAT,
-            offset: 12,
-        },
-        vk::VertexInputAttributeDescription {
-            location: 2,
-            binding: 0,
-            format: vk::Format::R32G32B32A32_SFLOAT,
-            offset: 24,
-        },
-    ];
-    (binding, attrs)
-}
-
 /// Creates graphics pipeline specialized for axis rendering.
 fn create_axes_pipeline(
     device: &ash::Device,
@@ -1222,189 +870,6 @@ fn create_particles_pipeline(
         vk::CullModeFlags::NONE,
     );
     (layout, pipeline)
-}
-
-/// Creates graphics pipeline specialized for tree mesh rendering.
-fn create_tree_pipeline(
-    device: &ash::Device,
-    render_pass: vk::RenderPass,
-) -> (vk::PipelineLayout, vk::Pipeline) {
-    let layout = create_pipeline_layout(
-        device,
-        std::mem::size_of::<AxesPushConstants>() as u32,
-        vk::ShaderStageFlags::VERTEX,
-    );
-    let (binding, attrs) = tree_vertex_desc();
-    let pipeline = create_graphics_pipeline(
-        device,
-        render_pass,
-        layout,
-        include_bytes!(concat!(env!("OUT_DIR"), "/shaders/tree_vertex.vert.spv")),
-        include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/shaders/tree_fragment.frag.spv"
-        )),
-        &binding,
-        &attrs,
-        vk::PrimitiveTopology::TRIANGLE_LIST,
-        default_blend(),
-        vk::CullModeFlags::BACK,
-    );
-    (layout, pipeline)
-}
-
-/// Creates compute pipeline used to procedurally generate tree vertices.
-fn create_compute_pipeline(
-    device: &ash::Device,
-) -> (vk::DescriptorSetLayout, vk::PipelineLayout, vk::Pipeline) {
-    let bindings = [
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(2)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(3)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(4)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-    ];
-    let ds_layout_ci =
-        vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    let ds_layout = unsafe { device.create_descriptor_set_layout(&ds_layout_ci, None) }.unwrap();
-
-    let set_layouts = [ds_layout];
-    let pl_ci = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pl_ci, None) }.unwrap();
-
-    let cs_mod = create_shader_module(device, shader_blobs::TREE_COMPUTE);
-    let entry = c"main";
-    let stage = vk::PipelineShaderStageCreateInfo::default()
-        .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(cs_mod)
-        .name(entry);
-    let ci = vk::ComputePipelineCreateInfo::default()
-        .stage(stage)
-        .layout(pipeline_layout);
-
-    let pipeline = unsafe {
-        device
-            .create_compute_pipelines(vk::PipelineCache::null(), &[ci], None)
-            .unwrap()[0]
-    };
-    unsafe { device.destroy_shader_module(cs_mod, None) };
-
-    (ds_layout, pipeline_layout, pipeline)
-}
-
-/// Creates descriptor pool for compute shader storage and parameter bindings.
-fn create_compute_descriptor_pool(device: &ash::Device) -> vk::DescriptorPool {
-    let pool_sizes = [
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: 1,
-        },
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::STORAGE_BUFFER,
-            descriptor_count: 4,
-        },
-    ];
-    let ci = vk::DescriptorPoolCreateInfo::default()
-        .pool_sizes(&pool_sizes)
-        .max_sets(1)
-        .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
-    unsafe { device.create_descriptor_pool(&ci, None) }.unwrap()
-}
-
-/// Allocates and updates compute descriptor set with tree buffers and params.
-fn allocate_compute_descriptor_set(
-    device: &ash::Device,
-    pool: vk::DescriptorPool,
-    layout: vk::DescriptorSetLayout,
-    params_buf: &AllocatedBuffer,
-    positions_buf: &AllocatedBuffer,
-    normals_buf: &AllocatedBuffer,
-    colors_buf: &AllocatedBuffer,
-    counter_buf: &AllocatedBuffer,
-) -> vk::DescriptorSet {
-    let layouts = [layout];
-    let alloc_ci = vk::DescriptorSetAllocateInfo::default()
-        .descriptor_pool(pool)
-        .set_layouts(&layouts);
-    let sets = unsafe { device.allocate_descriptor_sets(&alloc_ci) }.unwrap();
-    let set = sets[0];
-
-    let params_info = vk::DescriptorBufferInfo::default()
-        .buffer(params_buf.buffer)
-        .offset(0)
-        .range(std::mem::size_of::<GpuTreeComputeParams>() as u64);
-    let pos_info = vk::DescriptorBufferInfo::default()
-        .buffer(positions_buf.buffer)
-        .offset(0)
-        .range(vk::WHOLE_SIZE);
-    let norm_info = vk::DescriptorBufferInfo::default()
-        .buffer(normals_buf.buffer)
-        .offset(0)
-        .range(vk::WHOLE_SIZE);
-    let col_info = vk::DescriptorBufferInfo::default()
-        .buffer(colors_buf.buffer)
-        .offset(0)
-        .range(vk::WHOLE_SIZE);
-    let counter_info = vk::DescriptorBufferInfo::default()
-        .buffer(counter_buf.buffer)
-        .offset(0)
-        .range(4);
-
-    let params_infos = [params_info];
-    let pos_infos = [pos_info];
-    let norm_infos = [norm_info];
-    let col_infos = [col_info];
-    let counter_infos = [counter_info];
-
-    let writes = [
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(&params_infos),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&pos_infos),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(2)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&norm_infos),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(3)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&col_infos),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(4)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&counter_infos),
-    ];
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
-    set
 }
 
 // --- Initial vertex data ---
