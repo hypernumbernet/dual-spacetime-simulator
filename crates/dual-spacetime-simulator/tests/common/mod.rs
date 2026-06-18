@@ -1,4 +1,4 @@
-//! Headless Vulkan helpers for `#[ignore]` integration tests (no window / surface).
+//! Headless Vulkan helpers for integration tests (no window / surface).
 
 use ash::{vk, Device, Entry, Instance};
 use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};

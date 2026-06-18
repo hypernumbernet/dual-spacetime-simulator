@@ -154,7 +154,7 @@
 
 - **数学**: `cargo test -p dst-math`（`crates/dst-math/tests/` および `spacetime` / `biquaternion` 内の `#[cfg(test)]`）
 - **シミュレータ**: `cargo test -p dual-spacetime-simulator`（`crates/dual-spacetime-simulator/tests/`）。例：`simulation`、`initial_condition`、`camera`、`settings`、`ui_state`、`graph3d` など。
-- **Vulkan ヘッドレス系**（`vulkan_base_headless.rs`）は `#[ignore]` 既定。GPU 環境で `cargo test -p dual-spacetime-simulator -- --ignored` を実行。
+- **Vulkan ヘッドレス系**（`vulkan_base_headless.rs`）: 通常の `cargo test -p dual-spacetime-simulator` に含まれる。Vulkan ローダーと対応 GPU が必要（無い環境では失敗する）。
 - **ワークスペース全体**: `cargo test --workspace`
 
 ---

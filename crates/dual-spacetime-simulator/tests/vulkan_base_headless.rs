@@ -1,4 +1,4 @@
-//! Requires Vulkan loader + compatible GPU. Run with: `cargo test -- --ignored`
+//! Requires Vulkan loader + compatible GPU.
 
 mod common;
 
@@ -9,7 +9,6 @@ use gpu_allocator::MemoryLocation;
 use std::ptr;
 
 #[test]
-#[ignore = "requires Vulkan device"]
 fn headless_vulkan_initializes() {
     let Some(v) = common::try_create_headless_vulkan() else {
         panic!("Vulkan initialization failed (no loader or no graphics queue)");
@@ -19,7 +18,6 @@ fn headless_vulkan_initializes() {
 }
 
 #[test]
-#[ignore = "requires Vulkan device"]
 fn allocator_buffer_write_and_many_allocations() {
     let v = common::try_create_headless_vulkan().expect("vulkan");
     let alloc = v.allocator.as_ref().unwrap();
