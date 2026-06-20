@@ -14,7 +14,7 @@ const INITIAL_POSITION: Vec3 = Vec3::new(1.6, -1.6, 3.0);
 const INITIAL_TARGET: Vec3 = Vec3::new(0.0, 0.0, 0.0);
 const AXIS_XZ_GRID_EXTENT: f32 = 2.0;
 const AXIS_XZ_GRID_LINE_COUNT: usize = 9;
-
+const ADD_CENTER_MARKER_VERTICES: usize = 36;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -218,19 +218,18 @@ impl ParticleRenderPipeline {
             size_scale,
         };
 
+        let line_pc = AxesPushConstants {
+            view_proj: view_proj.to_cols_array_2d(),
+        };
+
         if app_mode == AppMode::Graph3D {
             if let Some(ref buf) = self.graph_lines_buffer {
-                if self.graph_lines_vertex_count > 0 {
-                    let line_pc = AxesPushConstants {
-                        view_proj: view_proj.to_cols_array_2d(),
-                    };
-                    self.draw_graph_lines(
-                        command_buffer,
-                        &line_pc,
-                        buf.buffer,
-                        self.graph_lines_vertex_count,
-                    );
-                }
+                self.draw_axes_lines(
+                    command_buffer,
+                    &line_pc,
+                    buf.buffer,
+                    self.graph_lines_vertex_count,
+                );
             }
         }
 
@@ -238,17 +237,12 @@ impl ParticleRenderPipeline {
 
         if app_mode == AppMode::Simulation {
             if let Some(ref buf) = self.add_center_marker_buffer {
-                if self.add_center_marker_vertex_count > 0 {
-                    let line_pc = AxesPushConstants {
-                        view_proj: view_proj.to_cols_array_2d(),
-                    };
-                    self.draw_graph_lines(
-                        command_buffer,
-                        &line_pc,
-                        buf.buffer,
-                        self.add_center_marker_vertex_count,
-                    );
-                }
+                self.draw_axes_lines(
+                    command_buffer,
+                    &line_pc,
+                    buf.buffer,
+                    self.add_center_marker_vertex_count,
+                );
             }
         }
 
@@ -292,56 +286,32 @@ impl ParticleRenderPipeline {
 
     /// Uploads graph line vertices and rebuilds the line vertex buffer.
     pub fn set_graph_lines(&mut self, vertices: &[([f32; 3], [f32; 4])]) {
-        if let Some(old) = self.graph_lines_buffer.take() {
-            self.retire_buffer(old);
-        }
-        if vertices.is_empty() {
-            self.graph_lines_vertex_count = 0;
-            return;
-        }
-        let verts: Vec<AxesVertex> = vertices
-            .iter()
-            .map(|(p, c)| AxesVertex {
-                position: *p,
-                color: *c,
-            })
-            .collect();
-        let (buf, count) = create_buffer_with_data(
+        let verts = axes_vertices_from_tuples(vertices);
+        let allocator = Arc::clone(&self.allocator);
+        upload_axes_line_buffer(
             &self.device,
-            self.allocator(),
+            &allocator,
+            &mut self.retired_buffers,
+            &mut self.graph_lines_buffer,
+            &mut self.graph_lines_vertex_count,
             &verts,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
             "graph_lines",
         );
-        self.graph_lines_buffer = Some(buf);
-        self.graph_lines_vertex_count = count;
     }
 
     /// Uploads add-center preview cross vertices and rebuilds the marker line buffer.
     pub fn set_add_center_marker(&mut self, vertices: &[([f32; 3], [f32; 4])]) {
-        if let Some(old) = self.add_center_marker_buffer.take() {
-            self.retire_buffer(old);
-        }
-        if vertices.is_empty() {
-            self.add_center_marker_vertex_count = 0;
-            return;
-        }
-        let verts: Vec<AxesVertex> = vertices
-            .iter()
-            .map(|(p, c)| AxesVertex {
-                position: *p,
-                color: *c,
-            })
-            .collect();
-        let (buf, count) = create_buffer_with_data(
+        let verts = axes_vertices_from_tuples(vertices);
+        let allocator = Arc::clone(&self.allocator);
+        upload_axes_line_buffer(
             &self.device,
-            self.allocator(),
+            &allocator,
+            &mut self.retired_buffers,
+            &mut self.add_center_marker_buffer,
+            &mut self.add_center_marker_vertex_count,
             &verts,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
             "add_center_marker",
         );
-        self.add_center_marker_buffer = Some(buf);
-        self.add_center_marker_vertex_count = count;
     }
 
     /// Rebuilds add-center preview geometry from current UI state when needed.
@@ -349,13 +319,12 @@ impl ParticleRenderPipeline {
         use crate::object_input::ObjectInput;
         use crate::ui_state::AppMode;
 
-        let show_marker =
-            ui_state.app_mode == AppMode::Simulation && ui_state.show_add_center_preview;
+        let show_marker = ui_state.app_mode == AppMode::Simulation
+            && ui_state.is_object_input_panel_open
+            && ui_state.show_add_center_preview;
         if !show_marker {
-            if self.last_add_center_marker_key.is_some() {
-                self.set_add_center_marker(&[]);
-                self.last_add_center_marker_key = None;
-            }
+            self.add_center_marker_vertex_count = 0;
+            self.last_add_center_marker_key = None;
             return;
         }
 
@@ -369,13 +338,31 @@ impl ParticleRenderPipeline {
             ObjectInput::add_center_world_position(ui_state.add_center, ui_state.base_scale);
         let center = [world.x as f32, world.y as f32, world.z as f32];
         let half_extent = ObjectInput::add_center_marker_half_extent(ui_state.base_scale);
-        let vertices = build_add_center_cross(center, half_extent);
-        self.set_add_center_marker(&vertices);
+        let verts = build_add_center_marker_vertices(center, half_extent);
+        let allocator = Arc::clone(&self.allocator);
+        upload_axes_line_buffer(
+            &self.device,
+            &allocator,
+            &mut self.retired_buffers,
+            &mut self.add_center_marker_buffer,
+            &mut self.add_center_marker_vertex_count,
+            &verts,
+            "add_center_marker",
+        );
     }
 
     /// Clears add-center preview geometry and cached sync state.
     pub fn reset_add_center_marker(&mut self) {
-        self.set_add_center_marker(&[]);
+        let allocator = Arc::clone(&self.allocator);
+        upload_axes_line_buffer(
+            &self.device,
+            &allocator,
+            &mut self.retired_buffers,
+            &mut self.add_center_marker_buffer,
+            &mut self.add_center_marker_vertex_count,
+            &[],
+            "add_center_marker",
+        );
         self.last_add_center_marker_key = None;
     }
 
@@ -442,23 +429,10 @@ impl ParticleRenderPipeline {
 
     /// Records draw commands for axis and grid line geometry.
     fn draw_axes(&self, cb: vk::CommandBuffer, pc: &AxesPushConstants) {
-        unsafe {
-            self.device
-                .cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, self.pipeline_axes);
-            self.device
-                .cmd_bind_vertex_buffers(cb, 0, &[self.axes_buffer.buffer], &[0]);
-            self.device.cmd_push_constants(
-                cb,
-                self.layout_axes,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                bytemuck::bytes_of(pc),
-            );
-            self.device.cmd_draw(cb, self.axes_vertex_count, 1, 0, 0);
-        }
+        self.draw_axes_lines(cb, pc, self.axes_buffer.buffer, self.axes_vertex_count);
     }
 
-    fn draw_graph_lines(
+    fn draw_axes_lines(
         &self,
         cb: vk::CommandBuffer,
         pc: &AxesPushConstants,
@@ -581,23 +555,149 @@ impl Drop for ParticleRenderPipeline {
     }
 }
 
-/// Builds a three-axis cross at the target center.
+/// Builds an octahedron marker with colored axis spokes at the target center.
 pub fn build_add_center_cross(
     center: [f32; 3],
     half_extent: f32,
-) -> Vec<([f32; 3], [f32; 4])> {
+) -> [([f32; 3], [f32; 4]); ADD_CENTER_MARKER_VERTICES] {
+    let verts = build_add_center_marker_vertices(center, half_extent);
+    std::array::from_fn(|i| (verts[i].position, verts[i].color))
+}
+
+fn add_center_marker_edge(
+    p0: [f32; 3],
+    p1: [f32; 3],
+    color: [f32; 4],
+) -> [AxesVertex; 2] {
+    [
+        AxesVertex {
+            position: p0,
+            color,
+        },
+        AxesVertex {
+            position: p1,
+            color,
+        },
+    ]
+}
+
+fn build_add_center_marker_vertices(
+    center: [f32; 3],
+    half_extent: f32,
+) -> [AxesVertex; ADD_CENTER_MARKER_VERTICES] {
     let [cx, cy, cz] = center;
+    let a = half_extent;
     let x_color = [1.0, 0.2, 0.2, 1.0];
     let y_color = [0.2, 1.0, 0.2, 1.0];
     let z_color = [0.3, 0.5, 1.0, 1.0];
-    vec![
-        ([cx - half_extent, cy, cz], x_color),
-        ([cx + half_extent, cy, cz], x_color),
-        ([cx, cy - half_extent, cz], y_color),
-        ([cx, cy + half_extent, cz], y_color),
-        ([cx, cy, cz - half_extent], z_color),
-        ([cx, cy, cz + half_extent], z_color),
-    ]
+    let white = [1.0, 1.0, 1.0, 1.0];
+
+    let px = [cx + a, cy, cz];
+    let nx = [cx - a, cy, cz];
+    let py = [cx, cy + a, cz];
+    let ny = [cx, cy - a, cz];
+    let pz = [cx, cy, cz + a];
+    let nz = [cx, cy, cz - a];
+
+    let mut verts = [AxesVertex {
+        position: [0.0; 3],
+        color: [0.0; 4],
+    }; ADD_CENTER_MARKER_VERTICES];
+    let mut i = 0;
+    let mut push_edge = |p0: [f32; 3], p1: [f32; 3], color: [f32; 4]| {
+        let edge = add_center_marker_edge(p0, p1, color);
+        verts[i] = edge[0];
+        verts[i + 1] = edge[1];
+        i += 2;
+    };
+
+    push_edge(center, px, x_color);
+    push_edge(center, nx, x_color);
+    push_edge(center, py, y_color);
+    push_edge(center, ny, y_color);
+    push_edge(center, pz, z_color);
+    push_edge(center, nz, z_color);
+
+    push_edge(px, py, white);
+    push_edge(px, ny, white);
+    push_edge(px, pz, white);
+    push_edge(px, nz, white);
+    push_edge(nx, py, white);
+    push_edge(nx, ny, white);
+    push_edge(nx, pz, white);
+    push_edge(nx, nz, white);
+    push_edge(py, pz, white);
+    push_edge(py, nz, white);
+    push_edge(ny, pz, white);
+    push_edge(ny, nz, white);
+
+    verts
+}
+
+fn upload_axes_line_buffer(
+    device: &ash::Device,
+    allocator: &Mutex<Allocator>,
+    retired_buffers: &mut Vec<AllocatedBuffer>,
+    buffer: &mut Option<AllocatedBuffer>,
+    vertex_count: &mut u32,
+    vertices: &[AxesVertex],
+    label: &str,
+) {
+    if vertices.is_empty() {
+        if let Some(old) = buffer.take() {
+            retired_buffers.push(old);
+        }
+        *vertex_count = 0;
+        return;
+    }
+
+    if let Some(buf) = buffer.as_ref() {
+        if write_mapped_axes_vertices(buf, vertices) {
+            *vertex_count = vertices.len() as u32;
+            return;
+        }
+        if let Some(old) = buffer.take() {
+            retired_buffers.push(old);
+        }
+    }
+
+    let (buf, count) = create_buffer_with_data(
+        device,
+        allocator,
+        vertices,
+        vk::BufferUsageFlags::VERTEX_BUFFER,
+        label,
+    );
+    *buffer = Some(buf);
+    *vertex_count = count;
+}
+
+fn axes_vertices_from_tuples(vertices: &[([f32; 3], [f32; 4])]) -> Vec<AxesVertex> {
+    vertices
+        .iter()
+        .map(|(position, color)| AxesVertex {
+            position: *position,
+            color: *color,
+        })
+        .collect()
+}
+
+fn write_mapped_axes_vertices(buffer: &AllocatedBuffer, vertices: &[AxesVertex]) -> bool {
+    let required_bytes = std::mem::size_of_val(vertices) as u64;
+    let Some(alloc) = buffer.allocation.as_ref() else {
+        return false;
+    };
+    if alloc.size() < required_bytes {
+        return false;
+    }
+    let Some(mapped) = alloc.mapped_ptr() else {
+        return false;
+    };
+    let bytes = bytemuck::cast_slice(vertices);
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapped.as_ptr() as *mut u8, bytes.len());
+    }
+    true
 }
 
 // --- Pipeline creation helpers ---

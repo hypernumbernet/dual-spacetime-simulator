@@ -308,6 +308,7 @@ pub fn draw_ui(
                 ui.separator();
                 slider_perticle_count(ui, &mut uis);
                 ui.separator();
+                slider_add_center(ui, &mut uis);
                 ui.horizontal(|ui| {
                     let mut v = uis.show_add_center_preview;
                     if ui
@@ -317,7 +318,6 @@ pub fn draw_ui(
                         uis.show_add_center_preview = v;
                     }
                 });
-                slider_add_center(ui, &mut uis);
                 button_add_particles(ui, &mut uis, simulation_manager);
                 ui.separator();
                 if !uis.is_reset_requested {
@@ -669,23 +669,30 @@ fn condition_elliptical_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
 }
 
 const ADD_CENTER_SLIDER_RANGE: std::ops::RangeInclusive<f64> = -10.0..=10.0;
+const ADD_CENTER_SLIDER_STEP: f64 = 0.01;
+
+fn add_center_axis_slider(value: &mut f64) -> Slider<'_> {
+    Slider::new(value, ADD_CENTER_SLIDER_RANGE.clone())
+        .step_by(ADD_CENTER_SLIDER_STEP)
+        .drag_value_speed(ADD_CENTER_SLIDER_STEP)
+}
 
 /// Renders X/Y/Z sliders as base-scale multipliers, converted via Correct.m like other inputs.
 fn slider_add_center(ui: &mut egui::Ui, uis: &mut UiState) {
-    ui.style_mut().spacing.slider_width = 150.0;
+    ui.style_mut().spacing.slider_width = 140.0;
     label_normal(ui, "Add Center");
-    label_normal(ui, "X");
-    ui.add(Slider::new(
-        &mut uis.add_center.x,
-        ADD_CENTER_SLIDER_RANGE.clone(),
-    ));
-    label_normal(ui, "Y");
-    ui.add(Slider::new(
-        &mut uis.add_center.y,
-        ADD_CENTER_SLIDER_RANGE.clone(),
-    ));
-    label_normal(ui, "Z");
-    ui.add(Slider::new(&mut uis.add_center.z, ADD_CENTER_SLIDER_RANGE));
+    ui.horizontal(|ui| {
+        label_normal(ui, "X");
+        ui.add(add_center_axis_slider(&mut uis.add_center.x));
+    });
+    ui.horizontal(|ui| {
+        label_normal(ui, "Y");
+        ui.add(add_center_axis_slider(&mut uis.add_center.y));
+    });
+    ui.horizontal(|ui| {
+        label_normal(ui, "Z");
+        ui.add(add_center_axis_slider(&mut uis.add_center.z));
+    });
 }
 
 /// Draws add button and flags particle append when clicked.

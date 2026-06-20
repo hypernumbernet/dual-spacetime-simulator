@@ -384,12 +384,9 @@ impl ApplicationHandler for App {
                         &ctx,
                     );
                 });
-                {
-                    let ui_state = self.ui_state.read().unwrap();
-                    pipeline.sync_add_center_marker(&ui_state);
-                }
                 let desired_mailbox_present_mode = {
                     let ui_state = self.ui_state.read().unwrap();
+                    pipeline.sync_add_center_marker(&ui_state);
                     ui_state.mailbox_present_mode
                 };
                 if vb.mailbox_present_mode != desired_mailbox_present_mode {
