@@ -1,8 +1,10 @@
 use glam::DVec3;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 
 use crate::initial_condition::InitialCondition;
+use crate::particle_snapshot::ParticleSnapshot;
 use dst_math::spacetime::{Spacetime, rapidity_from_momentum};
 use crate::ui_state::SimulationType;
 
@@ -39,7 +41,7 @@ pub enum SimulationState {
     LorentzTransformation(SimulationLorentzTransformation),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq)]
 pub struct Particle {
     pub position: DVec3,
     pub velocity: DVec3,
@@ -247,19 +249,31 @@ impl SimulationManager {
         scale: f64,
     ) -> SimulationState {
         let normal = initial_condition.generate_particles(particle_count);
+        let particles = match simulation_type {
+            SimulationType::LorentzTransformation => {
+                Self::convert_to_lorentz(normal.particles, scale)
+            }
+            _ => normal.particles,
+        };
+        Self::state_from_particles(simulation_type, particles, scale)
+    }
+
+    fn state_from_particles(
+        simulation_type: SimulationType,
+        particles: Vec<Particle>,
+        scale: f64,
+    ) -> SimulationState {
         match simulation_type {
-            SimulationType::Normal => SimulationState::Normal(SimulationNormal {
-                particles: normal.particles,
-            }),
+            SimulationType::Normal => SimulationState::Normal(SimulationNormal { particles }),
             SimulationType::SpeedOfLightLimit => {
                 SimulationState::SpeedOfLightLimit(SimulationSpeedOfLightLimit {
-                    particles: normal.particles,
+                    particles,
                     scale,
                 })
             }
             SimulationType::LorentzTransformation => {
                 SimulationState::LorentzTransformation(SimulationLorentzTransformation {
-                    particles: Self::convert_to_lorentz(normal.particles, scale),
+                    particles,
                     scale,
                 })
             }
@@ -305,6 +319,15 @@ impl SimulationManager {
     pub fn particles(&self) -> Vec<Particle> {
         let state = self.state.read().unwrap();
         state.particles().clone()
+    }
+
+    /// Replaces current simulation state with particles from a saved snapshot.
+    pub fn load_from_snapshot(&self, snapshot: ParticleSnapshot) {
+        *self.state.write().unwrap() = Self::state_from_particles(
+            snapshot.simulation_type,
+            snapshot.particles,
+            snapshot.scale,
+        );
     }
 }
 

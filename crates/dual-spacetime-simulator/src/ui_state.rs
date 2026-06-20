@@ -87,7 +87,7 @@ const PANELS_SIMULATION: &[PanelKind] = &[
 
 const PANELS_GRAPH3D: &[PanelKind] = &[PanelKind::Graph3D, PanelKind::Settings];
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum SimulationType {
     Normal,
     SpeedOfLightLimit,
@@ -104,6 +104,12 @@ impl std::fmt::Display for SimulationType {
         };
         write!(f, "{}", text)
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PendingSnapshotDialog {
+    Save,
+    Load,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -164,6 +170,7 @@ pub struct UiState {
     pub mailbox_present_mode: bool,
     pub show_grid: bool,
     pub request_exit: bool,
+    pub pending_snapshot_dialog: Option<PendingSnapshotDialog>,
     pub graph_type: GraphType,
     pub graph_sample_count: u32,
     pub graph_radius: f64,
@@ -212,6 +219,7 @@ impl Default for UiState {
             mailbox_present_mode: false,
             show_grid: true,
             request_exit: false,
+            pending_snapshot_dialog: None,
             graph_type: GraphType::SphericalFibonacciLattice,
             graph_sample_count: 1000,
             graph_radius: 1.0,

@@ -5,6 +5,7 @@ pub mod camera;
 pub mod graph3d;
 pub mod initial_condition;
 pub mod integration;
+pub mod particle_snapshot;
 pub mod pipeline;
 pub mod settings;
 pub mod simulation;
@@ -17,7 +18,7 @@ use crate::integration::Gui;
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
-use crate::ui::draw_ui;
+use crate::ui::{draw_ui, process_pending_snapshot_dialog};
 use crate::ui_state::{AppMode, DragOwner, UiState};
 use ash::vk;
 use vulkanvil::VulkanBase;
@@ -510,6 +511,12 @@ impl ApplicationHandler for App {
     /// Performs per-frame updates before the event loop waits for new events.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(window) = self.window.as_ref() {
+            process_pending_snapshot_dialog(
+                window,
+                &self.ui_state,
+                &self.simulation_manager,
+                &self.need_redraw,
+            );
             window.request_redraw();
         }
         if let Some(pipeline) = self.render_pipeline.as_mut() {

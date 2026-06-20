@@ -154,10 +154,27 @@ pub fn selectable_value<T: PartialEq + std::fmt::Display>(
     ui.selectable_value(current, selected, display_text.as_str());
 }
 
+fn panel_button_height(ui: &Ui) -> f32 {
+    ui.spacing().interact_size.y * 1.5
+}
+
 /// Draws a full-width normal button with enlarged interactive height.
 pub fn button_normal(ui: &mut Ui, text: &str) -> Response {
-    let button_width = ui.available_width();
-    let button_height = ui.spacing().interact_size.y * 1.5;
-    let button_size = vec2(button_width, button_height);
+    let button_size = vec2(ui.available_width(), panel_button_height(ui));
     ui.add_sized(button_size, Button::new(text))
+}
+
+/// Draws two equal-width buttons side by side without expanding the parent width.
+pub fn button_row_pair(ui: &mut Ui, left: &str, right: &str) -> (Response, Response) {
+    let total_width = ui.available_width();
+    let spacing = ui.spacing().item_spacing.x;
+    let half_width = (total_width - spacing) * 0.5;
+    let button_height = panel_button_height(ui);
+    ui.horizontal(|ui| {
+        ui.set_max_width(total_width);
+        let left = ui.add_sized(vec2(half_width, button_height), Button::new(left));
+        let right = ui.add_sized(vec2(half_width, button_height), Button::new(right));
+        (left, right)
+    })
+    .inner
 }

@@ -20,7 +20,8 @@ dst-math.workspace = true
 egui = "0.31.1"
 egui-ash-renderer = { version = "0.8", default-features = false }
 egui-winit = { version = "0.31.1", default-features = false }
-glam.workspace = true
+glam = { workspace = true, features = ["serde"] }
+rfd = "0.15"
 gpu-allocator.workspace = true
 num_cpus = "1.17.0"
 rand = "0.9.2"
@@ -30,5 +31,6 @@ rayon = "1.11.0"
 satkit = "0.9.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+zip = { version = "8", default-features = false, features = ["deflate"] }
 vulkanvil.workspace = true
 winit.workspace = true

@@ -1,17 +1,25 @@
 use crate::initial_condition::{InitialCondition, InitialConditionType};
+use crate::particle_snapshot::{
+    ParticleSnapshot, SNAPSHOT_FILTER_EXT, SNAPSHOT_FILTER_NAME,
+};
 use crate::settings::AppSettings;
-use crate::simulation::AU;
+use crate::simulation::{AU, SimulationManager};
 use crate::ui_state::*;
 use crate::ui_styles::*;
 use egui::{Checkbox, ComboBox, Slider};
 use std::sync::{Arc, RwLock};
+use winit::window::Window;
 
 const MENU_POPUP_WIDTH: f32 = 180.0;
 const PANEL_DEFAULT_X: f32 = 16.0;
 const PANEL_MENU_OFFSET_Y: f32 = 16.0;
 
 /// Draws the full control UI and applies user edits to shared UI/application state.
-pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx: &egui::Context) {
+pub fn draw_ui(
+    ui_state: &Arc<RwLock<UiState>>,
+    settings: &mut AppSettings,
+    ctx: &egui::Context,
+) {
     let mut uis = ui_state.write().unwrap();
     let menu_bar_height = egui::TopBottomPanel::top("menu_bar")
         .show(ctx, |ui| {
@@ -258,7 +266,9 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
             .resizable(false)
             .collapsible(true)
             .default_width(uis.input_panel_width)
+            .max_width(uis.input_panel_width)
             .show(ctx, |ui| {
+                ui.set_width(uis.input_panel_width);
                 combobox_simulation_type(ui, &mut uis);
                 ui.separator();
                 combobox_initial_condition_type(ui, &mut uis);
@@ -292,6 +302,14 @@ pub fn draw_ui(ui_state: &Arc<RwLock<UiState>>, settings: &mut AppSettings, ctx:
                     button_reset(ui, &mut uis);
                 } else {
                     label_normal(ui, "Resetting...");
+                }
+                ui.separator();
+                let (save, load) = button_row_pair(ui, "Save", "Load");
+                if save.clicked() {
+                    uis.pending_snapshot_dialog = Some(PendingSnapshotDialog::Save);
+                }
+                if load.clicked() {
+                    uis.pending_snapshot_dialog = Some(PendingSnapshotDialog::Load);
                 }
             });
     }
@@ -662,6 +680,90 @@ fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
         uis.is_reset_requested = true;
         uis.is_resetting = true;
     }
+}
+
+/// Opens a deferred save/load dialog after the UI frame completes.
+pub fn process_pending_snapshot_dialog(
+    window: &Window,
+    ui_state: &Arc<RwLock<UiState>>,
+    simulation_manager: &Arc<RwLock<SimulationManager>>,
+    need_redraw: &Arc<RwLock<bool>>,
+) {
+    let pending = ui_state.write().unwrap().pending_snapshot_dialog.take();
+    let Some(pending) = pending else {
+        return;
+    };
+    match pending {
+        PendingSnapshotDialog::Save => {
+            save_particles(window, ui_state, simulation_manager);
+        }
+        PendingSnapshotDialog::Load => {
+            load_particles(window, ui_state, simulation_manager, need_redraw);
+        }
+    }
+}
+
+fn snapshot_file_dialog(parent: &Window) -> rfd::FileDialog {
+    parent.focus_window();
+    rfd::FileDialog::new()
+        .add_filter(SNAPSHOT_FILTER_NAME, &[SNAPSHOT_FILTER_EXT])
+        .set_parent(parent)
+}
+
+/// Saves all current particles to a zip snapshot via a native file dialog.
+fn save_particles(
+    window: &Window,
+    ui_state: &Arc<RwLock<UiState>>,
+    simulation_manager: &Arc<RwLock<SimulationManager>>,
+) {
+    let Some(path) = snapshot_file_dialog(window)
+        .set_file_name("particles.zip")
+        .save_file()
+    else {
+        return;
+    };
+    let uis = ui_state.read().unwrap();
+    let particles = simulation_manager.read().unwrap().particles();
+    let snapshot = ParticleSnapshot::new(uis.simulation_type, uis.scale, particles);
+    if let Err(e) = snapshot.save(&path) {
+        eprintln!("Failed to save particles: {}", e);
+    }
+}
+
+/// Loads particles from a zip snapshot and restores them as the initial state.
+fn load_particles(
+    window: &Window,
+    ui_state: &Arc<RwLock<UiState>>,
+    simulation_manager: &Arc<RwLock<SimulationManager>>,
+    need_redraw: &Arc<RwLock<bool>>,
+) {
+    let Some(path) = snapshot_file_dialog(window).pick_file() else {
+        return;
+    };
+    let snapshot = match ParticleSnapshot::load(&path) {
+        Ok(snapshot) => snapshot,
+        Err(e) => {
+            eprintln!("Failed to load particles: {}", e);
+            return;
+        }
+    };
+    let mut uis = ui_state.write().unwrap();
+    if snapshot.particles.len() > uis.max_particle_count as usize {
+        eprintln!(
+            "Particle count {} exceeds maximum {}",
+            snapshot.particles.len(),
+            uis.max_particle_count
+        );
+        return;
+    }
+    uis.particle_count = snapshot.particles.len() as u32;
+    uis.simulation_type = snapshot.simulation_type;
+    uis.scale = snapshot.scale;
+    uis.frame = 1;
+    uis.simulation_time = 0.0;
+    uis.is_running = false;
+    simulation_manager.write().unwrap().load_from_snapshot(snapshot);
+    *need_redraw.write().unwrap() = true;
 }
 
 /// Renders graph-type combo box for Graph3D mode.
