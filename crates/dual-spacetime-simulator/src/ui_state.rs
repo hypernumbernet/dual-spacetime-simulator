@@ -446,17 +446,13 @@ impl UiState {
 
     /// Updates stored base scale from UI display input or a unit change.
     pub fn apply_base_scale_edit(&mut self, display: f64, unit_changed: bool) {
-        let previous_scale = self.base_scale;
         let unit = self.base_scale_unit;
         let display = if unit_changed {
             1.0
         } else {
             unit.sanitize_display(display)
         };
-        self.base_scale = unit.canonical_meters(unit.to_meters(display));
-        if Self::base_scale_value_changed(previous_scale, self.base_scale) {
-            self.is_add_particles_enabled = false;
-        }
+        self.set_base_scale(unit.canonical_meters(unit.to_meters(display)));
     }
 
     /// Applies object-input type changes, including base-scale presets and parameter sync.
@@ -466,17 +462,36 @@ impl UiState {
         }
         match self.object_input_type {
             ObjectInputType::SolarSystem | ObjectInputType::SatelliteOrbit => {
-                let previous_scale = self.base_scale;
-                self.base_scale =
-                    clamp_world_scale(self.object_input_type.default_base_scale());
-                if Self::base_scale_value_changed(previous_scale, self.base_scale) {
-                    self.is_add_particles_enabled = false;
-                }
+                self.set_base_scale(self.object_input_type.default_base_scale());
             }
-            ObjectInputType::RandomSphere
-            | ObjectInputType::RandomCube
-            | ObjectInputType::SpiralDisk
-            | ObjectInputType::EllipticalOrbit => self.sync_scaled_object_input_parameters(),
+            _ if self.object_input_type.uses_scaled_parameters() => {
+                self.sync_scaled_object_input_parameters();
+            }
+            _ => {}
+        }
+    }
+
+    /// Updates base scale from an external source such as snapshot load.
+    pub fn apply_external_base_scale(&mut self, scale: f64) {
+        self.set_base_scale(scale);
+    }
+
+    /// Flags a simulation reset and re-enables particle append.
+    pub fn request_reset(&mut self) {
+        self.is_reset_requested = true;
+        self.is_resetting = true;
+        self.is_add_particles_enabled = true;
+    }
+
+    fn set_base_scale(&mut self, scale: f64) {
+        let previous_scale = self.base_scale;
+        self.base_scale = clamp_world_scale(scale);
+        if !Self::base_scale_value_changed(previous_scale, self.base_scale) {
+            return;
+        }
+        self.is_add_particles_enabled = false;
+        if self.object_input_type.uses_scaled_parameters() {
+            self.sync_scaled_object_input_parameters();
         }
     }
 
@@ -535,17 +550,6 @@ impl UiState {
                     planetary_distance,
                 };
             }
-            _ => {}
-        }
-    }
-
-    /// Syncs scaled parameters when the active type uses base-scale-relative presets.
-    pub fn maybe_sync_scaled_object_input_parameters(&mut self) {
-        match self.object_input_type {
-            ObjectInputType::RandomSphere
-            | ObjectInputType::RandomCube
-            | ObjectInputType::SpiralDisk
-            | ObjectInputType::EllipticalOrbit => self.sync_scaled_object_input_parameters(),
             _ => {}
         }
     }

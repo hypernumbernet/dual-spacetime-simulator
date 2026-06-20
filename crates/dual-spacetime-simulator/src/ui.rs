@@ -119,9 +119,7 @@ pub fn draw_ui(
                             ui.close_menu();
                         }
                         if ui.button("Reset").clicked() {
-                            uis.is_reset_requested = true;
-                            uis.is_resetting = true;
-                            uis.is_add_particles_enabled = true;
+                            uis.request_reset();
                             ui.close_menu();
                         }
                     });
@@ -351,7 +349,6 @@ pub fn draw_ui(
             uis.skip = 0;
         }
         uis.scale_gauge = DEFAULT_SCALE_UI;
-        uis.is_add_particles_enabled = true;
     }
 
     if uis.app_mode == AppMode::Graph3D && uis.is_graph3d_panel_open {
@@ -458,7 +455,6 @@ fn base_scale_input(ui: &mut egui::Ui, uis: &mut UiState) {
             });
     });
     uis.apply_base_scale_edit(display, uis.base_scale_unit != previous_unit);
-    uis.maybe_sync_scaled_object_input_parameters();
 }
 
 /// Renders the simulation-type combo box and updates dependent UI state.
@@ -486,7 +482,7 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
 /// Renders the object-input type combo box and syncs scaled parameters on change.
 fn combobox_object_input_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Object Input Type");
-    let previous_type = uis.object_input_type.clone();
+    let previous_type = uis.object_input_type;
     let id = ui.make_persistent_id("object_input_type_combobox");
     ComboBox::from_id_salt(id)
         .selected_text(format!("{}", uis.object_input_type))
@@ -706,9 +702,7 @@ fn slider_add_particle_count(ui: &mut egui::Ui, uis: &mut UiState, current_count
 /// Draws reset button and flags simulation reset when clicked.
 fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
     if button_normal(ui, "Reset").clicked() {
-        uis.is_reset_requested = true;
-        uis.is_resetting = true;
-        uis.is_add_particles_enabled = true;
+        uis.request_reset();
     }
 }
 
@@ -787,9 +781,9 @@ fn load_particles(
         return;
     }
     uis.simulation_type = snapshot.simulation_type;
-    uis.scale = clamp_world_scale(snapshot.scale);
-    uis.base_scale = clamp_world_scale(snapshot.scale);
-    uis.is_add_particles_enabled = false;
+    let scale = clamp_world_scale(snapshot.scale);
+    uis.scale = scale;
+    uis.apply_external_base_scale(scale);
     uis.frame = 1;
     uis.simulation_time = 0.0;
     uis.is_running = false;

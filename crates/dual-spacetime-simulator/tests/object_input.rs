@@ -33,6 +33,16 @@ fn get_scale_positive_for_all_variants() {
 }
 
 #[test]
+fn uses_scaled_parameters_matches_expected_types() {
+    assert!(ObjectInputType::RandomSphere.uses_scaled_parameters());
+    assert!(ObjectInputType::RandomCube.uses_scaled_parameters());
+    assert!(ObjectInputType::SpiralDisk.uses_scaled_parameters());
+    assert!(ObjectInputType::EllipticalOrbit.uses_scaled_parameters());
+    assert!(!ObjectInputType::SolarSystem.uses_scaled_parameters());
+    assert!(!ObjectInputType::SatelliteOrbit.uses_scaled_parameters());
+}
+
+#[test]
 fn default_base_scale_matches_type_presets() {
     assert_eq!(ObjectInputType::RandomSphere.default_base_scale(), 1e10);
     assert_eq!(ObjectInputType::RandomCube.default_base_scale(), 1e10);

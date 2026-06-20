@@ -115,16 +115,24 @@ fn object_input_type_change_syncs_scaled_parameters() {
 fn base_scale_edit_syncs_scaled_parameters_for_active_type() {
     let mut ui = UiState::default();
     ui.object_input_type = ObjectInputType::RandomSphere;
-    ui.base_scale = 1e10;
     ui.sync_scaled_object_input_parameters();
     let initial_radius = ui.random_sphere.radius;
 
-    ui.base_scale = 1e9;
-    ui.sync_scaled_object_input_parameters();
+    ui.apply_base_scale_edit(ui.base_scale_unit.from_meters(1e9), false);
     assert!((ui.random_sphere.radius - initial_radius * 0.1).abs() < 1e-3);
     let expected_mass_min = 1e29 * 0.001;
     let mass_error = (ui.random_sphere.mass_range.0 - expected_mass_min).abs();
     assert!(mass_error / expected_mass_min < 1e-9, "mass_error={mass_error}");
+}
+
+#[test]
+fn apply_base_scale_edit_preserves_manual_parameters_when_scale_unchanged() {
+    let mut ui = UiState::default();
+    ui.object_input_type = ObjectInputType::RandomSphere;
+    ui.random_sphere.radius = 123.456;
+    let display = ui.base_scale_display_value();
+    ui.apply_base_scale_edit(display, false);
+    assert!((ui.random_sphere.radius - 123.456).abs() < 1e-6);
 }
 
 #[test]
@@ -154,12 +162,11 @@ fn base_scale_edit_disables_add_until_reset() {
 }
 
 #[test]
-fn maybe_sync_skips_non_scaled_object_input_types() {
+fn base_scale_edit_does_not_sync_unrelated_parameters_for_non_scaled_types() {
     let mut ui = UiState::default();
     ui.object_input_type = ObjectInputType::SolarSystem;
     let before = ui.random_sphere.radius;
-    ui.base_scale = 99.0;
-    ui.maybe_sync_scaled_object_input_parameters();
+    ui.apply_base_scale_edit(2.0, false);
     assert_eq!(ui.random_sphere.radius, before);
 }
 

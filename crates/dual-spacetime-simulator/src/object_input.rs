@@ -88,7 +88,7 @@ impl std::fmt::Display for ObjectInput {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ObjectInputType {
     RandomSphere,
     RandomCube,
@@ -121,7 +121,7 @@ impl std::fmt::Display for ObjectInputType {
 
 impl ObjectInputType {
     /// Returns the recommended world scale for this object-input type.
-    pub fn default_base_scale(&self) -> f64 {
+    pub fn default_base_scale(self) -> f64 {
         match self {
             ObjectInputType::RandomSphere => 1e10,
             ObjectInputType::RandomCube => 1e10,
@@ -132,9 +132,44 @@ impl ObjectInputType {
         }
     }
 
+    /// Returns whether panel parameters are derived from the current base scale.
+    pub fn uses_scaled_parameters(self) -> bool {
+        matches!(
+            self,
+            ObjectInputType::RandomSphere
+                | ObjectInputType::RandomCube
+                | ObjectInputType::SpiralDisk
+                | ObjectInputType::EllipticalOrbit
+        )
+    }
+
     /// Expands a condition type into concrete object-input parameters scaled for `scale`.
-    pub fn to_object_input(&self, scale: f64) -> ObjectInput {
+    pub fn to_object_input(self, scale: f64) -> ObjectInput {
         let scale = clamp_world_scale(scale);
+        if self.uses_scaled_parameters() {
+            return self.to_scaled_object_input(scale);
+        }
+        match self {
+            ObjectInputType::SolarSystem => ObjectInput::SolarSystem {
+                scale,
+                start_year: 2000,
+                start_month: 1,
+                start_day: 1,
+                start_hour: 12,
+            },
+            ObjectInputType::SatelliteOrbit => ObjectInput::SatelliteOrbit {
+                scale,
+                orbit_altitude_min: 300e3,
+                orbit_altitude_max: 800e3,
+                asteroid_mass: 1e24,
+                asteroid_distance: 2e7,
+                asteroid_speed: 3e3,
+            },
+            _ => unreachable!("scaled types are handled above"),
+        }
+    }
+
+    fn to_scaled_object_input(self, scale: f64) -> ObjectInput {
         let reference = self.default_base_scale();
         let factor = scale / reference;
         let factor_cubed = factor * factor * factor;
@@ -156,21 +191,6 @@ impl ObjectInputType {
                 disk_radius: 1.5e7 * factor,
                 mass_fixed: 1e20 * factor_cubed,
             },
-            ObjectInputType::SolarSystem => ObjectInput::SolarSystem {
-                scale,
-                start_year: 2000,
-                start_month: 1,
-                start_day: 1,
-                start_hour: 12,
-            },
-            ObjectInputType::SatelliteOrbit => ObjectInput::SatelliteOrbit {
-                scale,
-                orbit_altitude_min: 300e3,
-                orbit_altitude_max: 800e3,
-                asteroid_mass: 1e24,
-                asteroid_distance: 2e7,
-                asteroid_speed: 3e3,
-            },
             ObjectInputType::EllipticalOrbit => ObjectInput::EllipticalOrbit {
                 scale,
                 central_mass: 1.989e32 * factor_cubed,
@@ -178,6 +198,7 @@ impl ObjectInputType {
                 planetary_speed: 2.0e5 * factor,
                 planetary_distance: 2.0e11 * factor,
             },
+            _ => unreachable!("only scaled types call this helper"),
         }
     }
 }
