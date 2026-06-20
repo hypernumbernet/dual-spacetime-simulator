@@ -19,6 +19,17 @@ pub const MASS_PLUTO: f64 = 1.3025e22;
 pub const SOLAR_SYSTEM_SCALE: f64 = 2.50e12;
 pub const SATELLITE_ORBIT_SCALE: f64 = 12_756e3 * 0.5;
 pub const EARTH_RADIUS: f64 = 6.371e6;
+/// Minimum allowed world scale in meters (0.01 fm; values at or below this are clamped).
+pub const MIN_WORLD_SCALE: f64 = 1e-17;
+
+/// Clamps a world-scale value to a finite positive minimum.
+pub fn clamp_world_scale(scale: f64) -> f64 {
+    if scale.is_finite() && scale > MIN_WORLD_SCALE {
+        scale
+    } else {
+        MIN_WORLD_SCALE
+    }
+}
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum ObjectInput {
@@ -48,12 +59,14 @@ pub enum ObjectInput {
         mass_fixed: f64,
     },
     SolarSystem {
+        scale: f64,
         start_year: i32,
         start_month: i32,
         start_day: i32,
         start_hour: i32,
     },
     SatelliteOrbit {
+        scale: f64,
         orbit_altitude_min: f64,
         orbit_altitude_max: f64,
         asteroid_mass: f64,
@@ -118,23 +131,36 @@ impl std::fmt::Display for ObjectInputType {
 }
 
 impl ObjectInputType {
+    /// Returns the recommended world scale for this object-input type.
+    pub fn default_base_scale(&self) -> f64 {
+        match self {
+            ObjectInputType::RandomSphere => 1e10,
+            ObjectInputType::RandomCube => 1e10,
+            ObjectInputType::TwoSpheres => 1.0,
+            ObjectInputType::SpiralDisk => 1e7,
+            ObjectInputType::SolarSystem => SOLAR_SYSTEM_SCALE,
+            ObjectInputType::SatelliteOrbit => SATELLITE_ORBIT_SCALE,
+            ObjectInputType::EllipticalOrbit => 1.5e11,
+        }
+    }
+
     /// Expands a condition type into concrete default object-input parameters.
-    pub fn to_object_input(&self) -> ObjectInput {
+    pub fn to_object_input(&self, scale: f64) -> ObjectInput {
         match self {
             ObjectInputType::RandomSphere => ObjectInput::RandomSphere {
-                scale: 1e10,
+                scale,
                 radius: 1e10,
                 mass_range: (1e29, 1e31),
                 velocity_std: 1e6,
             },
             ObjectInputType::RandomCube => ObjectInput::RandomCube {
-                scale: 1e10,
+                scale,
                 cube_size: 2e10,
                 mass_range: (1e29, 1e31),
                 velocity_std: 1e6,
             },
             ObjectInputType::TwoSpheres => ObjectInput::TwoSpheres {
-                scale: 1.0,
+                scale,
                 sphere1_center: DVec3::new(-1.0, 0.0, 0.0),
                 sphere1_radius: 0.5,
                 sphere2_center: DVec3::new(1.0, 0.0, 0.0),
@@ -142,17 +168,19 @@ impl ObjectInputType {
                 mass_fixed: 1e-1,
             },
             ObjectInputType::SpiralDisk => ObjectInput::SpiralDisk {
-                scale: 1e7,
+                scale,
                 disk_radius: 1.5e7,
                 mass_fixed: 1e20,
             },
             ObjectInputType::SolarSystem => ObjectInput::SolarSystem {
+                scale,
                 start_year: 2000,
                 start_month: 1,
                 start_day: 1,
                 start_hour: 12,
             },
             ObjectInputType::SatelliteOrbit => ObjectInput::SatelliteOrbit {
+                scale,
                 orbit_altitude_min: 300e3,
                 orbit_altitude_max: 800e3,
                 asteroid_mass: 1e24,
@@ -160,7 +188,7 @@ impl ObjectInputType {
                 asteroid_speed: 3e3,
             },
             ObjectInputType::EllipticalOrbit => ObjectInput::EllipticalOrbit {
-                scale: 1.5e11,
+                scale,
                 central_mass: 1.989e32,
                 planetary_mass: 5.972e24,
                 planetary_speed: 2.0e5,
@@ -254,15 +282,15 @@ fn get_solar_system_fallback_particles(correct: &Correct) -> Vec<Particle> {
 impl ObjectInput {
     /// Returns the canonical world scale associated with this object input.
     pub fn get_scale(&self) -> f64 {
-        match self {
+        clamp_world_scale(match self {
             ObjectInput::RandomSphere { scale, .. } => *scale,
             ObjectInput::RandomCube { scale, .. } => *scale,
             ObjectInput::TwoSpheres { scale, .. } => *scale,
             ObjectInput::SpiralDisk { scale, .. } => *scale,
-            ObjectInput::SolarSystem { .. } => SOLAR_SYSTEM_SCALE,
-            ObjectInput::SatelliteOrbit { .. } => SATELLITE_ORBIT_SCALE,
+            ObjectInput::SolarSystem { scale, .. } => *scale,
+            ObjectInput::SatelliteOrbit { scale, .. } => *scale,
             ObjectInput::EllipticalOrbit { scale, .. } => *scale,
-        }
+        })
     }
 
     /// Generates particles according to the selected object-input variant and settings.
@@ -438,13 +466,13 @@ impl ObjectInput {
                 SimulationNormal { particles }
             }
             ObjectInput::SolarSystem {
+                scale,
                 start_year,
                 start_month,
                 start_day,
                 start_hour,
             } => {
-                let scale = SOLAR_SYSTEM_SCALE;
-                let correct = Correct::new(scale);
+                let correct = Correct::new(*scale);
                 match utils::update_datafiles(None, false) {
                     Ok(_) => {}
                     Err(_) => {
@@ -526,14 +554,14 @@ impl ObjectInput {
                 SimulationNormal { particles }
             }
             ObjectInput::SatelliteOrbit {
+                scale,
                 orbit_altitude_min,
                 orbit_altitude_max,
                 asteroid_mass,
                 asteroid_distance,
                 asteroid_speed,
             } => {
-                let scale = SATELLITE_ORBIT_SCALE;
-                let correct = Correct::new(scale);
+                let correct = Correct::new(*scale);
                 let mut particles = vec![
                     // Earth
                     Particle {
@@ -676,7 +704,7 @@ impl ObjectInput {
 impl Default for ObjectInput {
     /// Creates the default object-input instance from the default type preset.
     fn default() -> Self {
-        ObjectInputType::RandomSphere.to_object_input()
+        ObjectInputType::RandomSphere.to_object_input(1e10)
     }
 }
 
@@ -688,6 +716,7 @@ struct Correct {
 impl Correct {
     /// Builds unit-conversion factors from world scale into simulation units.
     fn new(scale: f64) -> Self {
+        let scale = clamp_world_scale(scale);
         let m = 1.0 / scale; // Scale-corrected length
         let kg = m * m * m; // Scale-corrected mass
         Self { m, kg }

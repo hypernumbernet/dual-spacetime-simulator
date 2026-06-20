@@ -1,9 +1,9 @@
-use crate::object_input::{ObjectInput, ObjectInputType};
+use crate::object_input::{clamp_world_scale, ObjectInputType};
 use crate::particle_snapshot::{
     ParticleSnapshot, SNAPSHOT_FILTER_EXT, SNAPSHOT_FILTER_NAME,
 };
 use crate::settings::AppSettings;
-use crate::simulation::{AU, SimulationManager};
+use crate::simulation::{AU, LY, MPC, PC, SimulationManager};
 use crate::ui_state::*;
 use crate::ui_styles::*;
 use egui::{Checkbox, ComboBox, Slider};
@@ -278,6 +278,7 @@ pub fn draw_ui(
             .show(ctx, |ui| {
                 ui.set_width(uis.input_panel_width);
                 combobox_simulation_type(ui, &mut uis);
+                base_scale_input(ui, &mut uis);
                 ui.separator();
                 combobox_object_input_type(ui, &mut uis);
                 match uis.object_input_type {
@@ -316,55 +317,9 @@ pub fn draw_ui(
 
     if uis.is_resetting && uis.is_reset_requested {
         uis.is_resetting = false;
-        uis.object_input = match uis.object_input_type {
-            ObjectInputType::RandomSphere => ObjectInput::RandomSphere {
-                scale: uis.random_sphere.scale,
-                radius: uis.random_sphere.radius,
-                mass_range: uis.random_sphere.mass_range,
-                velocity_std: uis.random_sphere.velocity_std,
-            },
-            ObjectInputType::RandomCube => ObjectInput::RandomCube {
-                scale: uis.random_cube.scale,
-                cube_size: uis.random_cube.cube_size,
-                mass_range: uis.random_cube.mass_range,
-                velocity_std: uis.random_cube.velocity_std,
-            },
-
-            ObjectInputType::TwoSpheres => ObjectInput::TwoSpheres {
-                scale: uis.two_spheres.scale,
-                sphere1_center: uis.two_spheres.sphere1_center,
-                sphere1_radius: uis.two_spheres.sphere1_radius,
-                sphere2_center: uis.two_spheres.sphere2_center,
-                sphere2_radius: uis.two_spheres.sphere2_radius,
-                mass_fixed: uis.two_spheres.mass_fixed,
-            },
-            ObjectInputType::SpiralDisk => ObjectInput::SpiralDisk {
-                scale: uis.spiral_disk.scale,
-                disk_radius: uis.spiral_disk.disk_radius,
-                mass_fixed: uis.spiral_disk.mass_fixed,
-            },
-            ObjectInputType::SolarSystem => ObjectInput::SolarSystem {
-                start_year: uis.solar_system.start_year,
-                start_month: uis.solar_system.start_month,
-                start_day: uis.solar_system.start_day,
-                start_hour: uis.solar_system.start_hour,
-            },
-            ObjectInputType::SatelliteOrbit => ObjectInput::SatelliteOrbit {
-                orbit_altitude_min: uis.satellite_orbit.orbit_altitude_min,
-                orbit_altitude_max: uis.satellite_orbit.orbit_altitude_max,
-                asteroid_mass: uis.satellite_orbit.asteroid_mass,
-                asteroid_distance: uis.satellite_orbit.asteroid_distance,
-                asteroid_speed: uis.satellite_orbit.asteroid_speed,
-            },
-            ObjectInputType::EllipticalOrbit => ObjectInput::EllipticalOrbit {
-                scale: uis.elliptical_orbit.scale,
-                central_mass: uis.elliptical_orbit.central_mass,
-                planetary_mass: uis.elliptical_orbit.planetary_mass,
-                planetary_speed: uis.elliptical_orbit.planetary_speed,
-                planetary_distance: uis.elliptical_orbit.planetary_distance,
-            },
-        };
-        uis.scale = uis.object_input.get_scale();
+        uis.base_scale = clamp_world_scale(uis.base_scale);
+        uis.object_input = uis.build_object_input();
+        uis.scale = uis.base_scale;
         if uis.object_input_type == ObjectInputType::SolarSystem {
             uis.time_per_frame = 10_000.0;
             uis.max_fps = 1000;
@@ -433,14 +388,20 @@ fn format_simulation_time(simulation_time: f64) -> String {
 fn format_scale(scale_guage: f64, scale: f64) -> String {
     let scale_inv = DEFAULT_SCALE_UI / scale_guage;
     let pow10 = scale_inv.powi(4) * scale;
-    if pow10 >= AU * 1e6 {
-        format!("{:.3e} au", pow10 / AU)
+    if pow10 >= MPC {
+        format!("{:.3e} Mpc", pow10 / MPC)
+    } else if pow10 >= PC {
+        format!("{:.3e} pc", pow10 / PC)
+    } else if pow10 >= LY {
+        format!("{:.3e} ly", pow10 / LY)
     } else if pow10 >= AU {
         format!("{:.3} au", pow10 / AU)
     } else if pow10 >= 1e9 {
         format!("{:.3e} km", pow10 / 1e3)
     } else if pow10 >= 1e3 {
         format!("{:.3} km", pow10 / 1e3)
+    } else if pow10 < 1e-15 {
+        format!("{:.6} fm", pow10 * 1e15)
     } else if pow10 < 1e-9 {
         format!("{:.6} nm", pow10 * 1e9)
     } else if pow10 < 1e-3 {
@@ -448,6 +409,37 @@ fn format_scale(scale_guage: f64, scale: f64) -> String {
     } else {
         format!("{:.3} m", pow10)
     }
+}
+
+/// Renders base-scale value input with selectable length units.
+fn base_scale_input(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Base Scale");
+    let previous_unit = uis.base_scale_unit;
+    let unit = uis.base_scale_unit;
+    let mut display = uis.base_scale_display_value();
+    let format_display = |value: f64| unit.format_display(value);
+    ui.horizontal(|ui| {
+        dragvalue_positive_f64(
+            ui,
+            &mut display,
+            BASE_SCALE_DRAG_SPEED,
+            unit.min_display_value(),
+            110.0,
+            None,
+            Some(&format_display),
+        );
+        display = unit.sanitize_display(display);
+        let id = ui.make_persistent_id("base_scale_unit_combobox");
+        ComboBox::from_id_salt(id)
+            .selected_text(format!("{}", uis.base_scale_unit))
+            .width(60.0)
+            .show_ui(ui, |ui| {
+                for unit in BaseScaleUnit::ALL {
+                    selectable_value(ui, &mut uis.base_scale_unit, unit);
+                }
+            });
+    });
+    uis.apply_base_scale_edit(display, uis.base_scale_unit != previous_unit);
 }
 
 /// Renders the simulation-type combo box and updates dependent UI state.
@@ -475,6 +467,7 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
 /// Renders the object-input type combo box and updates selected condition defaults.
 fn combobox_object_input_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Object Input Type");
+    let previous_type = uis.object_input_type.clone();
     let id = ui.make_persistent_id("object_input_type_combobox");
     ComboBox::from_id_salt(id)
         .selected_text(format!("{}", uis.object_input_type))
@@ -516,11 +509,14 @@ fn combobox_object_input_type(ui: &mut egui::Ui, uis: &mut UiState) {
                 ObjectInputType::EllipticalOrbit,
             );
         });
+    if uis.object_input_type != previous_type {
+        uis.base_scale =
+            clamp_world_scale(uis.object_input_type.default_base_scale());
+    }
 }
 
 /// Renders parameter controls for the random-sphere object input.
 fn condition_random_sphere(ui: &mut egui::Ui, uis: &mut UiState) {
-    dragvalue_normal(ui, &mut uis.random_sphere.scale, 1e9, "Scale (m): ");
     dragvalue_normal(ui, &mut uis.random_sphere.radius, 1e9, "Sphere Radius (m)");
     dragvalue_normal(
         ui,
@@ -544,7 +540,6 @@ fn condition_random_sphere(ui: &mut egui::Ui, uis: &mut UiState) {
 
 /// Renders parameter controls for the random-cube object input.
 fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
-    dragvalue_normal(ui, &mut uis.random_cube.scale, 1e3, "Scale (m)");
     dragvalue_normal(ui, &mut uis.random_cube.cube_size, 1e3, "Cube Size (m)");
     dragvalue_normal(ui, &mut uis.random_cube.mass_range.0, 1e20, "Mass Min (kg)");
     dragvalue_normal(ui, &mut uis.random_cube.mass_range.1, 1e20, "Mass Max (kg)");
@@ -558,7 +553,6 @@ fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
 
 /// Renders parameter controls for the two-spheres object input.
 fn condition_two_spheres(ui: &mut egui::Ui, uis: &mut UiState) {
-    dragvalue_normal(ui, &mut uis.two_spheres.scale, 1e9, "Scale (m)");
     label_normal(ui, "Sphere 1 Center");
     dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.x, 1.0, "X");
     dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.y, 1.0, "Y");
@@ -584,7 +578,6 @@ fn condition_two_spheres(ui: &mut egui::Ui, uis: &mut UiState) {
 
 /// Renders parameter controls for the spiral-disk object input.
 fn condition_spiral_disk(ui: &mut egui::Ui, uis: &mut UiState) {
-    dragvalue_normal(ui, &mut uis.spiral_disk.scale, 1e7, "Scale (m)");
     dragvalue_normal(ui, &mut uis.spiral_disk.disk_radius, 1e7, "Disk Radius (m)");
     dragvalue_normal(ui, &mut uis.spiral_disk.mass_fixed, 1e20, "Mass Fixed (kg)");
 }
@@ -634,7 +627,6 @@ fn condition_satellite_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
 
 /// Renders parameter controls for the elliptical-orbit object input.
 fn condition_elliptical_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
-    dragvalue_normal(ui, &mut uis.elliptical_orbit.scale, 1e7, "Scale (m)");
     label_normal(ui, "Central Body");
     dragvalue_normal(
         ui,
@@ -758,7 +750,8 @@ fn load_particles(
     }
     uis.particle_count = snapshot.particles.len() as u32;
     uis.simulation_type = snapshot.simulation_type;
-    uis.scale = snapshot.scale;
+    uis.scale = clamp_world_scale(snapshot.scale);
+    uis.base_scale = clamp_world_scale(snapshot.scale);
     uis.frame = 1;
     uis.simulation_time = 0.0;
     uis.is_running = false;

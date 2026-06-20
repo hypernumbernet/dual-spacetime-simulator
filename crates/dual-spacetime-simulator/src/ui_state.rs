@@ -1,8 +1,136 @@
-use crate::object_input::{ObjectInput, ObjectInputType};
+use crate::object_input::{
+    clamp_world_scale, ObjectInput, ObjectInputType, MIN_WORLD_SCALE, SATELLITE_ORBIT_SCALE,
+    SOLAR_SYSTEM_SCALE,
+};
 use crate::settings::AppSettings;
+use crate::simulation::{AU, LY, MPC, PC};
 use glam::DVec3;
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
+pub const BASE_SCALE_DRAG_SPEED: f64 = 0.01;
+
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum BaseScaleUnit {
+    Mpc,
+    Pc,
+    Ly,
+    Au,
+    #[default]
+    Km,
+    M,
+    Mm,
+    Nm,
+    Fm,
+}
+
+impl std::fmt::Display for BaseScaleUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            BaseScaleUnit::Mpc => "Mpc",
+            BaseScaleUnit::Pc => "pc",
+            BaseScaleUnit::Ly => "ly",
+            BaseScaleUnit::Au => "au",
+            BaseScaleUnit::Km => "km",
+            BaseScaleUnit::M => "m",
+            BaseScaleUnit::Mm => "mm",
+            BaseScaleUnit::Nm => "nm",
+            BaseScaleUnit::Fm => "fm",
+        };
+        write!(f, "{}", text)
+    }
+}
+
+impl BaseScaleUnit {
+    /// All units in descending size order (largest first).
+    pub const ALL: [Self; 9] = [
+        Self::Mpc,
+        Self::Pc,
+        Self::Ly,
+        Self::Au,
+        Self::Km,
+        Self::M,
+        Self::Mm,
+        Self::Nm,
+        Self::Fm,
+    ];
+
+    /// Returns how many meters one unit of this scale represents.
+    pub fn meters_per_unit(self) -> f64 {
+        match self {
+            BaseScaleUnit::Mpc => MPC,
+            BaseScaleUnit::Pc => PC,
+            BaseScaleUnit::Ly => LY,
+            BaseScaleUnit::Au => AU,
+            BaseScaleUnit::Km => 1e3,
+            BaseScaleUnit::M => 1.0,
+            BaseScaleUnit::Mm => 1e-3,
+            BaseScaleUnit::Nm => 1e-9,
+            BaseScaleUnit::Fm => 1e-15,
+        }
+    }
+
+    /// Converts a display value in this unit to meters.
+    pub fn to_meters(self, display: f64) -> f64 {
+        display * self.meters_per_unit()
+    }
+
+    /// Converts a meter value to this unit for display.
+    pub fn from_meters(self, meters: f64) -> f64 {
+        meters / self.meters_per_unit()
+    }
+
+    /// Decimal places used when rounding display values for this unit.
+    pub fn display_decimal_places(self) -> i32 {
+        match self {
+            BaseScaleUnit::Mpc | BaseScaleUnit::Pc | BaseScaleUnit::Ly | BaseScaleUnit::Au => 6,
+            BaseScaleUnit::Km | BaseScaleUnit::M => 3,
+            BaseScaleUnit::Mm => 6,
+            BaseScaleUnit::Nm | BaseScaleUnit::Fm => 2,
+        }
+    }
+
+    /// Rounds a display value to a unit-appropriate precision.
+    pub fn sanitize_display(self, display: f64) -> f64 {
+        if !display.is_finite() {
+            return display;
+        }
+        let factor = 10f64.powi(self.display_decimal_places());
+        (display * factor).round() / factor
+    }
+
+    /// Formats a display value without floating-point noise.
+    pub fn format_display(self, display: f64) -> String {
+        let value = self.sanitize_display(display);
+        if value.abs() >= 1e6 || value.abs() < 1e-3 && value != 0.0 {
+            return format!("{:.6e}", value);
+        }
+        let places = self.display_decimal_places().max(0) as usize;
+        trim_trailing_zeros(&format!("{:.*}", places, value))
+    }
+
+    /// Converts meters to a canonical value free of unit round-trip artifacts.
+    pub fn canonical_meters(self, meters: f64) -> f64 {
+        let display = self.sanitize_display(self.from_meters(meters));
+        clamp_world_scale(self.to_meters(display))
+    }
+
+    /// Minimum allowed display value for this unit.
+    pub fn min_display_value(self) -> f64 {
+        let precision_min = 10f64.powi(-self.display_decimal_places().max(0));
+        let physical_min = self.sanitize_display(MIN_WORLD_SCALE / self.meters_per_unit());
+        precision_min.max(physical_min)
+    }
+}
+
+fn trim_trailing_zeros(formatted: &str) -> String {
+    if !formatted.contains('.') {
+        return formatted.to_string();
+    }
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum AppMode {
@@ -153,6 +281,8 @@ pub struct UiState {
     pub object_input_type: ObjectInputType,
     pub object_input: ObjectInput,
     pub simulation_type: SimulationType,
+    pub base_scale: f64,
+    pub base_scale_unit: BaseScaleUnit,
     pub random_sphere: RandomSphereParameters,
     pub random_cube: RandomCubeParameters,
     pub two_spheres: TwoSpheresParameters,
@@ -202,6 +332,8 @@ impl Default for UiState {
             object_input_type: ObjectInputType::default(),
             object_input: ObjectInput::default(),
             simulation_type: SimulationType::Normal,
+            base_scale: ObjectInputType::default().default_base_scale(),
+            base_scale_unit: BaseScaleUnit::default(),
             random_sphere: RandomSphereParameters::default(),
             random_cube: RandomCubeParameters::default(),
             two_spheres: TwoSpheresParameters::default(),
@@ -277,10 +409,80 @@ impl UiState {
             AppMode::Graph3D => PANELS_GRAPH3D,
         }
     }
+
+    /// Returns the current base scale as a value in the selected display unit.
+    pub fn base_scale_display_value(&self) -> f64 {
+        self.base_scale_unit
+            .sanitize_display(self.base_scale_unit.from_meters(self.base_scale))
+    }
+
+    /// Updates stored base scale from UI display input or a unit change.
+    pub fn apply_base_scale_edit(&mut self, display: f64, unit_changed: bool) {
+        let unit = self.base_scale_unit;
+        let display = if unit_changed {
+            1.0
+        } else {
+            unit.sanitize_display(display)
+        };
+        self.base_scale = unit.canonical_meters(unit.to_meters(display));
+    }
+
+    /// Builds an object-input snapshot from the current panel state.
+    pub fn build_object_input(&self) -> ObjectInput {
+        let scale = self.base_scale;
+        match self.object_input_type {
+            ObjectInputType::RandomSphere => ObjectInput::RandomSphere {
+                scale,
+                radius: self.random_sphere.radius,
+                mass_range: self.random_sphere.mass_range,
+                velocity_std: self.random_sphere.velocity_std,
+            },
+            ObjectInputType::RandomCube => ObjectInput::RandomCube {
+                scale,
+                cube_size: self.random_cube.cube_size,
+                mass_range: self.random_cube.mass_range,
+                velocity_std: self.random_cube.velocity_std,
+            },
+            ObjectInputType::TwoSpheres => ObjectInput::TwoSpheres {
+                scale,
+                sphere1_center: self.two_spheres.sphere1_center,
+                sphere1_radius: self.two_spheres.sphere1_radius,
+                sphere2_center: self.two_spheres.sphere2_center,
+                sphere2_radius: self.two_spheres.sphere2_radius,
+                mass_fixed: self.two_spheres.mass_fixed,
+            },
+            ObjectInputType::SpiralDisk => ObjectInput::SpiralDisk {
+                scale,
+                disk_radius: self.spiral_disk.disk_radius,
+                mass_fixed: self.spiral_disk.mass_fixed,
+            },
+            ObjectInputType::SolarSystem => ObjectInput::SolarSystem {
+                scale,
+                start_year: self.solar_system.start_year,
+                start_month: self.solar_system.start_month,
+                start_day: self.solar_system.start_day,
+                start_hour: self.solar_system.start_hour,
+            },
+            ObjectInputType::SatelliteOrbit => ObjectInput::SatelliteOrbit {
+                scale,
+                orbit_altitude_min: self.satellite_orbit.orbit_altitude_min,
+                orbit_altitude_max: self.satellite_orbit.orbit_altitude_max,
+                asteroid_mass: self.satellite_orbit.asteroid_mass,
+                asteroid_distance: self.satellite_orbit.asteroid_distance,
+                asteroid_speed: self.satellite_orbit.asteroid_speed,
+            },
+            ObjectInputType::EllipticalOrbit => ObjectInput::EllipticalOrbit {
+                scale,
+                central_mass: self.elliptical_orbit.central_mass,
+                planetary_mass: self.elliptical_orbit.planetary_mass,
+                planetary_speed: self.elliptical_orbit.planetary_speed,
+                planetary_distance: self.elliptical_orbit.planetary_distance,
+            },
+        }
+    }
 }
 
 pub struct RandomSphereParameters {
-    pub scale: f64,
     pub radius: f64,
     pub mass_range: (f64, f64),
     pub velocity_std: f64,
@@ -290,14 +492,13 @@ impl Default for RandomSphereParameters {
     /// Loads default random-sphere parameter values from object-input presets.
     fn default() -> Self {
         if let ObjectInput::RandomSphere {
-            scale,
             radius,
             mass_range,
             velocity_std,
-        } = ObjectInputType::RandomSphere.to_object_input()
+            ..
+        } = ObjectInputType::RandomSphere.to_object_input(1e10)
         {
             Self {
-                scale,
                 radius,
                 mass_range,
                 velocity_std,
@@ -309,7 +510,6 @@ impl Default for RandomSphereParameters {
 }
 
 pub struct RandomCubeParameters {
-    pub scale: f64,
     pub cube_size: f64,
     pub mass_range: (f64, f64),
     pub velocity_std: f64,
@@ -319,14 +519,13 @@ impl Default for RandomCubeParameters {
     /// Loads default random-cube parameter values from object-input presets.
     fn default() -> Self {
         if let ObjectInput::RandomCube {
-            scale,
             cube_size,
             mass_range,
             velocity_std,
-        } = ObjectInputType::RandomCube.to_object_input()
+            ..
+        } = ObjectInputType::RandomCube.to_object_input(1e10)
         {
             Self {
-                scale,
                 cube_size,
                 mass_range,
                 velocity_std,
@@ -338,7 +537,6 @@ impl Default for RandomCubeParameters {
 }
 
 pub struct TwoSpheresParameters {
-    pub scale: f64,
     pub sphere1_center: DVec3,
     pub sphere1_radius: f64,
     pub sphere2_center: DVec3,
@@ -350,16 +548,15 @@ impl Default for TwoSpheresParameters {
     /// Loads default two-spheres parameter values from object-input presets.
     fn default() -> Self {
         if let ObjectInput::TwoSpheres {
-            scale,
             sphere1_center,
             sphere1_radius,
             sphere2_center,
             sphere2_radius,
             mass_fixed,
-        } = ObjectInputType::TwoSpheres.to_object_input()
+            ..
+        } = ObjectInputType::TwoSpheres.to_object_input(1.0)
         {
             Self {
-                scale,
                 sphere1_center,
                 sphere1_radius,
                 sphere2_center,
@@ -373,7 +570,6 @@ impl Default for TwoSpheresParameters {
 }
 
 pub struct SpiralDiskParameters {
-    pub scale: f64,
     pub disk_radius: f64,
     pub mass_fixed: f64,
 }
@@ -382,13 +578,12 @@ impl Default for SpiralDiskParameters {
     /// Loads default spiral-disk parameter values from object-input presets.
     fn default() -> Self {
         if let ObjectInput::SpiralDisk {
-            scale,
             disk_radius,
             mass_fixed,
-        } = ObjectInputType::SpiralDisk.to_object_input()
+            ..
+        } = ObjectInputType::SpiralDisk.to_object_input(1e7)
         {
             Self {
-                scale,
                 disk_radius,
                 mass_fixed,
             }
@@ -413,7 +608,8 @@ impl Default for SolarSystemParameters {
             start_month,
             start_day,
             start_hour,
-        } = ObjectInputType::SolarSystem.to_object_input()
+            ..
+        } = ObjectInputType::SolarSystem.to_object_input(SOLAR_SYSTEM_SCALE)
         {
             Self {
                 start_year,
@@ -444,7 +640,8 @@ impl Default for SatelliteOrbitParameters {
             asteroid_mass,
             asteroid_distance,
             asteroid_speed,
-        } = ObjectInputType::SatelliteOrbit.to_object_input()
+            ..
+        } = ObjectInputType::SatelliteOrbit.to_object_input(SATELLITE_ORBIT_SCALE)
         {
             Self {
                 orbit_altitude_min,
@@ -460,7 +657,6 @@ impl Default for SatelliteOrbitParameters {
 }
 
 pub struct EllipticalOrbitParameters {
-    pub scale: f64,
     pub central_mass: f64,
     pub planetary_mass: f64,
     pub planetary_speed: f64,
@@ -471,15 +667,14 @@ impl Default for EllipticalOrbitParameters {
     /// Loads default elliptical-orbit parameter values from object-input presets.
     fn default() -> Self {
         if let ObjectInput::EllipticalOrbit {
-            scale,
             central_mass,
             planetary_mass,
             planetary_speed,
             planetary_distance,
-        } = ObjectInputType::EllipticalOrbit.to_object_input()
+            ..
+        } = ObjectInputType::EllipticalOrbit.to_object_input(1.5e11)
         {
             Self {
-                scale,
                 central_mass,
                 planetary_mass,
                 planetary_speed,
