@@ -38,7 +38,7 @@
 | CPU 並列（粒子の力積分など） | `rayon`, `num_cpus` |
 | 乱数・分布 | `rand`, `rand_distr` |
 | 設定ファイル | `serde`, `serde_json` |
-| 太陽系初期条件（暦） | `satkit` |
+| 太陽系オブジェクト入力（暦） | `satkit` |
 | その他 | `bytemuck`, `raw-window-handle`, `ahash` |
 
 ---
@@ -78,7 +78,7 @@
 
 | モード | 役割 |
 |--------|------|
-| **`Simulation`** | 粒子シミュレーション。左ペインは Simulation / Initial Condition / Settings |
+| **`Simulation`** | 粒子シミュレーション。左ペインは Simulation / Object Input / Settings |
 | **`Graph3D`** | `graph3d.rs` が点列とグラフ用ライン頂点を生成し、粒子パイプライン＋ライン描画で表示。ペインは 3D Graph / Settings。**グラフ種別**は `GraphType`：`SphericalFibonacciLattice`、`RapidityFieldMatrix`、`RapidityFieldBiquaternion` |
 
 モード切替時は `about_to_wait` でフィンガープリントや前モードを参照し、必要な GPU バッファのみ更新します。
@@ -87,7 +87,7 @@
 
 ## 4. シミュレーション（`crates/dual-spacetime-simulator/src/simulation.rs`）
 
-- **`SimulationManager`**：`reset` で初期条件から `SimulationState` を構築し、`advance` で時間発展（`advance_time` のあと `update_velocities`）
+- **`SimulationManager`**：`reset` でオブジェクト入力から `SimulationState` を構築し、`advance` で時間発展（`advance_time` のあと `update_velocities`）
 - **`SimulationState`** のバリアント：
   - **Normal**：古典的 N 体風（ペア和の重力、並列）
   - **SpeedOfLightLimit**：前進を \(\gamma^{-1}\) でスケール
@@ -97,9 +97,9 @@
 
 ---
 
-## 5. 初期条件（`crates/dual-spacetime-simulator/src/initial_condition.rs`）
+## 5. オブジェクト入力（`crates/dual-spacetime-simulator/src/object_input.rs`）
 
-乱数球・立方体、二球、渦巻き円盤、太陽系、衛星軌道、楕円軌道などを `InitialCondition` として定義し、`generate_particles` で `Particle` ベクトルを返します。
+乱数球・立方体、二球、渦巻き円盤、太陽系、衛星軌道、楕円軌道などを `ObjectInput` として定義し、`generate_particles` で `Particle` ベクトルを返します。
 
 ---
 
@@ -153,7 +153,7 @@
 ## 10. テスト
 
 - **数学**: `cargo test -p dst-math`（`crates/dst-math/tests/` および `spacetime` / `biquaternion` 内の `#[cfg(test)]`）
-- **シミュレータ**: `cargo test -p dual-spacetime-simulator`（`crates/dual-spacetime-simulator/tests/`）。例：`simulation`、`initial_condition`、`camera`、`settings`、`ui_state`、`graph3d` など。
+- **シミュレータ**: `cargo test -p dual-spacetime-simulator`（`crates/dual-spacetime-simulator/tests/`）。例：`simulation`、`object_input`、`camera`、`settings`、`ui_state`、`graph3d` など。
 - **Vulkan ヘッドレス系**（`vulkan_base_headless.rs`）: 通常の `cargo test -p dual-spacetime-simulator` に含まれる。Vulkan ローダーと対応 GPU が必要（無い環境では失敗する）。
 - **ワークスペース全体**: `cargo test --workspace`
 
@@ -162,5 +162,5 @@
 ## 11. 補足
 
 - バイナリの `main` は `crates/dual-spacetime-simulator/src/main.rs` のみ。アプリ本体の **`App`** と **`run()`** は同クレートの **`src/lib.rs`** にあります。
-- シミュレータのモジュールは `camera`, `graph3d`, `initial_condition`, `integration`, `pipeline`, `settings`, `simulation`, `ui`, `ui_state`, `ui_styles`, `vulkan_base` など（数学は `dst-math` クレート）。
+- シミュレータのモジュールは `camera`, `graph3d`, `object_input`, `integration`, `pipeline`, `settings`, `simulation`, `ui`, `ui_state`, `ui_styles`, `vulkan_base` など（数学は `dst-math` クレート）。
 - シェーダは `crates/dual-spacetime-simulator/src/shaders/*.vert|*.frag` を `build.rs` で `glslc` コンパイルし、`OUT_DIR/shaders/*.spv` を `include_bytes!` で読み込みます。

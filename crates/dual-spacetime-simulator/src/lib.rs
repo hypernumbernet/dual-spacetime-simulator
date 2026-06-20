@@ -3,7 +3,7 @@
 
 pub mod camera;
 pub mod graph3d;
-pub mod initial_condition;
+pub mod object_input;
 pub mod integration;
 pub mod particle_snapshot;
 pub mod pipeline;
@@ -13,7 +13,7 @@ pub mod ui;
 pub mod ui_state;
 pub mod ui_styles;
 
-use crate::initial_condition::InitialCondition;
+use crate::object_input::ObjectInput;
 use crate::integration::Gui;
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
@@ -85,7 +85,7 @@ pub fn spawn_simulation_worker(
             let max_fps = ui_state.max_fps;
             let time_per_frame = ui_state.time_per_frame;
             let is_reset_requested = ui_state.is_reset_requested;
-            let selected_initial_condition = ui_state.initial_condition.clone();
+            let selected_object_input = ui_state.object_input.clone();
             let simulation_type = ui_state.simulation_type;
             let skip = ui_state.skip;
             let particle_count = ui_state.particle_count;
@@ -93,7 +93,7 @@ pub fn spawn_simulation_worker(
             drop(ui_state);
             if is_reset_requested {
                 simulation_manager.read().unwrap().reset(
-                    selected_initial_condition,
+                    selected_object_input,
                     simulation_type,
                     particle_count,
                     scale,
@@ -285,12 +285,12 @@ impl ApplicationHandler for App {
         self.vulkan_base = Some(vulkan_base);
         self.gui = Some(gui);
 
-        let initial_condition = InitialCondition::default();
+        let object_input = ObjectInput::default();
         let particle_count = ui_state.particle_count;
         let scale = ui_state.scale;
         let sim_type = ui_state.simulation_type;
         self.simulation_manager.write().unwrap().reset(
-            initial_condition,
+            object_input,
             sim_type,
             particle_count,
             scale,

@@ -1,4 +1,4 @@
-use crate::initial_condition::{InitialCondition, InitialConditionType};
+use crate::object_input::{ObjectInput, ObjectInputType};
 use crate::particle_snapshot::{
     ParticleSnapshot, SNAPSHOT_FILTER_EXT, SNAPSHOT_FILTER_NAME,
 };
@@ -71,11 +71,11 @@ pub fn draw_ui(
                             ui.close_menu();
                         }
                     }
-                    if available.contains(&PanelKind::InitialCondition) {
+                    if available.contains(&PanelKind::ObjectInput) {
                         if ui
                             .checkbox(
-                                &mut uis.is_initial_condition_panel_open,
-                                PanelKind::InitialCondition.label(),
+                                &mut uis.is_object_input_panel_open,
+                                PanelKind::ObjectInput.label(),
                             )
                             .clicked()
                         {
@@ -170,8 +170,8 @@ pub fn draw_ui(
                     uis.is_running = !uis.is_running;
                 }
                 ui.separator();
-                if button_normal(ui, "Initial Condition").clicked() {
-                    uis.is_initial_condition_panel_open = !uis.is_initial_condition_panel_open;
+                if button_normal(ui, "Object Input").clicked() {
+                    uis.is_object_input_panel_open = !uis.is_object_input_panel_open;
                 }
                 ui.separator();
                 dragvalue_normal(ui, &mut uis.time_per_frame, 1.0, "Time(sec)/Frame");
@@ -261,8 +261,8 @@ pub fn draw_ui(
             });
     }
 
-    if uis.app_mode == AppMode::Simulation && uis.is_initial_condition_panel_open {
-        egui::Window::new("Initial Condition")
+    if uis.app_mode == AppMode::Simulation && uis.is_object_input_panel_open {
+        egui::Window::new("Object Input")
             .resizable(false)
             .collapsible(true)
             .default_width(uis.input_panel_width)
@@ -271,27 +271,27 @@ pub fn draw_ui(
                 ui.set_width(uis.input_panel_width);
                 combobox_simulation_type(ui, &mut uis);
                 ui.separator();
-                combobox_initial_condition_type(ui, &mut uis);
-                match uis.initial_condition_type {
-                    InitialConditionType::RandomSphere => {
+                combobox_object_input_type(ui, &mut uis);
+                match uis.object_input_type {
+                    ObjectInputType::RandomSphere => {
                         condition_random_sphere(ui, &mut uis);
                     }
-                    InitialConditionType::RandomCube => {
+                    ObjectInputType::RandomCube => {
                         condition_random_cube(ui, &mut uis);
                     }
-                    InitialConditionType::TwoSpheres => {
+                    ObjectInputType::TwoSpheres => {
                         condition_two_spheres(ui, &mut uis);
                     }
-                    InitialConditionType::SpiralDisk => {
+                    ObjectInputType::SpiralDisk => {
                         condition_spiral_disk(ui, &mut uis);
                     }
-                    InitialConditionType::SolarSystem => {
+                    ObjectInputType::SolarSystem => {
                         condition_solar_system(ui, &mut uis);
                     }
-                    InitialConditionType::SatelliteOrbit => {
+                    ObjectInputType::SatelliteOrbit => {
                         condition_satellite_orbit(ui, &mut uis);
                     }
-                    InitialConditionType::EllipticalOrbit => {
+                    ObjectInputType::EllipticalOrbit => {
                         condition_elliptical_orbit(ui, &mut uis);
                     }
                 }
@@ -316,21 +316,21 @@ pub fn draw_ui(
 
     if uis.is_resetting && uis.is_reset_requested {
         uis.is_resetting = false;
-        uis.initial_condition = match uis.initial_condition_type {
-            InitialConditionType::RandomSphere => InitialCondition::RandomSphere {
+        uis.object_input = match uis.object_input_type {
+            ObjectInputType::RandomSphere => ObjectInput::RandomSphere {
                 scale: uis.random_sphere.scale,
                 radius: uis.random_sphere.radius,
                 mass_range: uis.random_sphere.mass_range,
                 velocity_std: uis.random_sphere.velocity_std,
             },
-            InitialConditionType::RandomCube => InitialCondition::RandomCube {
+            ObjectInputType::RandomCube => ObjectInput::RandomCube {
                 scale: uis.random_cube.scale,
                 cube_size: uis.random_cube.cube_size,
                 mass_range: uis.random_cube.mass_range,
                 velocity_std: uis.random_cube.velocity_std,
             },
 
-            InitialConditionType::TwoSpheres => InitialCondition::TwoSpheres {
+            ObjectInputType::TwoSpheres => ObjectInput::TwoSpheres {
                 scale: uis.two_spheres.scale,
                 sphere1_center: uis.two_spheres.sphere1_center,
                 sphere1_radius: uis.two_spheres.sphere1_radius,
@@ -338,25 +338,25 @@ pub fn draw_ui(
                 sphere2_radius: uis.two_spheres.sphere2_radius,
                 mass_fixed: uis.two_spheres.mass_fixed,
             },
-            InitialConditionType::SpiralDisk => InitialCondition::SpiralDisk {
+            ObjectInputType::SpiralDisk => ObjectInput::SpiralDisk {
                 scale: uis.spiral_disk.scale,
                 disk_radius: uis.spiral_disk.disk_radius,
                 mass_fixed: uis.spiral_disk.mass_fixed,
             },
-            InitialConditionType::SolarSystem => InitialCondition::SolarSystem {
+            ObjectInputType::SolarSystem => ObjectInput::SolarSystem {
                 start_year: uis.solar_system.start_year,
                 start_month: uis.solar_system.start_month,
                 start_day: uis.solar_system.start_day,
                 start_hour: uis.solar_system.start_hour,
             },
-            InitialConditionType::SatelliteOrbit => InitialCondition::SatelliteOrbit {
+            ObjectInputType::SatelliteOrbit => ObjectInput::SatelliteOrbit {
                 orbit_altitude_min: uis.satellite_orbit.orbit_altitude_min,
                 orbit_altitude_max: uis.satellite_orbit.orbit_altitude_max,
                 asteroid_mass: uis.satellite_orbit.asteroid_mass,
                 asteroid_distance: uis.satellite_orbit.asteroid_distance,
                 asteroid_speed: uis.satellite_orbit.asteroid_speed,
             },
-            InitialConditionType::EllipticalOrbit => InitialCondition::EllipticalOrbit {
+            ObjectInputType::EllipticalOrbit => ObjectInput::EllipticalOrbit {
                 scale: uis.elliptical_orbit.scale,
                 central_mass: uis.elliptical_orbit.central_mass,
                 planetary_mass: uis.elliptical_orbit.planetary_mass,
@@ -364,12 +364,12 @@ pub fn draw_ui(
                 planetary_distance: uis.elliptical_orbit.planetary_distance,
             },
         };
-        uis.scale = uis.initial_condition.get_scale();
-        if uis.initial_condition_type == InitialConditionType::SolarSystem {
+        uis.scale = uis.object_input.get_scale();
+        if uis.object_input_type == ObjectInputType::SolarSystem {
             uis.time_per_frame = 10_000.0;
             uis.max_fps = 1000;
             uis.skip = 10;
-        } else if uis.initial_condition_type == InitialConditionType::EllipticalOrbit {
+        } else if uis.object_input_type == ObjectInputType::EllipticalOrbit {
             uis.time_per_frame = 100_000.0;
             uis.max_fps = 1000;
             uis.skip = 0;
@@ -472,53 +472,53 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
         });
 }
 
-/// Renders the initial-condition type combo box and updates selected condition defaults.
-fn combobox_initial_condition_type(ui: &mut egui::Ui, uis: &mut UiState) {
-    label_normal(ui, "Initial Condition Type");
-    let id = ui.make_persistent_id("initial_condition_type_combobox");
+/// Renders the object-input type combo box and updates selected condition defaults.
+fn combobox_object_input_type(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Object Input Type");
+    let id = ui.make_persistent_id("object_input_type_combobox");
     ComboBox::from_id_salt(id)
-        .selected_text(format!("{}", uis.initial_condition_type))
+        .selected_text(format!("{}", uis.object_input_type))
         .width(ui.available_width())
         .show_ui(ui, |ui| {
             selectable_value(
                 ui,
-                &mut uis.initial_condition_type,
-                InitialConditionType::RandomSphere,
+                &mut uis.object_input_type,
+                ObjectInputType::RandomSphere,
             );
             selectable_value(
                 ui,
-                &mut uis.initial_condition_type,
-                InitialConditionType::RandomCube,
+                &mut uis.object_input_type,
+                ObjectInputType::RandomCube,
             );
             selectable_value(
                 ui,
-                &mut uis.initial_condition_type,
-                InitialConditionType::TwoSpheres,
+                &mut uis.object_input_type,
+                ObjectInputType::TwoSpheres,
             );
             selectable_value(
                 ui,
-                &mut uis.initial_condition_type,
-                InitialConditionType::SpiralDisk,
+                &mut uis.object_input_type,
+                ObjectInputType::SpiralDisk,
             );
             selectable_value(
                 ui,
-                &mut uis.initial_condition_type,
-                InitialConditionType::SolarSystem,
+                &mut uis.object_input_type,
+                ObjectInputType::SolarSystem,
             );
             selectable_value(
                 ui,
-                &mut uis.initial_condition_type,
-                InitialConditionType::SatelliteOrbit,
+                &mut uis.object_input_type,
+                ObjectInputType::SatelliteOrbit,
             );
             selectable_value(
                 ui,
-                &mut uis.initial_condition_type,
-                InitialConditionType::EllipticalOrbit,
+                &mut uis.object_input_type,
+                ObjectInputType::EllipticalOrbit,
             );
         });
 }
 
-/// Renders parameter controls for the random-sphere initial condition.
+/// Renders parameter controls for the random-sphere object input.
 fn condition_random_sphere(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.random_sphere.scale, 1e9, "Scale (m): ");
     dragvalue_normal(ui, &mut uis.random_sphere.radius, 1e9, "Sphere Radius (m)");
@@ -542,7 +542,7 @@ fn condition_random_sphere(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
-/// Renders parameter controls for the random-cube initial condition.
+/// Renders parameter controls for the random-cube object input.
 fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.random_cube.scale, 1e3, "Scale (m)");
     dragvalue_normal(ui, &mut uis.random_cube.cube_size, 1e3, "Cube Size (m)");
@@ -556,7 +556,7 @@ fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
-/// Renders parameter controls for the two-spheres initial condition.
+/// Renders parameter controls for the two-spheres object input.
 fn condition_two_spheres(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.two_spheres.scale, 1e9, "Scale (m)");
     label_normal(ui, "Sphere 1 Center");
@@ -582,14 +582,14 @@ fn condition_two_spheres(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.two_spheres.mass_fixed, 1e20, "Mass Fixed (kg)");
 }
 
-/// Renders parameter controls for the spiral-disk initial condition.
+/// Renders parameter controls for the spiral-disk object input.
 fn condition_spiral_disk(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.spiral_disk.scale, 1e7, "Scale (m)");
     dragvalue_normal(ui, &mut uis.spiral_disk.disk_radius, 1e7, "Disk Radius (m)");
     dragvalue_normal(ui, &mut uis.spiral_disk.mass_fixed, 1e20, "Mass Fixed (kg)");
 }
 
-/// Renders start-date controls for the solar-system initial condition.
+/// Renders start-date controls for the solar-system object input.
 fn condition_solar_system(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.solar_system.start_year, 1, "Year");
     dragvalue_normal(ui, &mut uis.solar_system.start_month, 1, "Month");
@@ -597,7 +597,7 @@ fn condition_solar_system(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.solar_system.start_hour, 1, "Hour");
 }
 
-/// Renders parameter controls for the satellite-orbit initial condition.
+/// Renders parameter controls for the satellite-orbit object input.
 fn condition_satellite_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(
         ui,
@@ -632,7 +632,7 @@ fn condition_satellite_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
-/// Renders parameter controls for the elliptical-orbit initial condition.
+/// Renders parameter controls for the elliptical-orbit object input.
 fn condition_elliptical_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.elliptical_orbit.scale, 1e7, "Scale (m)");
     label_normal(ui, "Central Body");

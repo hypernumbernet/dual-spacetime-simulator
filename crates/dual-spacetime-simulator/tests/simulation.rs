@@ -1,4 +1,4 @@
-use dual_spacetime_simulator::initial_condition::InitialCondition;
+use dual_spacetime_simulator::object_input::ObjectInput;
 use dual_spacetime_simulator::simulation::{Particle, SimulationManager, G};
 use dual_spacetime_simulator::ui_state::SimulationType as UiSimType;
 use glam::DVec3;
@@ -22,7 +22,7 @@ fn total_energy(particles: &[Particle]) -> f64 {
 
 #[test]
 fn elliptical_two_body_energy_approximately_conserved_short_run() {
-    let ic = InitialCondition::EllipticalOrbit {
+    let ic = ObjectInput::EllipticalOrbit {
         scale: 1.5e11,
         central_mass: 1.989e32,
         planetary_mass: 5.972e24,
@@ -72,7 +72,7 @@ fn convert_to_lorentz_finite() {
 
 #[test]
 fn speed_of_light_limit_advance_stays_finite() {
-    let ic = InitialCondition::RandomSphere {
+    let ic = ObjectInput::RandomSphere {
         scale: 1e10,
         radius: 1e9,
         mass_range: (1e28, 1e29),

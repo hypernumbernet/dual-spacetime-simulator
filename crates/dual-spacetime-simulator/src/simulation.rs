@@ -3,7 +3,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 
-use crate::initial_condition::InitialCondition;
+use crate::object_input::ObjectInput;
 use crate::particle_snapshot::ParticleSnapshot;
 use dst_math::spacetime::{Spacetime, rapidity_from_momentum};
 use crate::ui_state::SimulationType;
@@ -241,14 +241,14 @@ impl SimulationManager {
         }
     }
 
-    /// Builds a simulation state from initial conditions and selected simulation model.
+    /// Builds a simulation state from object inputs and selected simulation model.
     pub fn create_simulation(
-        initial_condition: InitialCondition,
+        object_input: ObjectInput,
         simulation_type: SimulationType,
         particle_count: u32,
         scale: f64,
     ) -> SimulationState {
-        let normal = initial_condition.generate_particles(particle_count);
+        let normal = object_input.generate_particles(particle_count);
         let particles = match simulation_type {
             SimulationType::LorentzTransformation => {
                 Self::convert_to_lorentz(normal.particles, scale)
@@ -297,13 +297,13 @@ impl SimulationManager {
     /// Replaces current simulation state with a freshly generated one.
     pub fn reset(
         &self,
-        initial_condition: InitialCondition,
+        object_input: ObjectInput,
         simulation_type: SimulationType,
         particle_count: u32,
         scale: f64,
     ) {
         let new_state =
-            Self::create_simulation(initial_condition, simulation_type, particle_count, scale);
+            Self::create_simulation(object_input, simulation_type, particle_count, scale);
         let mut state_guard = self.state.write().unwrap();
         *state_guard = new_state;
     }

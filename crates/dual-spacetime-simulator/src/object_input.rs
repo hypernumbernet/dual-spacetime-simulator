@@ -21,7 +21,7 @@ pub const SATELLITE_ORBIT_SCALE: f64 = 12_756e3 * 0.5;
 pub const EARTH_RADIUS: f64 = 6.371e6;
 
 #[derive(Clone, PartialEq, Debug)]
-pub enum InitialCondition {
+pub enum ObjectInput {
     RandomSphere {
         scale: f64,
         radius: f64,
@@ -69,23 +69,23 @@ pub enum InitialCondition {
     },
 }
 
-impl std::fmt::Display for InitialCondition {
-    /// Formats each initial-condition variant into a human-readable label.
+impl std::fmt::Display for ObjectInput {
+    /// Formats each object-input variant into a human-readable label.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InitialCondition::RandomSphere { .. } => write!(f, "Random Sphere"),
-            InitialCondition::RandomCube { .. } => write!(f, "Random Cube"),
-            InitialCondition::TwoSpheres { .. } => write!(f, "Two Spheres"),
-            InitialCondition::SpiralDisk { .. } => write!(f, "Spiral Disk"),
-            InitialCondition::SolarSystem { .. } => write!(f, "Solar System"),
-            InitialCondition::SatelliteOrbit { .. } => write!(f, "Satellite Orbit"),
-            InitialCondition::EllipticalOrbit { .. } => write!(f, "Elliptical Orbit"),
+            ObjectInput::RandomSphere { .. } => write!(f, "Random Sphere"),
+            ObjectInput::RandomCube { .. } => write!(f, "Random Cube"),
+            ObjectInput::TwoSpheres { .. } => write!(f, "Two Spheres"),
+            ObjectInput::SpiralDisk { .. } => write!(f, "Spiral Disk"),
+            ObjectInput::SolarSystem { .. } => write!(f, "Solar System"),
+            ObjectInput::SatelliteOrbit { .. } => write!(f, "Satellite Orbit"),
+            ObjectInput::EllipticalOrbit { .. } => write!(f, "Elliptical Orbit"),
         }
     }
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub enum InitialConditionType {
+pub enum ObjectInputType {
     RandomSphere,
     RandomCube,
     TwoSpheres,
@@ -95,45 +95,45 @@ pub enum InitialConditionType {
     EllipticalOrbit,
 }
 
-impl Default for InitialConditionType {
-    /// Selects random-sphere as the default initial-condition type.
+impl Default for ObjectInputType {
+    /// Selects random-sphere as the default object-input type.
     fn default() -> Self {
-        InitialConditionType::RandomSphere
+        ObjectInputType::RandomSphere
     }
 }
 
-impl std::fmt::Display for InitialConditionType {
-    /// Formats each initial-condition type into a human-readable label.
+impl std::fmt::Display for ObjectInputType {
+    /// Formats each object-input type into a human-readable label.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InitialConditionType::RandomSphere => write!(f, "Random Sphere"),
-            InitialConditionType::RandomCube => write!(f, "Random Cube"),
-            InitialConditionType::TwoSpheres => write!(f, "Two Spheres"),
-            InitialConditionType::SpiralDisk => write!(f, "Spiral Disk"),
-            InitialConditionType::SolarSystem => write!(f, "Solar System"),
-            InitialConditionType::SatelliteOrbit => write!(f, "Satellite Orbit"),
-            InitialConditionType::EllipticalOrbit => write!(f, "Elliptical Orbit"),
+            ObjectInputType::RandomSphere => write!(f, "Random Sphere"),
+            ObjectInputType::RandomCube => write!(f, "Random Cube"),
+            ObjectInputType::TwoSpheres => write!(f, "Two Spheres"),
+            ObjectInputType::SpiralDisk => write!(f, "Spiral Disk"),
+            ObjectInputType::SolarSystem => write!(f, "Solar System"),
+            ObjectInputType::SatelliteOrbit => write!(f, "Satellite Orbit"),
+            ObjectInputType::EllipticalOrbit => write!(f, "Elliptical Orbit"),
         }
     }
 }
 
-impl InitialConditionType {
-    /// Expands a condition type into concrete default initial-condition parameters.
-    pub fn to_initial_condition(&self) -> InitialCondition {
+impl ObjectInputType {
+    /// Expands a condition type into concrete default object-input parameters.
+    pub fn to_object_input(&self) -> ObjectInput {
         match self {
-            InitialConditionType::RandomSphere => InitialCondition::RandomSphere {
+            ObjectInputType::RandomSphere => ObjectInput::RandomSphere {
                 scale: 1e10,
                 radius: 1e10,
                 mass_range: (1e29, 1e31),
                 velocity_std: 1e6,
             },
-            InitialConditionType::RandomCube => InitialCondition::RandomCube {
+            ObjectInputType::RandomCube => ObjectInput::RandomCube {
                 scale: 1e10,
                 cube_size: 2e10,
                 mass_range: (1e29, 1e31),
                 velocity_std: 1e6,
             },
-            InitialConditionType::TwoSpheres => InitialCondition::TwoSpheres {
+            ObjectInputType::TwoSpheres => ObjectInput::TwoSpheres {
                 scale: 1.0,
                 sphere1_center: DVec3::new(-1.0, 0.0, 0.0),
                 sphere1_radius: 0.5,
@@ -141,25 +141,25 @@ impl InitialConditionType {
                 sphere2_radius: 0.5,
                 mass_fixed: 1e-1,
             },
-            InitialConditionType::SpiralDisk => InitialCondition::SpiralDisk {
+            ObjectInputType::SpiralDisk => ObjectInput::SpiralDisk {
                 scale: 1e7,
                 disk_radius: 1.5e7,
                 mass_fixed: 1e20,
             },
-            InitialConditionType::SolarSystem => InitialCondition::SolarSystem {
+            ObjectInputType::SolarSystem => ObjectInput::SolarSystem {
                 start_year: 2000,
                 start_month: 1,
                 start_day: 1,
                 start_hour: 12,
             },
-            InitialConditionType::SatelliteOrbit => InitialCondition::SatelliteOrbit {
+            ObjectInputType::SatelliteOrbit => ObjectInput::SatelliteOrbit {
                 orbit_altitude_min: 300e3,
                 orbit_altitude_max: 800e3,
                 asteroid_mass: 1e24,
                 asteroid_distance: 2e7,
                 asteroid_speed: 3e3,
             },
-            InitialConditionType::EllipticalOrbit => InitialCondition::EllipticalOrbit {
+            ObjectInputType::EllipticalOrbit => ObjectInput::EllipticalOrbit {
                 scale: 1.5e11,
                 central_mass: 1.989e32,
                 planetary_mass: 5.972e24,
@@ -251,25 +251,25 @@ fn get_solar_system_fallback_particles(correct: &Correct) -> Vec<Particle> {
     ]
 }
 
-impl InitialCondition {
-    /// Returns the canonical world scale associated with this initial condition.
+impl ObjectInput {
+    /// Returns the canonical world scale associated with this object input.
     pub fn get_scale(&self) -> f64 {
         match self {
-            InitialCondition::RandomSphere { scale, .. } => *scale,
-            InitialCondition::RandomCube { scale, .. } => *scale,
-            InitialCondition::TwoSpheres { scale, .. } => *scale,
-            InitialCondition::SpiralDisk { scale, .. } => *scale,
-            InitialCondition::SolarSystem { .. } => SOLAR_SYSTEM_SCALE,
-            InitialCondition::SatelliteOrbit { .. } => SATELLITE_ORBIT_SCALE,
-            InitialCondition::EllipticalOrbit { scale, .. } => *scale,
+            ObjectInput::RandomSphere { scale, .. } => *scale,
+            ObjectInput::RandomCube { scale, .. } => *scale,
+            ObjectInput::TwoSpheres { scale, .. } => *scale,
+            ObjectInput::SpiralDisk { scale, .. } => *scale,
+            ObjectInput::SolarSystem { .. } => SOLAR_SYSTEM_SCALE,
+            ObjectInput::SatelliteOrbit { .. } => SATELLITE_ORBIT_SCALE,
+            ObjectInput::EllipticalOrbit { scale, .. } => *scale,
         }
     }
 
-    /// Generates particles according to the selected initial-condition variant and settings.
+    /// Generates particles according to the selected object-input variant and settings.
     pub fn generate_particles(&self, particle_count: u32) -> SimulationNormal {
         let mut rng = rand::rng();
         let sim = match self {
-            InitialCondition::RandomSphere {
+            ObjectInput::RandomSphere {
                 scale,
                 radius,
                 mass_range,
@@ -311,7 +311,7 @@ impl InitialCondition {
                     .collect();
                 SimulationNormal { particles }
             }
-            InitialCondition::RandomCube {
+            ObjectInput::RandomCube {
                 scale,
                 cube_size,
                 mass_range,
@@ -357,7 +357,7 @@ impl InitialCondition {
                     .collect();
                 SimulationNormal { particles }
             }
-            InitialCondition::TwoSpheres {
+            ObjectInput::TwoSpheres {
                 scale,
                 sphere1_center,
                 sphere1_radius,
@@ -391,7 +391,7 @@ impl InitialCondition {
                 }
                 SimulationNormal { particles }
             }
-            InitialCondition::SpiralDisk {
+            ObjectInput::SpiralDisk {
                 scale,
                 disk_radius,
                 mass_fixed,
@@ -437,7 +437,7 @@ impl InitialCondition {
                     .collect();
                 SimulationNormal { particles }
             }
-            InitialCondition::SolarSystem {
+            ObjectInput::SolarSystem {
                 start_year,
                 start_month,
                 start_day,
@@ -525,7 +525,7 @@ impl InitialCondition {
                 }
                 SimulationNormal { particles }
             }
-            InitialCondition::SatelliteOrbit {
+            ObjectInput::SatelliteOrbit {
                 orbit_altitude_min,
                 orbit_altitude_max,
                 asteroid_mass,
@@ -593,7 +593,7 @@ impl InitialCondition {
                 }
                 SimulationNormal { particles }
             }
-            InitialCondition::EllipticalOrbit {
+            ObjectInput::EllipticalOrbit {
                 scale,
                 central_mass,
                 planetary_mass,
@@ -673,10 +673,10 @@ impl InitialCondition {
     }
 }
 
-impl Default for InitialCondition {
-    /// Creates the default initial-condition instance from the default type preset.
+impl Default for ObjectInput {
+    /// Creates the default object-input instance from the default type preset.
     fn default() -> Self {
-        InitialConditionType::RandomSphere.to_initial_condition()
+        ObjectInputType::RandomSphere.to_object_input()
     }
 }
 

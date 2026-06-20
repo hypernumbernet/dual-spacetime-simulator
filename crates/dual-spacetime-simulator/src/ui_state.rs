@@ -1,4 +1,4 @@
-use crate::initial_condition::{InitialCondition, InitialConditionType};
+use crate::object_input::{ObjectInput, ObjectInputType};
 use crate::settings::AppSettings;
 use glam::DVec3;
 
@@ -20,7 +20,7 @@ impl Default for AppMode {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PanelKind {
     Simulation,
-    InitialCondition,
+    ObjectInput,
     Settings,
     Graph3D,
 }
@@ -30,7 +30,7 @@ impl PanelKind {
     pub const fn label(self) -> &'static str {
         match self {
             PanelKind::Simulation => "Simulation",
-            PanelKind::InitialCondition => "Initial Condition",
+            PanelKind::ObjectInput => "Object Input",
             PanelKind::Settings => "Settings",
             PanelKind::Graph3D => "3D Graph",
         }
@@ -81,7 +81,7 @@ impl DragOwner {
 
 const PANELS_SIMULATION: &[PanelKind] = &[
     PanelKind::Simulation,
-    PanelKind::InitialCondition,
+    PanelKind::ObjectInput,
     PanelKind::Settings,
 ];
 
@@ -150,8 +150,8 @@ pub struct UiState {
     pub skip: u32,
     pub app_mode: AppMode,
     pub last_app_mode_for_panel_sync: AppMode,
-    pub initial_condition_type: InitialConditionType,
-    pub initial_condition: InitialCondition,
+    pub object_input_type: ObjectInputType,
+    pub object_input: ObjectInput,
     pub simulation_type: SimulationType,
     pub random_sphere: RandomSphereParameters,
     pub random_cube: RandomCubeParameters,
@@ -161,7 +161,7 @@ pub struct UiState {
     pub satellite_orbit: SatelliteOrbitParameters,
     pub elliptical_orbit: EllipticalOrbitParameters,
     pub is_simulation_panel_open: bool,
-    pub is_initial_condition_panel_open: bool,
+    pub is_object_input_panel_open: bool,
     pub is_settings_panel_open: bool,
     pub is_graph3d_panel_open: bool,
     pub start_maximized: bool,
@@ -199,8 +199,8 @@ impl Default for UiState {
             skip: 0,
             app_mode: AppMode::default(),
             last_app_mode_for_panel_sync: AppMode::default(),
-            initial_condition_type: InitialConditionType::default(),
-            initial_condition: InitialCondition::default(),
+            object_input_type: ObjectInputType::default(),
+            object_input: ObjectInput::default(),
             simulation_type: SimulationType::Normal,
             random_sphere: RandomSphereParameters::default(),
             random_cube: RandomCubeParameters::default(),
@@ -210,7 +210,7 @@ impl Default for UiState {
             satellite_orbit: SatelliteOrbitParameters::default(),
             elliptical_orbit: EllipticalOrbitParameters::default(),
             is_simulation_panel_open: true,
-            is_initial_condition_panel_open: false,
+            is_object_input_panel_open: false,
             is_settings_panel_open: false,
             is_graph3d_panel_open: false,
             start_maximized: false,
@@ -259,7 +259,7 @@ impl UiState {
         match to {
             AppMode::Graph3D => {
                 self.is_simulation_panel_open = false;
-                self.is_initial_condition_panel_open = false;
+                self.is_object_input_panel_open = false;
                 self.is_graph3d_panel_open = true;
                 self.reset_graph_params();
             }
@@ -287,14 +287,14 @@ pub struct RandomSphereParameters {
 }
 
 impl Default for RandomSphereParameters {
-    /// Loads default random-sphere parameter values from initial-condition presets.
+    /// Loads default random-sphere parameter values from object-input presets.
     fn default() -> Self {
-        if let InitialCondition::RandomSphere {
+        if let ObjectInput::RandomSphere {
             scale,
             radius,
             mass_range,
             velocity_std,
-        } = InitialConditionType::RandomSphere.to_initial_condition()
+        } = ObjectInputType::RandomSphere.to_object_input()
         {
             Self {
                 scale,
@@ -316,14 +316,14 @@ pub struct RandomCubeParameters {
 }
 
 impl Default for RandomCubeParameters {
-    /// Loads default random-cube parameter values from initial-condition presets.
+    /// Loads default random-cube parameter values from object-input presets.
     fn default() -> Self {
-        if let InitialCondition::RandomCube {
+        if let ObjectInput::RandomCube {
             scale,
             cube_size,
             mass_range,
             velocity_std,
-        } = InitialConditionType::RandomCube.to_initial_condition()
+        } = ObjectInputType::RandomCube.to_object_input()
         {
             Self {
                 scale,
@@ -347,16 +347,16 @@ pub struct TwoSpheresParameters {
 }
 
 impl Default for TwoSpheresParameters {
-    /// Loads default two-spheres parameter values from initial-condition presets.
+    /// Loads default two-spheres parameter values from object-input presets.
     fn default() -> Self {
-        if let InitialCondition::TwoSpheres {
+        if let ObjectInput::TwoSpheres {
             scale,
             sphere1_center,
             sphere1_radius,
             sphere2_center,
             sphere2_radius,
             mass_fixed,
-        } = InitialConditionType::TwoSpheres.to_initial_condition()
+        } = ObjectInputType::TwoSpheres.to_object_input()
         {
             Self {
                 scale,
@@ -379,13 +379,13 @@ pub struct SpiralDiskParameters {
 }
 
 impl Default for SpiralDiskParameters {
-    /// Loads default spiral-disk parameter values from initial-condition presets.
+    /// Loads default spiral-disk parameter values from object-input presets.
     fn default() -> Self {
-        if let InitialCondition::SpiralDisk {
+        if let ObjectInput::SpiralDisk {
             scale,
             disk_radius,
             mass_fixed,
-        } = InitialConditionType::SpiralDisk.to_initial_condition()
+        } = ObjectInputType::SpiralDisk.to_object_input()
         {
             Self {
                 scale,
@@ -406,14 +406,14 @@ pub struct SolarSystemParameters {
 }
 
 impl Default for SolarSystemParameters {
-    /// Loads default solar-system start-time values from initial-condition presets.
+    /// Loads default solar-system start-time values from object-input presets.
     fn default() -> Self {
-        if let InitialCondition::SolarSystem {
+        if let ObjectInput::SolarSystem {
             start_year,
             start_month,
             start_day,
             start_hour,
-        } = InitialConditionType::SolarSystem.to_initial_condition()
+        } = ObjectInputType::SolarSystem.to_object_input()
         {
             Self {
                 start_year,
@@ -436,15 +436,15 @@ pub struct SatelliteOrbitParameters {
 }
 
 impl Default for SatelliteOrbitParameters {
-    /// Loads default satellite-orbit parameter values from initial-condition presets.
+    /// Loads default satellite-orbit parameter values from object-input presets.
     fn default() -> Self {
-        if let InitialCondition::SatelliteOrbit {
+        if let ObjectInput::SatelliteOrbit {
             orbit_altitude_min,
             orbit_altitude_max,
             asteroid_mass,
             asteroid_distance,
             asteroid_speed,
-        } = InitialConditionType::SatelliteOrbit.to_initial_condition()
+        } = ObjectInputType::SatelliteOrbit.to_object_input()
         {
             Self {
                 orbit_altitude_min,
@@ -468,15 +468,15 @@ pub struct EllipticalOrbitParameters {
 }
 
 impl Default for EllipticalOrbitParameters {
-    /// Loads default elliptical-orbit parameter values from initial-condition presets.
+    /// Loads default elliptical-orbit parameter values from object-input presets.
     fn default() -> Self {
-        if let InitialCondition::EllipticalOrbit {
+        if let ObjectInput::EllipticalOrbit {
             scale,
             central_mass,
             planetary_mass,
             planetary_speed,
             planetary_distance,
-        } = InitialConditionType::EllipticalOrbit.to_initial_condition()
+        } = ObjectInputType::EllipticalOrbit.to_object_input()
         {
             Self {
                 scale,

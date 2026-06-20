@@ -1,4 +1,4 @@
-use dual_spacetime_simulator::initial_condition::InitialCondition;
+use dual_spacetime_simulator::object_input::ObjectInput;
 use dual_spacetime_simulator::particle_snapshot::ParticleSnapshot;
 use dual_spacetime_simulator::simulation::SimulationManager;
 use dual_spacetime_simulator::ui_state::SimulationType;
@@ -12,7 +12,7 @@ fn assert_dvec3_approx(a: DVec3, b: DVec3) {
 
 #[test]
 fn particle_snapshot_json_roundtrip() {
-    let normal = InitialCondition::default().generate_particles(4);
+    let normal = ObjectInput::default().generate_particles(4);
     let snapshot = ParticleSnapshot::new(SimulationType::Normal, 1e10, normal.particles);
     let json = serde_json::to_string_pretty(&snapshot).unwrap();
     let back: ParticleSnapshot = serde_json::from_str(&json).unwrap();
@@ -30,7 +30,7 @@ fn particle_snapshot_json_roundtrip() {
 
 #[test]
 fn load_from_snapshot_restores_particles() {
-    let normal = InitialCondition::default().generate_particles(8);
+    let normal = ObjectInput::default().generate_particles(8);
     let particles = normal.particles;
     let expected_position = particles[3].position;
 
