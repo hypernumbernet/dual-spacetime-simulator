@@ -316,13 +316,6 @@ impl ObjectInput {
         }
     }
 
-    /// Returns add-center octahedron arm half-length: `(0.15 * base_scale) * Correct.m`.
-    pub fn add_center_marker_half_extent(base_scale: f64) -> f32 {
-        let scale = clamp_world_scale(base_scale);
-        let correct = Correct::new(scale);
-        (0.15 * scale * correct.m) as f32
-    }
-
     /// Interprets add-center slider values; positive Y slider moves center in -Y world direction.
     pub fn add_center_effective(center: DVec3) -> DVec3 {
         DVec3::new(center.x, -center.y, center.z)
@@ -330,11 +323,32 @@ impl ObjectInput {
 
     /// Converts add-center slider values into simulation-world coordinates.
     pub fn add_center_world_position(center: DVec3, base_scale: f64) -> DVec3 {
-        let scale = clamp_world_scale(base_scale);
-        Self::add_center_effective(center) * scale * Correct::new(scale).m
+        let (scale, m) = Self::add_center_scale_factor(base_scale);
+        Self::add_center_effective(center) * scale * m
     }
 
-    /// Generates particles offset so the group is centered at `center * base_scale * Correct.m`.
+    /// Returns add-center octahedron arm half-length: `(0.15 * base_scale) * Correct.m`.
+    pub fn add_center_marker_half_extent(base_scale: f64) -> f32 {
+        let (scale, m) = Self::add_center_scale_factor(base_scale);
+        (0.15 * scale * m) as f32
+    }
+
+    /// Returns marker center and arm half-length for preview rendering.
+    pub fn add_center_marker_geometry(center: DVec3, base_scale: f64) -> ([f32; 3], f32) {
+        let (scale, m) = Self::add_center_scale_factor(base_scale);
+        let world = Self::add_center_effective(center) * scale * m;
+        (
+            [world.x as f32, world.y as f32, world.z as f32],
+            (0.15 * scale * m) as f32,
+        )
+    }
+
+    fn add_center_scale_factor(base_scale: f64) -> (f64, f64) {
+        let scale = clamp_world_scale(base_scale);
+        (scale, Correct::new(scale).m)
+    }
+
+    /// Generates particles offset so the group is centered at the effective add-center position.
     pub fn generate_particles_at_center(
         &self,
         particle_count: u32,
@@ -342,9 +356,7 @@ impl ObjectInput {
         base_scale: f64,
     ) -> SimulationNormal {
         let mut sim = self.generate_particles(particle_count);
-        let scale = clamp_world_scale(base_scale);
-        let correct = Correct::new(scale);
-        let offset = Self::add_center_effective(center) * scale * correct.m;
+        let offset = Self::add_center_world_position(center, base_scale);
         for particle in &mut sim.particles {
             particle.position += offset;
         }

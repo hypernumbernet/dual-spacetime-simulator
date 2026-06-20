@@ -85,7 +85,7 @@ fn append_particles_offsets_positions_by_base_scale() {
         base_scale,
         20_000,
     );
-    let offset = center;
+    let offset = ObjectInput::add_center_world_position(center, base_scale);
     let radius = 1.0;
     for particle in mgr.particles() {
         assert!(particle.position.x >= offset.x - radius);

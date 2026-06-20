@@ -14,7 +14,32 @@ const INITIAL_POSITION: Vec3 = Vec3::new(1.6, -1.6, 3.0);
 const INITIAL_TARGET: Vec3 = Vec3::new(0.0, 0.0, 0.0);
 const AXIS_XZ_GRID_EXTENT: f32 = 2.0;
 const AXIS_XZ_GRID_LINE_COUNT: usize = 9;
-const ADD_CENTER_MARKER_VERTICES: usize = 36;
+const ADD_CENTER_MARKER_EDGE_COUNT: usize = 18;
+const ADD_CENTER_MARKER_VERTICES: usize = ADD_CENTER_MARKER_EDGE_COUNT * 2;
+const ADD_CENTER_X_COLOR: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
+const ADD_CENTER_Y_COLOR: [f32; 4] = [0.2, 1.0, 0.2, 1.0];
+const ADD_CENTER_Z_COLOR: [f32; 4] = [0.3, 0.5, 1.0, 1.0];
+const ADD_CENTER_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+const ADD_CENTER_MARKER_EDGES: [([i8; 3], [i8; 3], [f32; 4]); ADD_CENTER_MARKER_EDGE_COUNT] = [
+    ([0, 0, 0], [1, 0, 0], ADD_CENTER_X_COLOR),
+    ([0, 0, 0], [-1, 0, 0], ADD_CENTER_X_COLOR),
+    ([0, 0, 0], [0, 1, 0], ADD_CENTER_Y_COLOR),
+    ([0, 0, 0], [0, -1, 0], ADD_CENTER_Y_COLOR),
+    ([0, 0, 0], [0, 0, 1], ADD_CENTER_Z_COLOR),
+    ([0, 0, 0], [0, 0, -1], ADD_CENTER_Z_COLOR),
+    ([1, 0, 0], [0, 1, 0], ADD_CENTER_WHITE),
+    ([1, 0, 0], [0, -1, 0], ADD_CENTER_WHITE),
+    ([1, 0, 0], [0, 0, 1], ADD_CENTER_WHITE),
+    ([1, 0, 0], [0, 0, -1], ADD_CENTER_WHITE),
+    ([-1, 0, 0], [0, 1, 0], ADD_CENTER_WHITE),
+    ([-1, 0, 0], [0, -1, 0], ADD_CENTER_WHITE),
+    ([-1, 0, 0], [0, 0, 1], ADD_CENTER_WHITE),
+    ([-1, 0, 0], [0, 0, -1], ADD_CENTER_WHITE),
+    ([0, 1, 0], [0, 0, 1], ADD_CENTER_WHITE),
+    ([0, 1, 0], [0, 0, -1], ADD_CENTER_WHITE),
+    ([0, -1, 0], [0, 0, 1], ADD_CENTER_WHITE),
+    ([0, -1, 0], [0, 0, -1], ADD_CENTER_WHITE),
+];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -299,7 +324,7 @@ impl ParticleRenderPipeline {
         );
     }
 
-    /// Uploads add-center preview cross vertices and rebuilds the marker line buffer.
+    /// Uploads add-center preview marker vertices and rebuilds the marker line buffer.
     pub fn set_add_center_marker(&mut self, vertices: &[([f32; 3], [f32; 4])]) {
         let verts = axes_vertices_from_tuples(vertices);
         let allocator = Arc::clone(&self.allocator);
@@ -334,10 +359,8 @@ impl ParticleRenderPipeline {
         }
         self.last_add_center_marker_key = Some(marker_key);
 
-        let world =
-            ObjectInput::add_center_world_position(ui_state.add_center, ui_state.base_scale);
-        let center = [world.x as f32, world.y as f32, world.z as f32];
-        let half_extent = ObjectInput::add_center_marker_half_extent(ui_state.base_scale);
+        let (center, half_extent) =
+            ObjectInput::add_center_marker_geometry(ui_state.add_center, ui_state.base_scale);
         let verts = build_add_center_marker_vertices(center, half_extent);
         let allocator = Arc::clone(&self.allocator);
         upload_axes_line_buffer(
@@ -556,7 +579,7 @@ impl Drop for ParticleRenderPipeline {
 }
 
 /// Builds an octahedron marker with colored axis spokes at the target center.
-pub fn build_add_center_cross(
+pub fn build_add_center_marker(
     center: [f32; 3],
     half_extent: f32,
 ) -> [([f32; 3], [f32; 4]); ADD_CENTER_MARKER_VERTICES] {
@@ -564,20 +587,11 @@ pub fn build_add_center_cross(
     std::array::from_fn(|i| (verts[i].position, verts[i].color))
 }
 
-fn add_center_marker_edge(
-    p0: [f32; 3],
-    p1: [f32; 3],
-    color: [f32; 4],
-) -> [AxesVertex; 2] {
+fn add_center_marker_tip(center: [f32; 3], half_extent: f32, tip: [i8; 3]) -> [f32; 3] {
     [
-        AxesVertex {
-            position: p0,
-            color,
-        },
-        AxesVertex {
-            position: p1,
-            color,
-        },
+        center[0] + half_extent * tip[0] as f32,
+        center[1] + half_extent * tip[1] as f32,
+        center[2] + half_extent * tip[2] as f32,
     ]
 }
 
@@ -585,53 +599,14 @@ fn build_add_center_marker_vertices(
     center: [f32; 3],
     half_extent: f32,
 ) -> [AxesVertex; ADD_CENTER_MARKER_VERTICES] {
-    let [cx, cy, cz] = center;
-    let a = half_extent;
-    let x_color = [1.0, 0.2, 0.2, 1.0];
-    let y_color = [0.2, 1.0, 0.2, 1.0];
-    let z_color = [0.3, 0.5, 1.0, 1.0];
-    let white = [1.0, 1.0, 1.0, 1.0];
-
-    let px = [cx + a, cy, cz];
-    let nx = [cx - a, cy, cz];
-    let py = [cx, cy + a, cz];
-    let ny = [cx, cy - a, cz];
-    let pz = [cx, cy, cz + a];
-    let nz = [cx, cy, cz - a];
-
-    let mut verts = [AxesVertex {
-        position: [0.0; 3],
-        color: [0.0; 4],
-    }; ADD_CENTER_MARKER_VERTICES];
-    let mut i = 0;
-    let mut push_edge = |p0: [f32; 3], p1: [f32; 3], color: [f32; 4]| {
-        let edge = add_center_marker_edge(p0, p1, color);
-        verts[i] = edge[0];
-        verts[i + 1] = edge[1];
-        i += 2;
-    };
-
-    push_edge(center, px, x_color);
-    push_edge(center, nx, x_color);
-    push_edge(center, py, y_color);
-    push_edge(center, ny, y_color);
-    push_edge(center, pz, z_color);
-    push_edge(center, nz, z_color);
-
-    push_edge(px, py, white);
-    push_edge(px, ny, white);
-    push_edge(px, pz, white);
-    push_edge(px, nz, white);
-    push_edge(nx, py, white);
-    push_edge(nx, ny, white);
-    push_edge(nx, pz, white);
-    push_edge(nx, nz, white);
-    push_edge(py, pz, white);
-    push_edge(py, nz, white);
-    push_edge(ny, pz, white);
-    push_edge(ny, nz, white);
-
-    verts
+    std::array::from_fn(|i| {
+        let edge = &ADD_CENTER_MARKER_EDGES[i / 2];
+        let tip = if i.is_multiple_of(2) { edge.0 } else { edge.1 };
+        AxesVertex {
+            position: add_center_marker_tip(center, half_extent, tip),
+            color: edge.2,
+        }
+    })
 }
 
 fn upload_axes_line_buffer(

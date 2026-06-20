@@ -1,5 +1,5 @@
 use dual_spacetime_simulator::object_input::{ObjectInput, ObjectInputType};
-use dual_spacetime_simulator::pipeline::build_add_center_cross;
+use dual_spacetime_simulator::pipeline::build_add_center_marker;
 use glam::DVec3;
 
 const X_COLOR: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
@@ -28,8 +28,8 @@ fn edge_is_diagonal(edge: [([f32; 3], [f32; 4]); 2]) -> bool {
 }
 
 #[test]
-fn build_add_center_cross_has_octahedron_marker_segments() {
-    let verts = build_add_center_cross([1.0, 2.0, 3.0], 0.15);
+fn build_add_center_marker_has_octahedron_segments() {
+    let verts = build_add_center_marker([1.0, 2.0, 3.0], 0.15);
     assert_eq!(verts.len(), 36);
 
     let colors = edge_colors(&verts);
@@ -40,9 +40,9 @@ fn build_add_center_cross_has_octahedron_marker_segments() {
 }
 
 #[test]
-fn build_add_center_cross_spans_each_axis() {
+fn build_add_center_marker_spans_each_axis() {
     let half = 0.15;
-    let verts = build_add_center_cross([0.0, 0.0, 0.0], half);
+    let verts = build_add_center_marker([0.0, 0.0, 0.0], half);
     let xs: Vec<f32> = verts.iter().map(|(p, _)| p[0]).collect();
     let ys: Vec<f32> = verts.iter().map(|(p, _)| p[1]).collect();
     let zs: Vec<f32> = verts.iter().map(|(p, _)| p[2]).collect();
@@ -55,8 +55,8 @@ fn build_add_center_cross_spans_each_axis() {
 }
 
 #[test]
-fn build_add_center_cross_diagonal_edges_are_white() {
-    let verts = build_add_center_cross([0.0, 0.0, 0.0], 0.15);
+fn build_add_center_marker_diagonal_edges_are_white() {
+    let verts = build_add_center_marker([0.0, 0.0, 0.0], 0.15);
     for edge in verts.chunks_exact(2) {
         let pair: [([f32; 3], [f32; 4]); 2] = [edge[0], edge[1]];
         if edge_is_diagonal(pair) {
@@ -81,6 +81,16 @@ fn add_center_effective_leaves_x_and_z_unchanged() {
         ObjectInput::add_center_effective(center),
         DVec3::new(1.5, -2.0, -3.0)
     );
+}
+
+#[test]
+fn add_center_marker_geometry_matches_world_position_and_half_extent() {
+    let center = DVec3::new(2.0, -1.0, 3.0);
+    let base_scale = 1e10;
+    let (marker_center, half_extent) = ObjectInput::add_center_marker_geometry(center, base_scale);
+    let world = ObjectInput::add_center_world_position(center, base_scale);
+    assert_eq!(marker_center, [world.x as f32, world.y as f32, world.z as f32]);
+    assert!((half_extent - ObjectInput::add_center_marker_half_extent(base_scale)).abs() < 1e-6);
 }
 
 #[test]
