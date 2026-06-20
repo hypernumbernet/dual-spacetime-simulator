@@ -1,4 +1,4 @@
-use dual_spacetime_simulator::object_input::clamp_world_scale;
+use dual_spacetime_simulator::object_input::{clamp_world_scale, ObjectInputType};
 use dual_spacetime_simulator::ui_state::{BaseScaleUnit, UiState};
 
 #[test]
@@ -60,6 +60,18 @@ fn build_object_input_uses_base_scale() {
     ui.base_scale = 42.0;
     let input = ui.build_object_input();
     assert_eq!(input.get_scale(), 42.0);
+}
+
+#[test]
+fn object_input_type_change_preserves_base_scale() {
+    let mut ui = UiState::default();
+    ui.base_scale = 42.0;
+    ui.object_input_type = ObjectInputType::SpiralDisk;
+    assert_eq!(ui.base_scale, 42.0);
+    assert_eq!(ui.build_object_input().get_scale(), 42.0);
+    ui.object_input_type = ObjectInputType::SolarSystem;
+    assert_eq!(ui.base_scale, 42.0);
+    assert_eq!(ui.build_object_input().get_scale(), 42.0);
 }
 
 #[test]

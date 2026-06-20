@@ -480,10 +480,9 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
         });
 }
 
-/// Renders the object-input type combo box and updates selected condition defaults.
+/// Renders the object-input type combo box.
 fn combobox_object_input_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Object Input Type");
-    let previous_type = uis.object_input_type.clone();
     let id = ui.make_persistent_id("object_input_type_combobox");
     ComboBox::from_id_salt(id)
         .selected_text(format!("{}", uis.object_input_type))
@@ -520,10 +519,6 @@ fn combobox_object_input_type(ui: &mut egui::Ui, uis: &mut UiState) {
                 ObjectInputType::EllipticalOrbit,
             );
         });
-    if uis.object_input_type != previous_type {
-        uis.base_scale =
-            clamp_world_scale(uis.object_input_type.default_base_scale());
-    }
 }
 
 /// Renders parameter controls for the random-sphere object input.
