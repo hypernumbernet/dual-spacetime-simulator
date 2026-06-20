@@ -45,14 +45,6 @@ pub enum ObjectInput {
         mass_range: (f64, f64),
         velocity_std: f64,
     },
-    TwoSpheres {
-        scale: f64,
-        sphere1_center: DVec3,
-        sphere1_radius: f64,
-        sphere2_center: DVec3,
-        sphere2_radius: f64,
-        mass_fixed: f64,
-    },
     SpiralDisk {
         scale: f64,
         disk_radius: f64,
@@ -88,7 +80,6 @@ impl std::fmt::Display for ObjectInput {
         match self {
             ObjectInput::RandomSphere { .. } => write!(f, "Random Sphere"),
             ObjectInput::RandomCube { .. } => write!(f, "Random Cube"),
-            ObjectInput::TwoSpheres { .. } => write!(f, "Two Spheres"),
             ObjectInput::SpiralDisk { .. } => write!(f, "Spiral Disk"),
             ObjectInput::SolarSystem { .. } => write!(f, "Solar System"),
             ObjectInput::SatelliteOrbit { .. } => write!(f, "Satellite Orbit"),
@@ -101,7 +92,6 @@ impl std::fmt::Display for ObjectInput {
 pub enum ObjectInputType {
     RandomSphere,
     RandomCube,
-    TwoSpheres,
     SpiralDisk,
     SolarSystem,
     SatelliteOrbit,
@@ -121,7 +111,6 @@ impl std::fmt::Display for ObjectInputType {
         match self {
             ObjectInputType::RandomSphere => write!(f, "Random Sphere"),
             ObjectInputType::RandomCube => write!(f, "Random Cube"),
-            ObjectInputType::TwoSpheres => write!(f, "Two Spheres"),
             ObjectInputType::SpiralDisk => write!(f, "Spiral Disk"),
             ObjectInputType::SolarSystem => write!(f, "Solar System"),
             ObjectInputType::SatelliteOrbit => write!(f, "Satellite Orbit"),
@@ -136,7 +125,6 @@ impl ObjectInputType {
         match self {
             ObjectInputType::RandomSphere => 1e10,
             ObjectInputType::RandomCube => 1e10,
-            ObjectInputType::TwoSpheres => 1.0,
             ObjectInputType::SpiralDisk => 1e7,
             ObjectInputType::SolarSystem => SOLAR_SYSTEM_SCALE,
             ObjectInputType::SatelliteOrbit => SATELLITE_ORBIT_SCALE,
@@ -158,14 +146,6 @@ impl ObjectInputType {
                 cube_size: 2e10,
                 mass_range: (1e29, 1e31),
                 velocity_std: 1e6,
-            },
-            ObjectInputType::TwoSpheres => ObjectInput::TwoSpheres {
-                scale,
-                sphere1_center: DVec3::new(-1.0, 0.0, 0.0),
-                sphere1_radius: 0.5,
-                sphere2_center: DVec3::new(1.0, 0.0, 0.0),
-                sphere2_radius: 0.5,
-                mass_fixed: 1e-1,
             },
             ObjectInputType::SpiralDisk => ObjectInput::SpiralDisk {
                 scale,
@@ -285,7 +265,6 @@ impl ObjectInput {
         clamp_world_scale(match self {
             ObjectInput::RandomSphere { scale, .. } => *scale,
             ObjectInput::RandomCube { scale, .. } => *scale,
-            ObjectInput::TwoSpheres { scale, .. } => *scale,
             ObjectInput::SpiralDisk { scale, .. } => *scale,
             ObjectInput::SolarSystem { scale, .. } => *scale,
             ObjectInput::SatelliteOrbit { scale, .. } => *scale,
@@ -300,11 +279,6 @@ impl ObjectInput {
         match self {
             ObjectInput::RandomSphere { radius, .. } => radius * correct.m,
             ObjectInput::RandomCube { cube_size, .. } => cube_size * 0.5 * correct.m,
-            ObjectInput::TwoSpheres {
-                sphere1_radius,
-                sphere2_radius,
-                ..
-            } => sphere1_radius.max(*sphere2_radius) * correct.m,
             ObjectInput::SpiralDisk { disk_radius, .. } => disk_radius * correct.m,
             ObjectInput::SolarSystem { .. } => crate::simulation::AU * correct.m,
             ObjectInput::SatelliteOrbit { orbit_altitude_max, .. } => {
@@ -453,40 +427,6 @@ impl ObjectInput {
                         }
                     })
                     .collect();
-                SimulationNormal { particles }
-            }
-            ObjectInput::TwoSpheres {
-                scale,
-                sphere1_center,
-                sphere1_radius,
-                sphere2_center,
-                sphere2_radius,
-                mass_fixed,
-            } => {
-                let correct = Correct::new(*scale);
-                let sphere1_center = *sphere1_center * correct.m;
-                let sphere1_radius = *sphere1_radius * correct.m;
-                let sphere2_center = *sphere2_center * correct.m;
-                let sphere2_radius = *sphere2_radius * correct.m;
-                let mass = *mass_fixed * correct.kg;
-                let mut particles = Vec::with_capacity(particle_count as usize);
-                let half = particle_count / 2;
-                for _ in 0..half {
-                    particles.push(Self::random_in_sphere(
-                        sphere1_center,
-                        sphere1_radius,
-                        mass,
-                        &mut rng,
-                    ));
-                }
-                for _ in half..particle_count {
-                    particles.push(Self::random_in_sphere(
-                        sphere2_center,
-                        sphere2_radius,
-                        mass,
-                        &mut rng,
-                    ));
-                }
                 SimulationNormal { particles }
             }
             ObjectInput::SpiralDisk {
@@ -731,20 +671,6 @@ impl ObjectInput {
             }
         };
         sim
-    }
-
-    /// Creates a particle with random position inside a sphere and zero initial velocity.
-    fn random_in_sphere(center: DVec3, radius: f64, mass: f64, rng: &mut impl Rng) -> Particle {
-        Particle {
-            position: Self::position_in_sphere(center, radius, rng),
-            velocity: DVec3 {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            },
-            mass,
-            color: [0.5, 0.5, 0.5, 1.0],
-        }
     }
 
     /// Samples a uniformly distributed position inside a sphere around the given center.

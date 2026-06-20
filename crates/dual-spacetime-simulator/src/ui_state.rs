@@ -288,7 +288,6 @@ pub struct UiState {
     pub base_scale_unit: BaseScaleUnit,
     pub random_sphere: RandomSphereParameters,
     pub random_cube: RandomCubeParameters,
-    pub two_spheres: TwoSpheresParameters,
     pub spiral_disk: SpiralDiskParameters,
     pub solar_system: SolarSystemParameters,
     pub satellite_orbit: SatelliteOrbitParameters,
@@ -342,7 +341,6 @@ impl Default for UiState {
             base_scale_unit: BaseScaleUnit::default(),
             random_sphere: RandomSphereParameters::default(),
             random_cube: RandomCubeParameters::default(),
-            two_spheres: TwoSpheresParameters::default(),
             spiral_disk: SpiralDiskParameters::default(),
             solar_system: SolarSystemParameters::default(),
             satellite_orbit: SatelliteOrbitParameters::default(),
@@ -471,14 +469,6 @@ impl UiState {
                 mass_range: self.random_cube.mass_range,
                 velocity_std: self.random_cube.velocity_std,
             },
-            ObjectInputType::TwoSpheres => ObjectInput::TwoSpheres {
-                scale,
-                sphere1_center: self.two_spheres.sphere1_center,
-                sphere1_radius: self.two_spheres.sphere1_radius,
-                sphere2_center: self.two_spheres.sphere2_center,
-                sphere2_radius: self.two_spheres.sphere2_radius,
-                mass_fixed: self.two_spheres.mass_fixed,
-            },
             ObjectInputType::SpiralDisk => ObjectInput::SpiralDisk {
                 scale,
                 disk_radius: self.spiral_disk.disk_radius,
@@ -557,39 +547,6 @@ impl Default for RandomCubeParameters {
                 cube_size,
                 mass_range,
                 velocity_std,
-            }
-        } else {
-            panic!();
-        }
-    }
-}
-
-pub struct TwoSpheresParameters {
-    pub sphere1_center: DVec3,
-    pub sphere1_radius: f64,
-    pub sphere2_center: DVec3,
-    pub sphere2_radius: f64,
-    pub mass_fixed: f64,
-}
-
-impl Default for TwoSpheresParameters {
-    /// Loads default two-spheres parameter values from object-input presets.
-    fn default() -> Self {
-        if let ObjectInput::TwoSpheres {
-            sphere1_center,
-            sphere1_radius,
-            sphere2_center,
-            sphere2_radius,
-            mass_fixed,
-            ..
-        } = ObjectInputType::TwoSpheres.to_object_input(1.0)
-        {
-            Self {
-                sphere1_center,
-                sphere1_radius,
-                sphere2_center,
-                sphere2_radius,
-                mass_fixed,
             }
         } else {
             panic!();

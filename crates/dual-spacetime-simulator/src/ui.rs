@@ -294,9 +294,6 @@ pub fn draw_ui(
                     ObjectInputType::RandomCube => {
                         condition_random_cube(ui, &mut uis);
                     }
-                    ObjectInputType::TwoSpheres => {
-                        condition_two_spheres(ui, &mut uis);
-                    }
                     ObjectInputType::SpiralDisk => {
                         condition_spiral_disk(ui, &mut uis);
                     }
@@ -505,11 +502,6 @@ fn combobox_object_input_type(ui: &mut egui::Ui, uis: &mut UiState) {
             selectable_value(
                 ui,
                 &mut uis.object_input_type,
-                ObjectInputType::TwoSpheres,
-            );
-            selectable_value(
-                ui,
-                &mut uis.object_input_type,
                 ObjectInputType::SpiralDisk,
             );
             selectable_value(
@@ -568,31 +560,6 @@ fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
         1e3,
         "Velocity Std (m/s)",
     );
-}
-
-/// Renders parameter controls for the two-spheres object input.
-fn condition_two_spheres(ui: &mut egui::Ui, uis: &mut UiState) {
-    label_normal(ui, "Sphere 1 Center");
-    dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.x, 1.0, "X");
-    dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.y, 1.0, "Y");
-    dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.z, 1.0, "Z");
-    dragvalue_normal(
-        ui,
-        &mut uis.two_spheres.sphere1_radius,
-        1e8,
-        "Sphere 1 Radius",
-    );
-    label_normal(ui, "Sphere 2 Center");
-    dragvalue_normal(ui, &mut uis.two_spheres.sphere2_center.x, 1.0, "X");
-    dragvalue_normal(ui, &mut uis.two_spheres.sphere2_center.y, 1.0, "Y");
-    dragvalue_normal(ui, &mut uis.two_spheres.sphere2_center.z, 1.0, "Z");
-    dragvalue_normal(
-        ui,
-        &mut uis.two_spheres.sphere2_radius,
-        1e8,
-        "Sphere 2 Radius",
-    );
-    dragvalue_normal(ui, &mut uis.two_spheres.mass_fixed, 1e20, "Mass Fixed (kg)");
 }
 
 /// Renders parameter controls for the spiral-disk object input.

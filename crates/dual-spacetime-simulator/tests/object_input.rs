@@ -20,7 +20,6 @@ fn get_scale_positive_for_all_variants() {
     for ty in [
         ObjectInputType::RandomSphere,
         ObjectInputType::RandomCube,
-        ObjectInputType::TwoSpheres,
         ObjectInputType::SpiralDisk,
         ObjectInputType::SolarSystem,
         ObjectInputType::SatelliteOrbit,
@@ -37,7 +36,6 @@ fn get_scale_positive_for_all_variants() {
 fn default_base_scale_matches_type_presets() {
     assert_eq!(ObjectInputType::RandomSphere.default_base_scale(), 1e10);
     assert_eq!(ObjectInputType::RandomCube.default_base_scale(), 1e10);
-    assert_eq!(ObjectInputType::TwoSpheres.default_base_scale(), 1.0);
     assert_eq!(ObjectInputType::SpiralDisk.default_base_scale(), 1e7);
     assert_eq!(
         ObjectInputType::SolarSystem.default_base_scale(),
@@ -56,7 +54,6 @@ fn generate_particle_count_matches_for_simple_types() {
     for ty in [
         ObjectInputType::RandomSphere,
         ObjectInputType::RandomCube,
-        ObjectInputType::TwoSpheres,
         ObjectInputType::SpiralDisk,
     ] {
         let sim = ty
@@ -102,11 +99,4 @@ fn get_scale_clamps_negative_input() {
         velocity_std: 1e6,
     };
     assert_eq!(ic.get_scale(), MIN_WORLD_SCALE);
-}
-
-#[test]
-fn two_spheres_masses_positive() {
-    let ic = ObjectInputType::TwoSpheres.to_object_input(1.0);
-    let sim = ic.generate_particles(20);
-    assert!(sim.particles.iter().all(|p| p.mass > 0.0));
 }
