@@ -263,7 +263,7 @@ pub struct UiState {
     pub input_panel_width: f32,
     pub min_window_width: f32,
     pub min_window_height: f32,
-    pub particle_count: u32,
+    pub add_particle_count: u32,
     pub max_particle_count: u32,
     pub fps: i64,
     pub frame: i64,
@@ -317,7 +317,7 @@ impl Default for UiState {
             input_panel_width: 200.0,
             min_window_width: 400.0,
             min_window_height: 300.0,
-            particle_count: 1000,
+            add_particle_count: 1000,
             max_particle_count: 20000,
             fps: 0,
             frame: 1,
@@ -376,8 +376,8 @@ impl UiState {
         self.link_point_size_to_scale = settings.link_point_size_to_scale;
         self.lock_camera_up = settings.lock_camera_up;
         self.mailbox_present_mode = settings.mailbox_present_mode;
-        if self.particle_count > self.max_particle_count {
-            self.particle_count = self.max_particle_count;
+        if self.add_particle_count > self.max_particle_count {
+            self.add_particle_count = self.max_particle_count;
         }
     }
 

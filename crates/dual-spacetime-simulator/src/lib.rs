@@ -83,7 +83,7 @@ pub fn spawn_simulation_worker(
                     let selected_object_input = ui_state.object_input.clone();
                     let simulation_type = ui_state.simulation_type;
                     let skip = ui_state.skip;
-                    let particle_count = ui_state.particle_count;
+                    let add_particle_count = ui_state.add_particle_count;
                     let scale = ui_state.scale;
                     let base_scale = ui_state.base_scale;
                     let add_center = ui_state.add_center;
@@ -93,7 +93,7 @@ pub fn spawn_simulation_worker(
                         simulation_manager.read().unwrap().reset(
                             selected_object_input,
                             simulation_type,
-                            particle_count,
+                            add_particle_count,
                             scale,
                         );
                         let mut ui_state = ui_state_clone.write().unwrap();
@@ -105,19 +105,16 @@ pub fn spawn_simulation_worker(
                         skip_redraw.write().unwrap().clone_from(&skip);
                         continue;
                     }
-                    let current_count =
-                        simulation_manager.read().unwrap().particles().len() as u32;
-                    let added = simulation_manager.write().unwrap().append_particles(
+                    simulation_manager.write().unwrap().append_particles(
                         selected_object_input,
                         simulation_type,
-                        particle_count,
+                        add_particle_count,
                         scale,
                         add_center,
                         base_scale,
                         max_particle_count,
                     );
                     let mut ui_state = ui_state_clone.write().unwrap();
-                    ui_state.particle_count = current_count + added;
                     ui_state.is_add_particles_requested = false;
                     drop(ui_state);
                     need_redraw.write().unwrap().clone_from(&true);
@@ -315,13 +312,13 @@ impl ApplicationHandler for App {
         self.gui = Some(gui);
 
         let object_input = ObjectInput::default();
-        let particle_count = ui_state.particle_count;
+        let add_particle_count = ui_state.add_particle_count;
         let scale = ui_state.scale;
         let sim_type = ui_state.simulation_type;
         self.simulation_manager.write().unwrap().reset(
             object_input,
             sim_type,
-            particle_count,
+            add_particle_count,
             scale,
         );
         self.skip_redraw.write().unwrap().clone_from(&ui_state.skip);

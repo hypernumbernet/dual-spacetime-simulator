@@ -166,6 +166,11 @@ pub fn draw_ui(
                     label_normal(ui, "Time");
                     label_indicator(ui, &format_simulation_time(uis.simulation_time));
                 });
+                ui.horizontal(|ui| {
+                    label_normal(ui, "Particle Count");
+                    let count = simulation_manager.read().unwrap().particles().len();
+                    label_indicator(ui, &count.to_string());
+                });
                 ui.separator();
                 if button_normal(ui, "Start/Pause").clicked() {
                     uis.is_running = !uis.is_running;
@@ -306,7 +311,7 @@ pub fn draw_ui(
                     }
                 }
                 ui.separator();
-                slider_perticle_count(ui, &mut uis);
+                slider_add_particle_count(ui, &mut uis, simulation_manager);
                 ui.separator();
                 slider_add_center(ui, &mut uis);
                 ui.horizontal(|ui| {
@@ -718,15 +723,21 @@ fn button_add_particles(
     }
 }
 
-/// Renders particle-count slider with current max-count constraints.
-fn slider_perticle_count(ui: &mut egui::Ui, uis: &mut UiState) {
+/// Renders add-particle-count slider capped by remaining particle capacity.
+fn slider_add_particle_count(
+    ui: &mut egui::Ui,
+    uis: &mut UiState,
+    simulation_manager: &Arc<RwLock<SimulationManager>>,
+) {
     ui.style_mut().spacing.slider_width = 150.0;
-    label_normal(ui, "Particle Count");
-    let max_particle_count = uis.max_particle_count;
-    ui.add(Slider::new(
-        &mut uis.particle_count,
-        2..=max_particle_count as u32,
-    ));
+    label_normal(ui, "Add Particle Count");
+    let current_count = simulation_manager.read().unwrap().particles().len() as u32;
+    let remaining = uis.max_particle_count.saturating_sub(current_count);
+    let max_add = remaining.max(2);
+    if uis.add_particle_count > max_add {
+        uis.add_particle_count = max_add;
+    }
+    ui.add(Slider::new(&mut uis.add_particle_count, 2..=max_add));
 }
 
 /// Draws reset button and flags simulation reset when clicked.
@@ -811,7 +822,6 @@ fn load_particles(
         );
         return;
     }
-    uis.particle_count = snapshot.particles.len() as u32;
     uis.simulation_type = snapshot.simulation_type;
     uis.scale = clamp_world_scale(snapshot.scale);
     uis.base_scale = clamp_world_scale(snapshot.scale);

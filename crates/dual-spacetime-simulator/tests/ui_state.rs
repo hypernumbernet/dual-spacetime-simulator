@@ -2,14 +2,14 @@ use dual_spacetime_simulator::settings::AppSettings;
 use dual_spacetime_simulator::ui_state::{AppMode, UiState};
 
 #[test]
-fn apply_settings_clamps_particle_count() {
+fn apply_settings_clamps_add_particle_count() {
     let mut ui = UiState::default();
-    ui.particle_count = 10_000;
+    ui.add_particle_count = 10_000;
     let mut s = AppSettings::default();
     s.max_particle_count = 100;
     ui.apply_settings(&s);
     assert_eq!(ui.max_particle_count, 100);
-    assert_eq!(ui.particle_count, 100);
+    assert_eq!(ui.add_particle_count, 100);
 }
 
 #[test]
