@@ -199,6 +199,14 @@ pub fn draw_ui(
                         uis.show_grid = v;
                     }
                 });
+                ui.separator();
+                let (save, load) = button_row_pair(ui, "Save", "Load");
+                if save.clicked() {
+                    uis.pending_snapshot_dialog = Some(PendingSnapshotDialog::Save);
+                }
+                if load.clicked() {
+                    uis.pending_snapshot_dialog = Some(PendingSnapshotDialog::Load);
+                }
             });
     }
 
@@ -302,14 +310,6 @@ pub fn draw_ui(
                     button_reset(ui, &mut uis);
                 } else {
                     label_normal(ui, "Resetting...");
-                }
-                ui.separator();
-                let (save, load) = button_row_pair(ui, "Save", "Load");
-                if save.clicked() {
-                    uis.pending_snapshot_dialog = Some(PendingSnapshotDialog::Save);
-                }
-                if load.clicked() {
-                    uis.pending_snapshot_dialog = Some(PendingSnapshotDialog::Load);
                 }
             });
     }
