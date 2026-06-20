@@ -13,6 +13,27 @@ fn apply_settings_clamps_add_particle_count() {
 }
 
 #[test]
+fn add_particle_count_range_matches_remaining_capacity() {
+    assert_eq!(UiState::add_particle_count_range(0), None);
+    assert_eq!(UiState::add_particle_count_range(1), Some(1..=1));
+    assert_eq!(UiState::add_particle_count_range(2), Some(2..=2));
+    assert_eq!(UiState::add_particle_count_range(500), Some(2..=500));
+}
+
+#[test]
+fn clamp_add_particle_count_to_capacity_limits_batch_size() {
+    let mut ui = UiState::default();
+    ui.max_particle_count = 100;
+    ui.add_particle_count = 80;
+    ui.clamp_add_particle_count_to_capacity(95);
+    assert_eq!(ui.add_particle_count, 5);
+
+    ui.add_particle_count = 80;
+    ui.clamp_add_particle_count_to_capacity(100);
+    assert_eq!(ui.add_particle_count, 80);
+}
+
+#[test]
 fn app_mode_change_resets_panels() {
     let mut ui = UiState::default();
     ui.is_simulation_panel_open = true;

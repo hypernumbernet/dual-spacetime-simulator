@@ -168,7 +168,7 @@ pub fn draw_ui(
                 });
                 ui.horizontal(|ui| {
                     label_normal(ui, "Particle Count");
-                    let count = simulation_manager.read().unwrap().particles().len();
+                    let count = simulation_manager.read().unwrap().particle_count();
                     label_indicator(ui, &count.to_string());
                 });
                 ui.separator();
@@ -311,7 +311,8 @@ pub fn draw_ui(
                     }
                 }
                 ui.separator();
-                slider_add_particle_count(ui, &mut uis, simulation_manager);
+                let current_count = simulation_manager.read().unwrap().particle_count();
+                slider_add_particle_count(ui, &mut uis, current_count);
                 ui.separator();
                 slider_add_center(ui, &mut uis);
                 ui.horizontal(|ui| {
@@ -323,7 +324,7 @@ pub fn draw_ui(
                         uis.show_add_center_preview = v;
                     }
                 });
-                button_add_particles(ui, &mut uis, simulation_manager);
+                button_add_particles(ui, &mut uis, current_count);
                 ui.separator();
                 if !uis.is_reset_requested {
                     button_reset(ui, &mut uis);
@@ -701,13 +702,8 @@ fn slider_add_center(ui: &mut egui::Ui, uis: &mut UiState) {
 }
 
 /// Draws add button and flags particle append when clicked.
-fn button_add_particles(
-    ui: &mut egui::Ui,
-    uis: &mut UiState,
-    simulation_manager: &Arc<RwLock<SimulationManager>>,
-) {
-    let current_count = simulation_manager.read().unwrap().particles().len() as u32;
-    let at_limit = current_count >= uis.max_particle_count;
+fn button_add_particles(ui: &mut egui::Ui, uis: &mut UiState, current_count: u32) {
+    let at_limit = uis.remaining_particle_capacity(current_count) == 0;
     if at_limit {
         label_normal(ui, "Particle limit reached");
     }
@@ -724,20 +720,14 @@ fn button_add_particles(
 }
 
 /// Renders add-particle-count slider capped by remaining particle capacity.
-fn slider_add_particle_count(
-    ui: &mut egui::Ui,
-    uis: &mut UiState,
-    simulation_manager: &Arc<RwLock<SimulationManager>>,
-) {
+fn slider_add_particle_count(ui: &mut egui::Ui, uis: &mut UiState, current_count: u32) {
     ui.style_mut().spacing.slider_width = 150.0;
     label_normal(ui, "Add Particle Count");
-    let current_count = simulation_manager.read().unwrap().particles().len() as u32;
-    let remaining = uis.max_particle_count.saturating_sub(current_count);
-    let max_add = remaining.max(2);
-    if uis.add_particle_count > max_add {
-        uis.add_particle_count = max_add;
+    let remaining = uis.remaining_particle_capacity(current_count);
+    uis.clamp_add_particle_count_to_capacity(current_count);
+    if let Some(range) = UiState::add_particle_count_range(remaining) {
+        ui.add(Slider::new(&mut uis.add_particle_count, range));
     }
-    ui.add(Slider::new(&mut uis.add_particle_count, 2..=max_add));
 }
 
 /// Draws reset button and flags simulation reset when clicked.

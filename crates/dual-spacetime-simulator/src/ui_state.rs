@@ -367,6 +367,28 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Returns how many more particles can be added before hitting the configured maximum.
+    pub fn remaining_particle_capacity(&self, current_count: u32) -> u32 {
+        self.max_particle_count.saturating_sub(current_count)
+    }
+
+    /// Returns the valid add-count slider range for the given remaining capacity.
+    pub fn add_particle_count_range(remaining: u32) -> Option<std::ops::RangeInclusive<u32>> {
+        match remaining {
+            0 => None,
+            1 => Some(1..=1),
+            n => Some(2..=n),
+        }
+    }
+
+    /// Clamps the add batch size to the current remaining particle capacity.
+    pub fn clamp_add_particle_count_to_capacity(&mut self, current_count: u32) {
+        let remaining = self.remaining_particle_capacity(current_count);
+        if let Some(range) = Self::add_particle_count_range(remaining) {
+            self.add_particle_count = self.add_particle_count.clamp(*range.start(), *range.end());
+        }
+    }
+
     /// Applies persisted app settings and clamps runtime values to new limits.
     pub fn apply_settings(&mut self, settings: &AppSettings) {
         self.max_particle_count = settings.max_particle_count;

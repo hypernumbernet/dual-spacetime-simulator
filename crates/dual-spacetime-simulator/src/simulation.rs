@@ -318,6 +318,11 @@ impl SimulationManager {
         sim.update_velocities(time_per_frame);
     }
 
+    /// Returns the number of particles in the current simulation state.
+    pub fn particle_count(&self) -> u32 {
+        self.state.read().unwrap().particles().len() as u32
+    }
+
     /// Returns a cloned particle list from the current simulation state.
     pub fn particles(&self) -> Vec<Particle> {
         let state = self.state.read().unwrap();
