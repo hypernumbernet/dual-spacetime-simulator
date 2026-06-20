@@ -132,25 +132,29 @@ impl ObjectInputType {
         }
     }
 
-    /// Expands a condition type into concrete default object-input parameters.
+    /// Expands a condition type into concrete object-input parameters scaled for `scale`.
     pub fn to_object_input(&self, scale: f64) -> ObjectInput {
+        let scale = clamp_world_scale(scale);
+        let reference = self.default_base_scale();
+        let factor = scale / reference;
+        let factor_cubed = factor * factor * factor;
         match self {
             ObjectInputType::RandomSphere => ObjectInput::RandomSphere {
                 scale,
-                radius: 1e10,
-                mass_range: (1e29, 1e31),
-                velocity_std: 1e6,
+                radius: 1e10 * factor,
+                mass_range: (1e29 * factor_cubed, 1e31 * factor_cubed),
+                velocity_std: 1e6 * factor,
             },
             ObjectInputType::RandomCube => ObjectInput::RandomCube {
                 scale,
-                cube_size: 2e10,
-                mass_range: (1e29, 1e31),
-                velocity_std: 1e6,
+                cube_size: 2e10 * factor,
+                mass_range: (1e29 * factor_cubed, 1e31 * factor_cubed),
+                velocity_std: 1e6 * factor,
             },
             ObjectInputType::SpiralDisk => ObjectInput::SpiralDisk {
                 scale,
-                disk_radius: 1.5e7,
-                mass_fixed: 1e20,
+                disk_radius: 1.5e7 * factor,
+                mass_fixed: 1e20 * factor_cubed,
             },
             ObjectInputType::SolarSystem => ObjectInput::SolarSystem {
                 scale,
@@ -169,10 +173,10 @@ impl ObjectInputType {
             },
             ObjectInputType::EllipticalOrbit => ObjectInput::EllipticalOrbit {
                 scale,
-                central_mass: 1.989e32,
-                planetary_mass: 5.972e24,
-                planetary_speed: 2.0e5,
-                planetary_distance: 2.0e11,
+                central_mass: 1.989e32 * factor_cubed,
+                planetary_mass: 5.972e24 * factor_cubed,
+                planetary_speed: 2.0e5 * factor,
+                planetary_distance: 2.0e11 * factor,
             },
         }
     }

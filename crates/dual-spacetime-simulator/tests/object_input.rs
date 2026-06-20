@@ -91,6 +91,99 @@ fn solar_system_scale_from_variant() {
 }
 
 #[test]
+fn to_object_input_scales_random_sphere_parameters_with_base_scale() {
+    let scale = 42.0;
+    let reference = ObjectInputType::RandomSphere.default_base_scale();
+    let factor = scale / reference;
+    let factor_cubed = factor * factor * factor;
+    let input = ObjectInputType::RandomSphere.to_object_input(scale);
+    if let ObjectInput::RandomSphere {
+        radius,
+        mass_range,
+        velocity_std,
+        ..
+    } = input
+    {
+        assert!((radius - scale).abs() < 1e-6);
+        assert!((mass_range.0 - 1e29 * factor_cubed).abs() < 1e-6);
+        assert!((mass_range.1 - 1e31 * factor_cubed).abs() < 1e-6);
+        assert!((velocity_std - 1e6 * factor).abs() < 1e-6);
+        assert!((input.preview_group_extent() - 1.0).abs() < 1e-6);
+    } else {
+        panic!("expected RandomSphere");
+    }
+}
+
+#[test]
+fn to_object_input_scales_random_cube_parameters_with_base_scale() {
+    let scale = 1e7;
+    let reference = ObjectInputType::RandomCube.default_base_scale();
+    let factor = scale / reference;
+    let input = ObjectInputType::RandomCube.to_object_input(scale);
+    if let ObjectInput::RandomCube {
+        cube_size,
+        mass_range,
+        velocity_std,
+        ..
+    } = input
+    {
+        assert!((cube_size - 2e10 * factor).abs() < 1e-6);
+        assert!((mass_range.0 - 1e29 * factor * factor * factor).abs() < 1e-6);
+        assert!((mass_range.1 - 1e31 * factor * factor * factor).abs() < 1e-6);
+        assert!((velocity_std - 1e6 * factor).abs() < 1e-6);
+        assert!((input.preview_group_extent() - 1.0).abs() < 1e-6);
+    } else {
+        panic!("expected RandomCube");
+    }
+}
+
+#[test]
+fn to_object_input_scales_spiral_disk_parameters_with_base_scale() {
+    let scale = 2.5e8;
+    let reference = ObjectInputType::SpiralDisk.default_base_scale();
+    let factor = scale / reference;
+    let factor_cubed = factor * factor * factor;
+    let input = ObjectInputType::SpiralDisk.to_object_input(scale);
+    if let ObjectInput::SpiralDisk {
+        disk_radius,
+        mass_fixed,
+        ..
+    } = input
+    {
+        assert!((disk_radius - 1.5e7 * factor).abs() < 1e-6);
+        assert!((mass_fixed - 1e20 * factor_cubed).abs() < 1e-6);
+        assert!((input.preview_group_extent() - 1.5).abs() < 1e-6);
+    } else {
+        panic!("expected SpiralDisk");
+    }
+}
+
+#[test]
+fn to_object_input_scales_elliptical_orbit_parameters_with_base_scale() {
+    let scale = 42.0;
+    let reference = ObjectInputType::EllipticalOrbit.default_base_scale();
+    let factor = scale / reference;
+    let factor_cubed = factor * factor * factor;
+    let input = ObjectInputType::EllipticalOrbit.to_object_input(scale);
+    if let ObjectInput::EllipticalOrbit {
+        central_mass,
+        planetary_mass,
+        planetary_speed,
+        planetary_distance,
+        ..
+    } = input
+    {
+        assert!((planetary_distance - 2.0e11 * factor).abs() < 1e-6);
+        assert!((planetary_speed - 2.0e5 * factor).abs() < 1e-6);
+        assert!((central_mass - 1.989e32 * factor_cubed).abs() < 1e-6);
+        assert!((planetary_mass - 5.972e24 * factor_cubed).abs() < 1e-6);
+        assert!((input.preview_group_extent() - 2.0e11 * factor / scale).abs() < 1e-6);
+    } else {
+        panic!("expected EllipticalOrbit");
+    }
+}
+
+#[test]
 fn get_scale_clamps_negative_input() {
     let ic = ObjectInput::RandomSphere {
         scale: -5.0,

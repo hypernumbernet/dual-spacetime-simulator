@@ -278,6 +278,7 @@ pub struct UiState {
     pub add_center: DVec3,
     pub show_add_center_preview: bool,
     pub is_add_particles_requested: bool,
+    pub is_add_particles_enabled: bool,
     pub skip: u32,
     pub app_mode: AppMode,
     pub last_app_mode_for_panel_sync: AppMode,
@@ -331,6 +332,7 @@ impl Default for UiState {
             add_center: DVec3::ZERO,
             show_add_center_preview: true,
             is_add_particles_requested: false,
+            is_add_particles_enabled: true,
             skip: 0,
             app_mode: AppMode::default(),
             last_app_mode_for_panel_sync: AppMode::default(),
@@ -444,6 +446,7 @@ impl UiState {
 
     /// Updates stored base scale from UI display input or a unit change.
     pub fn apply_base_scale_edit(&mut self, display: f64, unit_changed: bool) {
+        let previous_scale = self.base_scale;
         let unit = self.base_scale_unit;
         let display = if unit_changed {
             1.0
@@ -451,6 +454,100 @@ impl UiState {
             unit.sanitize_display(display)
         };
         self.base_scale = unit.canonical_meters(unit.to_meters(display));
+        if Self::base_scale_value_changed(previous_scale, self.base_scale) {
+            self.is_add_particles_enabled = false;
+        }
+    }
+
+    /// Applies object-input type changes, including base-scale presets and parameter sync.
+    pub fn apply_object_input_type_change(&mut self, previous_type: ObjectInputType) {
+        if self.object_input_type == previous_type {
+            return;
+        }
+        match self.object_input_type {
+            ObjectInputType::SolarSystem | ObjectInputType::SatelliteOrbit => {
+                let previous_scale = self.base_scale;
+                self.base_scale =
+                    clamp_world_scale(self.object_input_type.default_base_scale());
+                if Self::base_scale_value_changed(previous_scale, self.base_scale) {
+                    self.is_add_particles_enabled = false;
+                }
+            }
+            ObjectInputType::RandomSphere
+            | ObjectInputType::RandomCube
+            | ObjectInputType::SpiralDisk
+            | ObjectInputType::EllipticalOrbit => self.sync_scaled_object_input_parameters(),
+        }
+    }
+
+    fn base_scale_value_changed(previous: f64, next: f64) -> bool {
+        clamp_world_scale(previous).to_bits() != clamp_world_scale(next).to_bits()
+    }
+
+    /// Overwrites scaled object-input panel parameters from the current base scale.
+    pub fn sync_scaled_object_input_parameters(&mut self) {
+        match self.object_input_type.to_object_input(self.base_scale) {
+            ObjectInput::RandomSphere {
+                radius,
+                mass_range,
+                velocity_std,
+                ..
+            } => {
+                self.random_sphere = RandomSphereParameters {
+                    radius,
+                    mass_range,
+                    velocity_std,
+                };
+            }
+            ObjectInput::RandomCube {
+                cube_size,
+                mass_range,
+                velocity_std,
+                ..
+            } => {
+                self.random_cube = RandomCubeParameters {
+                    cube_size,
+                    mass_range,
+                    velocity_std,
+                };
+            }
+            ObjectInput::SpiralDisk {
+                disk_radius,
+                mass_fixed,
+                ..
+            } => {
+                self.spiral_disk = SpiralDiskParameters {
+                    disk_radius,
+                    mass_fixed,
+                };
+            }
+            ObjectInput::EllipticalOrbit {
+                central_mass,
+                planetary_mass,
+                planetary_speed,
+                planetary_distance,
+                ..
+            } => {
+                self.elliptical_orbit = EllipticalOrbitParameters {
+                    central_mass,
+                    planetary_mass,
+                    planetary_speed,
+                    planetary_distance,
+                };
+            }
+            _ => {}
+        }
+    }
+
+    /// Syncs scaled parameters when the active type uses base-scale-relative presets.
+    pub fn maybe_sync_scaled_object_input_parameters(&mut self) {
+        match self.object_input_type {
+            ObjectInputType::RandomSphere
+            | ObjectInputType::RandomCube
+            | ObjectInputType::SpiralDisk
+            | ObjectInputType::EllipticalOrbit => self.sync_scaled_object_input_parameters(),
+            _ => {}
+        }
     }
 
     /// Builds an object-input snapshot from the current panel state.

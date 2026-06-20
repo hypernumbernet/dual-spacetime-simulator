@@ -121,6 +121,7 @@ pub fn draw_ui(
                         if ui.button("Reset").clicked() {
                             uis.is_reset_requested = true;
                             uis.is_resetting = true;
+                            uis.is_add_particles_enabled = true;
                             ui.close_menu();
                         }
                     });
@@ -350,6 +351,7 @@ pub fn draw_ui(
             uis.skip = 0;
         }
         uis.scale_gauge = DEFAULT_SCALE_UI;
+        uis.is_add_particles_enabled = true;
     }
 
     if uis.app_mode == AppMode::Graph3D && uis.is_graph3d_panel_open {
@@ -456,6 +458,7 @@ fn base_scale_input(ui: &mut egui::Ui, uis: &mut UiState) {
             });
     });
     uis.apply_base_scale_edit(display, uis.base_scale_unit != previous_unit);
+    uis.maybe_sync_scaled_object_input_parameters();
 }
 
 /// Renders the simulation-type combo box and updates dependent UI state.
@@ -480,9 +483,10 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
         });
 }
 
-/// Renders the object-input type combo box.
+/// Renders the object-input type combo box and syncs scaled parameters on change.
 fn combobox_object_input_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Object Input Type");
+    let previous_type = uis.object_input_type.clone();
     let id = ui.make_persistent_id("object_input_type_combobox");
     ComboBox::from_id_salt(id)
         .selected_text(format!("{}", uis.object_input_type))
@@ -519,6 +523,7 @@ fn combobox_object_input_type(ui: &mut egui::Ui, uis: &mut UiState) {
                 ObjectInputType::EllipticalOrbit,
             );
         });
+    uis.apply_object_input_type_change(previous_type);
 }
 
 /// Renders parameter controls for the random-sphere object input.
@@ -669,13 +674,19 @@ fn button_add_particles(ui: &mut egui::Ui, uis: &mut UiState, current_count: u32
     if at_limit {
         label_normal(ui, "Particle limit reached");
     }
-    ui.add_enabled_ui(!at_limit && !uis.is_add_particles_requested, |ui| {
-        if button_normal(ui, "Add").clicked() {
-            uis.base_scale = clamp_world_scale(uis.base_scale);
-            uis.object_input = uis.build_object_input();
-            uis.is_add_particles_requested = true;
-        }
-    });
+    ui.add_enabled_ui(
+        !at_limit && !uis.is_add_particles_requested && uis.is_add_particles_enabled,
+        |ui| {
+            if button_normal(ui, "Add").clicked() {
+                uis.base_scale = clamp_world_scale(uis.base_scale);
+                uis.object_input = uis.build_object_input();
+                uis.is_add_particles_requested = true;
+            }
+        },
+    );
+    if !uis.is_add_particles_enabled && !at_limit {
+        label_normal(ui, "Reset required");
+    }
     if uis.is_add_particles_requested {
         label_normal(ui, "Adding...");
     }
@@ -697,6 +708,7 @@ fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
     if button_normal(ui, "Reset").clicked() {
         uis.is_reset_requested = true;
         uis.is_resetting = true;
+        uis.is_add_particles_enabled = true;
     }
 }
 
@@ -777,6 +789,7 @@ fn load_particles(
     uis.simulation_type = snapshot.simulation_type;
     uis.scale = clamp_world_scale(snapshot.scale);
     uis.base_scale = clamp_world_scale(snapshot.scale);
+    uis.is_add_particles_enabled = false;
     uis.frame = 1;
     uis.simulation_time = 0.0;
     uis.is_running = false;
