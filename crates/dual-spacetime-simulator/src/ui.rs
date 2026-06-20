@@ -17,6 +17,7 @@ const PANEL_MENU_OFFSET_Y: f32 = 16.0;
 /// Draws the full control UI and applies user edits to shared UI/application state.
 pub fn draw_ui(
     ui_state: &Arc<RwLock<UiState>>,
+    simulation_manager: &Arc<RwLock<SimulationManager>>,
     settings: &mut AppSettings,
     ctx: &egui::Context,
 ) {
@@ -306,6 +307,18 @@ pub fn draw_ui(
                 }
                 ui.separator();
                 slider_perticle_count(ui, &mut uis);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let mut v = uis.show_add_center_preview;
+                    if ui
+                        .add(Checkbox::new(&mut v, "Show Add Center Preview"))
+                        .changed()
+                    {
+                        uis.show_add_center_preview = v;
+                    }
+                });
+                slider_add_center(ui, &mut uis);
+                button_add_particles(ui, &mut uis, simulation_manager);
                 ui.separator();
                 if !uis.is_reset_requested {
                     button_reset(ui, &mut uis);
@@ -653,6 +666,49 @@ fn condition_elliptical_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
         1e7,
         "Initial Distance (m)",
     );
+}
+
+const ADD_CENTER_SLIDER_RANGE: std::ops::RangeInclusive<f64> = -10.0..=10.0;
+
+/// Renders X/Y/Z sliders as base-scale multipliers, converted via Correct.m like other inputs.
+fn slider_add_center(ui: &mut egui::Ui, uis: &mut UiState) {
+    ui.style_mut().spacing.slider_width = 150.0;
+    label_normal(ui, "Add Center");
+    label_normal(ui, "X");
+    ui.add(Slider::new(
+        &mut uis.add_center.x,
+        ADD_CENTER_SLIDER_RANGE.clone(),
+    ));
+    label_normal(ui, "Y");
+    ui.add(Slider::new(
+        &mut uis.add_center.y,
+        ADD_CENTER_SLIDER_RANGE.clone(),
+    ));
+    label_normal(ui, "Z");
+    ui.add(Slider::new(&mut uis.add_center.z, ADD_CENTER_SLIDER_RANGE));
+}
+
+/// Draws add button and flags particle append when clicked.
+fn button_add_particles(
+    ui: &mut egui::Ui,
+    uis: &mut UiState,
+    simulation_manager: &Arc<RwLock<SimulationManager>>,
+) {
+    let current_count = simulation_manager.read().unwrap().particles().len() as u32;
+    let at_limit = current_count >= uis.max_particle_count;
+    if at_limit {
+        label_normal(ui, "Particle limit reached");
+    }
+    ui.add_enabled_ui(!at_limit && !uis.is_add_particles_requested, |ui| {
+        if button_normal(ui, "Add").clicked() {
+            uis.base_scale = clamp_world_scale(uis.base_scale);
+            uis.object_input = uis.build_object_input();
+            uis.is_add_particles_requested = true;
+        }
+    });
+    if uis.is_add_particles_requested {
+        label_normal(ui, "Adding...");
+    }
 }
 
 /// Renders particle-count slider with current max-count constraints.

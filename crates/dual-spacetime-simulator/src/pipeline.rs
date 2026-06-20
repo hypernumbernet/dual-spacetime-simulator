@@ -15,6 +15,7 @@ const INITIAL_TARGET: Vec3 = Vec3::new(0.0, 0.0, 0.0);
 const AXIS_XZ_GRID_EXTENT: f32 = 2.0;
 const AXIS_XZ_GRID_LINE_COUNT: usize = 9;
 
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct AxesVertex {
@@ -58,6 +59,9 @@ pub struct ParticleRenderPipeline {
     axes_vertex_count: u32,
     graph_lines_buffer: Option<AllocatedBuffer>,
     graph_lines_vertex_count: u32,
+    add_center_marker_buffer: Option<AllocatedBuffer>,
+    add_center_marker_vertex_count: u32,
+    last_add_center_marker_key: Option<(glam::DVec3, u64)>,
     particle_buffer: AllocatedBuffer,
     particle_draw_vertex_count: u32,
     retired_buffers: Vec<AllocatedBuffer>,
@@ -102,6 +106,9 @@ impl ParticleRenderPipeline {
             axes_vertex_count,
             graph_lines_buffer: None,
             graph_lines_vertex_count: 0,
+            add_center_marker_buffer: None,
+            add_center_marker_vertex_count: 0,
+            last_add_center_marker_key: None,
             particle_buffer,
             particle_draw_vertex_count: particle_vertex_count,
             retired_buffers: Vec::new(),
@@ -217,12 +224,33 @@ impl ParticleRenderPipeline {
                     let line_pc = AxesPushConstants {
                         view_proj: view_proj.to_cols_array_2d(),
                     };
-                    self.draw_graph_lines(command_buffer, &line_pc, buf.buffer);
+                    self.draw_graph_lines(
+                        command_buffer,
+                        &line_pc,
+                        buf.buffer,
+                        self.graph_lines_vertex_count,
+                    );
                 }
             }
         }
 
         self.draw_particles(command_buffer, &pc);
+
+        if app_mode == AppMode::Simulation {
+            if let Some(ref buf) = self.add_center_marker_buffer {
+                if self.add_center_marker_vertex_count > 0 {
+                    let line_pc = AxesPushConstants {
+                        view_proj: view_proj.to_cols_array_2d(),
+                    };
+                    self.draw_graph_lines(
+                        command_buffer,
+                        &line_pc,
+                        buf.buffer,
+                        self.add_center_marker_vertex_count,
+                    );
+                }
+            }
+        }
 
         gui.draw(command_buffer, extent);
 
@@ -287,6 +315,68 @@ impl ParticleRenderPipeline {
         );
         self.graph_lines_buffer = Some(buf);
         self.graph_lines_vertex_count = count;
+    }
+
+    /// Uploads add-center preview cross vertices and rebuilds the marker line buffer.
+    pub fn set_add_center_marker(&mut self, vertices: &[([f32; 3], [f32; 4])]) {
+        if let Some(old) = self.add_center_marker_buffer.take() {
+            self.retire_buffer(old);
+        }
+        if vertices.is_empty() {
+            self.add_center_marker_vertex_count = 0;
+            return;
+        }
+        let verts: Vec<AxesVertex> = vertices
+            .iter()
+            .map(|(p, c)| AxesVertex {
+                position: *p,
+                color: *c,
+            })
+            .collect();
+        let (buf, count) = create_buffer_with_data(
+            &self.device,
+            self.allocator(),
+            &verts,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+            "add_center_marker",
+        );
+        self.add_center_marker_buffer = Some(buf);
+        self.add_center_marker_vertex_count = count;
+    }
+
+    /// Rebuilds add-center preview geometry from current UI state when needed.
+    pub fn sync_add_center_marker(&mut self, ui_state: &crate::ui_state::UiState) {
+        use crate::object_input::ObjectInput;
+        use crate::ui_state::AppMode;
+
+        let show_marker =
+            ui_state.app_mode == AppMode::Simulation && ui_state.show_add_center_preview;
+        if !show_marker {
+            if self.last_add_center_marker_key.is_some() {
+                self.set_add_center_marker(&[]);
+                self.last_add_center_marker_key = None;
+            }
+            return;
+        }
+
+        let marker_key = (ui_state.add_center, ui_state.base_scale.to_bits());
+        if self.last_add_center_marker_key == Some(marker_key) {
+            return;
+        }
+        self.last_add_center_marker_key = Some(marker_key);
+
+        let world =
+            ObjectInput::add_center_world_position(ui_state.add_center, ui_state.base_scale);
+        let center = [world.x as f32, world.y as f32, world.z as f32];
+        let half_extent = ObjectInput::add_center_marker_half_extent(ui_state.base_scale);
+        let vertices = build_add_center_cross(center, half_extent);
+        self.set_add_center_marker(&vertices);
+    }
+
+    /// Clears add-center preview geometry and cached sync state.
+    pub fn reset_add_center_marker(&mut self) {
+        self.set_add_center_marker(&[]);
+        self.last_add_center_marker_key = None;
     }
 
     // --- Camera methods ---
@@ -368,8 +458,16 @@ impl ParticleRenderPipeline {
         }
     }
 
-    /// Records draw commands for optional graph line overlay geometry.
-    fn draw_graph_lines(&self, cb: vk::CommandBuffer, pc: &AxesPushConstants, buffer: vk::Buffer) {
+    fn draw_graph_lines(
+        &self,
+        cb: vk::CommandBuffer,
+        pc: &AxesPushConstants,
+        buffer: vk::Buffer,
+        vertex_count: u32,
+    ) {
+        if vertex_count == 0 {
+            return;
+        }
         unsafe {
             self.device
                 .cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, self.pipeline_axes);
@@ -382,8 +480,7 @@ impl ParticleRenderPipeline {
                 0,
                 bytemuck::bytes_of(pc),
             );
-            self.device
-                .cmd_draw(cb, self.graph_lines_vertex_count, 1, 0, 0);
+            self.device.cmd_draw(cb, vertex_count, 1, 0, 0);
         }
     }
 
@@ -455,6 +552,9 @@ impl Drop for ParticleRenderPipeline {
             if let Some(buf) = self.graph_lines_buffer.take() {
                 buf.destroy(&self.device, self.allocator());
             }
+            if let Some(buf) = self.add_center_marker_buffer.take() {
+                buf.destroy(&self.device, self.allocator());
+            }
             self.flush_retired_buffers();
 
             if let Some(alloc) = self.particle_buffer.allocation.take() {
@@ -479,6 +579,25 @@ impl Drop for ParticleRenderPipeline {
             self.device.destroy_render_pass(self.render_pass, None);
         }
     }
+}
+
+/// Builds a three-axis cross at the target center.
+pub fn build_add_center_cross(
+    center: [f32; 3],
+    half_extent: f32,
+) -> Vec<([f32; 3], [f32; 4])> {
+    let [cx, cy, cz] = center;
+    let x_color = [1.0, 0.2, 0.2, 1.0];
+    let y_color = [0.2, 1.0, 0.2, 1.0];
+    let z_color = [0.3, 0.5, 1.0, 1.0];
+    vec![
+        ([cx - half_extent, cy, cz], x_color),
+        ([cx + half_extent, cy, cz], x_color),
+        ([cx, cy - half_extent, cz], y_color),
+        ([cx, cy + half_extent, cz], y_color),
+        ([cx, cy, cz - half_extent], z_color),
+        ([cx, cy, cz + half_extent], z_color),
+    ]
 }
 
 // --- Pipeline creation helpers ---

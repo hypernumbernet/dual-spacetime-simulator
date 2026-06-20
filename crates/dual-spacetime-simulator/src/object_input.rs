@@ -293,6 +293,59 @@ impl ObjectInput {
         })
     }
 
+    /// Returns a characteristic world-space size for the current object-input preset.
+    pub fn preview_group_extent(&self) -> f64 {
+        let scale = self.get_scale();
+        let correct = Correct::new(scale);
+        match self {
+            ObjectInput::RandomSphere { radius, .. } => radius * correct.m,
+            ObjectInput::RandomCube { cube_size, .. } => cube_size * 0.5 * correct.m,
+            ObjectInput::TwoSpheres {
+                sphere1_radius,
+                sphere2_radius,
+                ..
+            } => sphere1_radius.max(*sphere2_radius) * correct.m,
+            ObjectInput::SpiralDisk { disk_radius, .. } => disk_radius * correct.m,
+            ObjectInput::SolarSystem { .. } => crate::simulation::AU * correct.m,
+            ObjectInput::SatelliteOrbit { orbit_altitude_max, .. } => {
+                (EARTH_RADIUS + orbit_altitude_max) * correct.m
+            }
+            ObjectInput::EllipticalOrbit {
+                planetary_distance, ..
+            } => planetary_distance * correct.m,
+        }
+    }
+
+    /// Returns add-center cross arm half-length: `(0.3 * base_scale) * Correct.m`.
+    pub fn add_center_marker_half_extent(base_scale: f64) -> f32 {
+        let scale = clamp_world_scale(base_scale);
+        let correct = Correct::new(scale);
+        (0.3 * scale * correct.m) as f32
+    }
+
+    /// Converts add-center slider values into simulation-world coordinates.
+    pub fn add_center_world_position(center: DVec3, base_scale: f64) -> DVec3 {
+        let scale = clamp_world_scale(base_scale);
+        center * scale * Correct::new(scale).m
+    }
+
+    /// Generates particles offset so the group is centered at `center * base_scale * Correct.m`.
+    pub fn generate_particles_at_center(
+        &self,
+        particle_count: u32,
+        center: DVec3,
+        base_scale: f64,
+    ) -> SimulationNormal {
+        let mut sim = self.generate_particles(particle_count);
+        let scale = clamp_world_scale(base_scale);
+        let correct = Correct::new(scale);
+        let offset = center * scale * correct.m;
+        for particle in &mut sim.particles {
+            particle.position += offset;
+        }
+        sim
+    }
+
     /// Generates particles according to the selected object-input variant and settings.
     pub fn generate_particles(&self, particle_count: u32) -> SimulationNormal {
         let mut rng = rand::rng();

@@ -332,6 +332,37 @@ impl SimulationManager {
             snapshot.scale,
         );
     }
+
+    /// Appends particles generated from object input, centered at `center * base_scale * Correct.m`.
+    pub fn append_particles(
+        &self,
+        object_input: ObjectInput,
+        simulation_type: SimulationType,
+        batch_count: u32,
+        scale: f64,
+        center: DVec3,
+        base_scale: f64,
+        max_particle_count: u32,
+    ) -> u32 {
+        let mut new_particles = object_input
+            .generate_particles_at_center(batch_count, center, base_scale)
+            .particles;
+        if simulation_type == SimulationType::LorentzTransformation {
+            new_particles = Self::convert_to_lorentz(new_particles, scale);
+        }
+
+        let mut state_guard = self.state.write().unwrap();
+        let particles = match &mut *state_guard {
+            SimulationState::Normal(s) => &mut s.particles,
+            SimulationState::SpeedOfLightLimit(s) => &mut s.particles,
+            SimulationState::LorentzTransformation(s) => &mut s.particles,
+        };
+
+        let remaining = max_particle_count.saturating_sub(particles.len() as u32) as usize;
+        let to_add = new_particles.len().min(remaining);
+        particles.extend(new_particles.into_iter().take(to_add));
+        to_add as u32
+    }
 }
 
 impl Default for SimulationManager {

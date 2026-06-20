@@ -75,6 +75,56 @@ pub fn spawn_simulation_worker(
         let mut last_fps = Instant::now();
         let mut prev_frame: i64 = 1;
         loop {
+            {
+                let ui_state = ui_state_clone.read().unwrap();
+                let is_reset_requested = ui_state.is_reset_requested;
+                let is_add_particles_requested = ui_state.is_add_particles_requested;
+                if is_reset_requested || is_add_particles_requested {
+                    let selected_object_input = ui_state.object_input.clone();
+                    let simulation_type = ui_state.simulation_type;
+                    let skip = ui_state.skip;
+                    let particle_count = ui_state.particle_count;
+                    let scale = ui_state.scale;
+                    let base_scale = ui_state.base_scale;
+                    let add_center = ui_state.add_center;
+                    let max_particle_count = ui_state.max_particle_count;
+                    drop(ui_state);
+                    if is_reset_requested {
+                        simulation_manager.read().unwrap().reset(
+                            selected_object_input,
+                            simulation_type,
+                            particle_count,
+                            scale,
+                        );
+                        let mut ui_state = ui_state_clone.write().unwrap();
+                        ui_state.frame = 1;
+                        ui_state.simulation_time = 0.0;
+                        ui_state.is_reset_requested = false;
+                        drop(ui_state);
+                        need_redraw.write().unwrap().clone_from(&true);
+                        skip_redraw.write().unwrap().clone_from(&skip);
+                        continue;
+                    }
+                    let current_count =
+                        simulation_manager.read().unwrap().particles().len() as u32;
+                    let added = simulation_manager.write().unwrap().append_particles(
+                        selected_object_input,
+                        simulation_type,
+                        particle_count,
+                        scale,
+                        add_center,
+                        base_scale,
+                        max_particle_count,
+                    );
+                    let mut ui_state = ui_state_clone.write().unwrap();
+                    ui_state.particle_count = current_count + added;
+                    ui_state.is_add_particles_requested = false;
+                    drop(ui_state);
+                    need_redraw.write().unwrap().clone_from(&true);
+                    skip_redraw.write().unwrap().clone_from(&skip);
+                    continue;
+                }
+            }
             if *need_redraw.read().unwrap() {
                 std::thread::sleep(Duration::from_millis(16));
                 continue;
@@ -84,29 +134,8 @@ pub fn spawn_simulation_worker(
             let app_mode = ui_state.app_mode;
             let max_fps = ui_state.max_fps;
             let time_per_frame = ui_state.time_per_frame;
-            let is_reset_requested = ui_state.is_reset_requested;
-            let selected_object_input = ui_state.object_input.clone();
-            let simulation_type = ui_state.simulation_type;
             let skip = ui_state.skip;
-            let particle_count = ui_state.particle_count;
-            let scale = ui_state.scale;
             drop(ui_state);
-            if is_reset_requested {
-                simulation_manager.read().unwrap().reset(
-                    selected_object_input,
-                    simulation_type,
-                    particle_count,
-                    scale,
-                );
-                let mut ui_state = ui_state_clone.write().unwrap();
-                ui_state.frame = 1;
-                ui_state.simulation_time = 0.0;
-                ui_state.is_reset_requested = false;
-                drop(ui_state);
-                need_redraw.write().unwrap().clone_from(&true);
-                skip_redraw.write().unwrap().clone_from(&skip);
-                continue;
-            }
             let now = Instant::now();
             let dt = now.duration_since(last_fps).as_secs_f64();
             if dt >= 1.0 {
@@ -348,8 +377,17 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 gui.immediate_ui(window, |gui| {
                     let ctx = gui.context();
-                    draw_ui(&self.ui_state, &mut self.settings, &ctx);
+                    draw_ui(
+                        &self.ui_state,
+                        &self.simulation_manager,
+                        &mut self.settings,
+                        &ctx,
+                    );
                 });
+                {
+                    let ui_state = self.ui_state.read().unwrap();
+                    pipeline.sync_add_center_marker(&ui_state);
+                }
                 let desired_mailbox_present_mode = {
                     let ui_state = self.ui_state.read().unwrap();
                     ui_state.mailbox_present_mode
@@ -528,6 +566,11 @@ impl ApplicationHandler for App {
             self.graph3d_pending_rx = None;
             if let Some(pipeline) = self.render_pipeline.as_mut() {
                 pipeline.set_graph_lines(&[]);
+            }
+        }
+        if prev != app_mode && app_mode == AppMode::Graph3D {
+            if let Some(pipeline) = self.render_pipeline.as_mut() {
+                pipeline.reset_add_center_marker();
             }
         }
         if prev != app_mode && app_mode == AppMode::Simulation {
