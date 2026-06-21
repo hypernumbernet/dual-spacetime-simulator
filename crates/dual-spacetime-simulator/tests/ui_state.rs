@@ -1,6 +1,17 @@
 use dual_spacetime_simulator::object_input::ObjectInputType;
 use dual_spacetime_simulator::settings::AppSettings;
-use dual_spacetime_simulator::ui_state::{AppMode, PlacementMode, SimulationType, UiState};
+use dual_spacetime_simulator::ui_state::{
+    AppMode, ParticleDisplayMode, PlacementMode, SimulationType, UiState,
+};
+
+#[test]
+fn apply_settings_propagates_particle_display_mode() {
+    let mut ui = UiState::default();
+    let mut s = AppSettings::default();
+    s.particle_display_mode = ParticleDisplayMode::Sphere;
+    ui.apply_settings(&s);
+    assert_eq!(ui.particle_display_mode, ParticleDisplayMode::Sphere);
+}
 
 #[test]
 fn apply_settings_clamps_add_particle_count() {

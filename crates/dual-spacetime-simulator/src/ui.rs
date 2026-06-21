@@ -224,6 +224,7 @@ pub fn draw_ui(
                 dragvalue_normal(ui, &mut uis.min_window_width, 1.0, "Min Window Width");
                 dragvalue_normal(ui, &mut uis.min_window_height, 1.0, "Min Window Height");
                 dragvalue_normal(ui, &mut uis.max_particle_count, 10.0, "Max Particle Count");
+                combobox_particle_display_mode(ui, &mut uis);
                 ui.separator();
                 ui.horizontal(|ui| {
                     let mut v = uis.start_maximized;
@@ -267,6 +268,7 @@ pub fn draw_ui(
                     settings.link_point_size_to_scale = uis.link_point_size_to_scale;
                     settings.lock_camera_up = uis.lock_camera_up;
                     settings.mailbox_present_mode = uis.mailbox_present_mode;
+                    settings.particle_display_mode = uis.particle_display_mode;
                     if let Err(e) = settings.save() {
                         eprintln!("Failed to save settings: {}", e);
                     }
@@ -773,6 +775,18 @@ fn load_particles(
 }
 
 /// Renders graph-type combo box for Graph3D mode.
+fn combobox_particle_display_mode(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Particle Display");
+    let id = ui.make_persistent_id("particle_display_mode_combobox");
+    ComboBox::from_id_salt(id)
+        .selected_text(format!("{}", uis.particle_display_mode))
+        .width(ui.available_width())
+        .show_ui(ui, |ui| {
+            selectable_value(ui, &mut uis.particle_display_mode, ParticleDisplayMode::Glow);
+            selectable_value(ui, &mut uis.particle_display_mode, ParticleDisplayMode::Sphere);
+        });
+}
+
 fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Graph Type");
     let id = ui.make_persistent_id("graph_type_combobox");

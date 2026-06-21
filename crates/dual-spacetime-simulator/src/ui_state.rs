@@ -274,6 +274,24 @@ pub enum PendingSnapshotDialog {
     Load,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub enum ParticleDisplayMode {
+    #[default]
+    Glow,
+    Sphere,
+}
+
+impl std::fmt::Display for ParticleDisplayMode {
+    /// Formats particle display mode names for UI selection controls.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            ParticleDisplayMode::Glow => "Glow",
+            ParticleDisplayMode::Sphere => "Sphere",
+        };
+        write!(f, "{}", text)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum GraphType {
     SphericalFibonacciLattice,
@@ -337,6 +355,7 @@ pub struct UiState {
     pub lock_camera_up: bool,
     pub mailbox_present_mode: bool,
     pub show_grid: bool,
+    pub particle_display_mode: ParticleDisplayMode,
     pub request_exit: bool,
     pub pending_snapshot_dialog: Option<PendingSnapshotDialog>,
     pub graph_type: GraphType,
@@ -392,6 +411,7 @@ impl Default for UiState {
             lock_camera_up: true,
             mailbox_present_mode: false,
             show_grid: true,
+            particle_display_mode: ParticleDisplayMode::default(),
             request_exit: false,
             pending_snapshot_dialog: None,
             graph_type: GraphType::SphericalFibonacciLattice,
@@ -434,6 +454,7 @@ impl UiState {
         self.link_point_size_to_scale = settings.link_point_size_to_scale;
         self.lock_camera_up = settings.lock_camera_up;
         self.mailbox_present_mode = settings.mailbox_present_mode;
+        self.particle_display_mode = settings.particle_display_mode;
         if self.add_particle_count > self.max_particle_count {
             self.add_particle_count = self.max_particle_count;
         }
