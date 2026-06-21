@@ -62,6 +62,86 @@ pub fn draw_label_with_style(ui: &mut Ui, text: &str, style: &LabelStyle) {
     });
 }
 
+const POSITIVE_DRAG_VALUE_HEIGHT: f32 = 18.0;
+
+fn apply_positive_dragvalue_style(ui: &mut Ui) {
+    let visuals = ui.visuals_mut();
+    visuals.widgets.inactive.weak_bg_fill = Color32::BLACK;
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::LIGHT_BLUE);
+    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(60, 0, 0);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::RED);
+    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(60, 60, 0);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0, Color32::YELLOW);
+    visuals.extreme_bg_color = Color32::from_rgb(0, 60, 0);
+    visuals.override_text_color = Some(Color32::WHITE);
+    visuals.selection.stroke = Stroke::new(1.0, Color32::GREEN);
+
+    let style = ui.style_mut();
+    style
+        .text_styles
+        .insert(TextStyle::Body, FontId::proportional(14.0));
+    style.drag_value_text_style = TextStyle::Body;
+    ui.spacing_mut().button_padding = egui::vec2(6.0, 4.0);
+}
+
+fn format_positive_drag_value(value: f64) -> String {
+    if value.abs() >= 1e6 || value.abs() <= 1e-4 && value != 0.0 {
+        format!("{:.3e}", value)
+    } else {
+        format!("{:}", value)
+    }
+}
+
+fn positive_drag_value(
+    ui: &mut Ui,
+    value: &mut f64,
+    speed: f64,
+    min: f64,
+    width: f32,
+    formatter: Option<&dyn Fn(f64) -> String>,
+) {
+    apply_positive_dragvalue_style(ui);
+    ui.add_sized(
+        [width, POSITIVE_DRAG_VALUE_HEIGHT],
+        egui::DragValue::new(value)
+            .speed(speed)
+            .range(min..=f64::MAX)
+            .custom_parser(|s| {
+                s.trim()
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|&v| v.is_finite() && v > min)
+            })
+            .custom_formatter(|value, _range| {
+                formatter
+                    .map(|format| format(value))
+                    .unwrap_or_else(|| format_positive_drag_value(value))
+            }),
+    );
+    *value = value.max(min);
+}
+
+/// Draws a positive-only f64 drag value clamped to `min`..=f64::MAX.
+pub fn dragvalue_positive_f64(
+    ui: &mut Ui,
+    value: &mut f64,
+    speed: impl Into<f64>,
+    min: f64,
+    width: f32,
+    label: Option<&str>,
+    formatter: Option<&dyn Fn(f64) -> String>,
+) {
+    let speed = speed.into();
+    if let Some(prefix) = label {
+        ui.horizontal(|ui| {
+            label_normal(ui, prefix);
+            ui.scope(|ui| positive_drag_value(ui, value, speed, min, width, formatter));
+        });
+    } else {
+        ui.scope(|ui| positive_drag_value(ui, value, speed, min, width, formatter));
+    }
+}
+
 /// Draws a styled drag-value row with label, custom parsing, and scientific fallback formatting.
 pub fn dragvalue_normal<T: egui::emath::Numeric>(
     ui: &mut Ui,

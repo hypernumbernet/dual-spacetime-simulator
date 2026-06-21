@@ -8,8 +8,11 @@ use crate::particle_snapshot::ParticleSnapshot;
 use dst_math::spacetime::{Spacetime, rapidity_from_momentum};
 use crate::ui_state::SimulationType;
 
-pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
 pub const LIGHT_SPEED: f64 = 299_792_458.0; // Speed of light in meters per second
+pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
+pub const LY: f64 = LIGHT_SPEED * 365.25 * 86_400.0; // Julian light year in meters
+pub const PC: f64 = AU * 648_000.0 / std::f64::consts::PI; // Parsec in meters
+pub const MPC: f64 = PC * 1_000_000.0; // Megaparsec in meters
 pub const LIGHT_SPEED_SQUARED: f64 = LIGHT_SPEED * LIGHT_SPEED;
 pub const G: f64 = 6.6743e-11; // Gravitational constant in m^3 kg^-1 s^-2
 pub const EPSILON: f64 = 1e-10;
@@ -315,6 +318,11 @@ impl SimulationManager {
         sim.update_velocities(time_per_frame);
     }
 
+    /// Returns the number of particles in the current simulation state.
+    pub fn particle_count(&self) -> u32 {
+        self.state.read().unwrap().particles().len() as u32
+    }
+
     /// Returns a cloned particle list from the current simulation state.
     pub fn particles(&self) -> Vec<Particle> {
         let state = self.state.read().unwrap();
@@ -328,6 +336,37 @@ impl SimulationManager {
             snapshot.particles,
             snapshot.scale,
         );
+    }
+
+    /// Appends particles generated from object input, centered at `center * base_scale * Correct.m`.
+    pub fn append_particles(
+        &self,
+        object_input: ObjectInput,
+        simulation_type: SimulationType,
+        batch_count: u32,
+        scale: f64,
+        center: DVec3,
+        base_scale: f64,
+        max_particle_count: u32,
+    ) -> u32 {
+        let mut new_particles = object_input
+            .generate_particles_at_center(batch_count, center, base_scale)
+            .particles;
+        if simulation_type == SimulationType::LorentzTransformation {
+            new_particles = Self::convert_to_lorentz(new_particles, scale);
+        }
+
+        let mut state_guard = self.state.write().unwrap();
+        let particles = match &mut *state_guard {
+            SimulationState::Normal(s) => &mut s.particles,
+            SimulationState::SpeedOfLightLimit(s) => &mut s.particles,
+            SimulationState::LorentzTransformation(s) => &mut s.particles,
+        };
+
+        let remaining = max_particle_count.saturating_sub(particles.len() as u32) as usize;
+        let to_add = new_particles.len().min(remaining);
+        particles.extend(new_particles.into_iter().take(to_add));
+        to_add as u32
     }
 }
 

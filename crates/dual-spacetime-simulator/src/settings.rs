@@ -1,3 +1,4 @@
+use crate::ui_state::ParticleDisplayMode;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -13,6 +14,8 @@ pub struct AppSettings {
     pub link_point_size_to_scale: bool,
     pub lock_camera_up: bool,
     pub mailbox_present_mode: bool,
+    #[serde(default)]
+    pub particle_display_mode: ParticleDisplayMode,
 }
 
 impl Default for AppSettings {
@@ -26,6 +29,7 @@ impl Default for AppSettings {
             link_point_size_to_scale: true,
             lock_camera_up: true,
             mailbox_present_mode: false,
+            particle_display_mode: ParticleDisplayMode::default(),
         }
     }
 }

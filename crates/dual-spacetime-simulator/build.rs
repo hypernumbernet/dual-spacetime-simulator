@@ -14,6 +14,7 @@ fn main() {
         "axes_fragment.frag",
         "particles_vertex.vert",
         "particles_fragment.frag",
+        "particles_sphere_fragment.frag",
         "egui_vertex.vert",
         "egui_fragment.frag",
     ];

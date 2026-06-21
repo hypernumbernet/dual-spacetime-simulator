@@ -1,9 +1,9 @@
-use crate::object_input::{ObjectInput, ObjectInputType};
+use crate::object_input::{clamp_world_scale, ObjectInputType};
 use crate::particle_snapshot::{
     ParticleSnapshot, SNAPSHOT_FILTER_EXT, SNAPSHOT_FILTER_NAME,
 };
 use crate::settings::AppSettings;
-use crate::simulation::{AU, SimulationManager};
+use crate::simulation::{AU, LY, MPC, PC, SimulationManager};
 use crate::ui_state::*;
 use crate::ui_styles::*;
 use egui::{Checkbox, ComboBox, Slider};
@@ -17,6 +17,7 @@ const PANEL_MENU_OFFSET_Y: f32 = 16.0;
 /// Draws the full control UI and applies user edits to shared UI/application state.
 pub fn draw_ui(
     ui_state: &Arc<RwLock<UiState>>,
+    simulation_manager: &Arc<RwLock<SimulationManager>>,
     settings: &mut AppSettings,
     ctx: &egui::Context,
 ) {
@@ -118,8 +119,7 @@ pub fn draw_ui(
                             ui.close_menu();
                         }
                         if ui.button("Reset").clicked() {
-                            uis.is_reset_requested = true;
-                            uis.is_resetting = true;
+                            uis.request_reset();
                             ui.close_menu();
                         }
                     });
@@ -164,6 +164,11 @@ pub fn draw_ui(
                 ui.horizontal(|ui| {
                     label_normal(ui, "Time");
                     label_indicator(ui, &format_simulation_time(uis.simulation_time));
+                });
+                ui.horizontal(|ui| {
+                    label_normal(ui, "Particle Count");
+                    let count = simulation_manager.read().unwrap().particle_count();
+                    label_indicator(ui, &count.to_string());
                 });
                 ui.separator();
                 if button_normal(ui, "Start/Pause").clicked() {
@@ -219,6 +224,7 @@ pub fn draw_ui(
                 dragvalue_normal(ui, &mut uis.min_window_width, 1.0, "Min Window Width");
                 dragvalue_normal(ui, &mut uis.min_window_height, 1.0, "Min Window Height");
                 dragvalue_normal(ui, &mut uis.max_particle_count, 10.0, "Max Particle Count");
+                combobox_particle_display_mode(ui, &mut uis);
                 ui.separator();
                 ui.horizontal(|ui| {
                     let mut v = uis.start_maximized;
@@ -262,6 +268,7 @@ pub fn draw_ui(
                     settings.link_point_size_to_scale = uis.link_point_size_to_scale;
                     settings.lock_camera_up = uis.lock_camera_up;
                     settings.mailbox_present_mode = uis.mailbox_present_mode;
+                    settings.particle_display_mode = uis.particle_display_mode;
                     if let Err(e) = settings.save() {
                         eprintln!("Failed to save settings: {}", e);
                     }
@@ -278,33 +285,27 @@ pub fn draw_ui(
             .show(ctx, |ui| {
                 ui.set_width(uis.input_panel_width);
                 combobox_simulation_type(ui, &mut uis);
+                base_scale_input(ui, &mut uis);
+                combobox_placement_mode(ui, &mut uis);
+                placement_mode_conditions(ui, &mut uis);
                 ui.separator();
                 combobox_object_input_type(ui, &mut uis);
-                match uis.object_input_type {
-                    ObjectInputType::RandomSphere => {
-                        condition_random_sphere(ui, &mut uis);
-                    }
-                    ObjectInputType::RandomCube => {
-                        condition_random_cube(ui, &mut uis);
-                    }
-                    ObjectInputType::TwoSpheres => {
-                        condition_two_spheres(ui, &mut uis);
-                    }
-                    ObjectInputType::SpiralDisk => {
-                        condition_spiral_disk(ui, &mut uis);
-                    }
-                    ObjectInputType::SolarSystem => {
-                        condition_solar_system(ui, &mut uis);
-                    }
-                    ObjectInputType::SatelliteOrbit => {
-                        condition_satellite_orbit(ui, &mut uis);
-                    }
-                    ObjectInputType::EllipticalOrbit => {
-                        condition_elliptical_orbit(ui, &mut uis);
-                    }
-                }
+                object_input_type_conditions(ui, &mut uis);
                 ui.separator();
-                slider_perticle_count(ui, &mut uis);
+                let current_count = simulation_manager.read().unwrap().particle_count();
+                slider_add_particle_count(ui, &mut uis, current_count);
+                ui.separator();
+                slider_add_center(ui, &mut uis);
+                ui.horizontal(|ui| {
+                    let mut v = uis.show_add_center_preview;
+                    if ui
+                        .add(Checkbox::new(&mut v, "Show Add Center Preview"))
+                        .changed()
+                    {
+                        uis.show_add_center_preview = v;
+                    }
+                });
+                button_add_particles(ui, &mut uis, current_count);
                 ui.separator();
                 if !uis.is_reset_requested {
                     button_reset(ui, &mut uis);
@@ -316,68 +317,10 @@ pub fn draw_ui(
 
     if uis.is_resetting && uis.is_reset_requested {
         uis.is_resetting = false;
-        uis.object_input = match uis.object_input_type {
-            ObjectInputType::RandomSphere => ObjectInput::RandomSphere {
-                scale: uis.random_sphere.scale,
-                radius: uis.random_sphere.radius,
-                mass_range: uis.random_sphere.mass_range,
-                velocity_std: uis.random_sphere.velocity_std,
-            },
-            ObjectInputType::RandomCube => ObjectInput::RandomCube {
-                scale: uis.random_cube.scale,
-                cube_size: uis.random_cube.cube_size,
-                mass_range: uis.random_cube.mass_range,
-                velocity_std: uis.random_cube.velocity_std,
-            },
-
-            ObjectInputType::TwoSpheres => ObjectInput::TwoSpheres {
-                scale: uis.two_spheres.scale,
-                sphere1_center: uis.two_spheres.sphere1_center,
-                sphere1_radius: uis.two_spheres.sphere1_radius,
-                sphere2_center: uis.two_spheres.sphere2_center,
-                sphere2_radius: uis.two_spheres.sphere2_radius,
-                mass_fixed: uis.two_spheres.mass_fixed,
-            },
-            ObjectInputType::SpiralDisk => ObjectInput::SpiralDisk {
-                scale: uis.spiral_disk.scale,
-                disk_radius: uis.spiral_disk.disk_radius,
-                mass_fixed: uis.spiral_disk.mass_fixed,
-            },
-            ObjectInputType::SolarSystem => ObjectInput::SolarSystem {
-                start_year: uis.solar_system.start_year,
-                start_month: uis.solar_system.start_month,
-                start_day: uis.solar_system.start_day,
-                start_hour: uis.solar_system.start_hour,
-            },
-            ObjectInputType::SatelliteOrbit => ObjectInput::SatelliteOrbit {
-                orbit_altitude_min: uis.satellite_orbit.orbit_altitude_min,
-                orbit_altitude_max: uis.satellite_orbit.orbit_altitude_max,
-                asteroid_mass: uis.satellite_orbit.asteroid_mass,
-                asteroid_distance: uis.satellite_orbit.asteroid_distance,
-                asteroid_speed: uis.satellite_orbit.asteroid_speed,
-            },
-            ObjectInputType::EllipticalOrbit => ObjectInput::EllipticalOrbit {
-                scale: uis.elliptical_orbit.scale,
-                central_mass: uis.elliptical_orbit.central_mass,
-                planetary_mass: uis.elliptical_orbit.planetary_mass,
-                planetary_speed: uis.elliptical_orbit.planetary_speed,
-                planetary_distance: uis.elliptical_orbit.planetary_distance,
-            },
-        };
-        uis.scale = uis.object_input.get_scale();
-        if uis.object_input_type == ObjectInputType::SolarSystem {
-            uis.time_per_frame = 10_000.0;
-            uis.max_fps = 1000;
-            uis.skip = 10;
-        } else if uis.object_input_type == ObjectInputType::EllipticalOrbit {
-            uis.time_per_frame = 100_000.0;
-            uis.max_fps = 1000;
-            uis.skip = 0;
-        } else {
-            uis.time_per_frame = 10.0;
-            uis.max_fps = 60;
-            uis.skip = 0;
-        }
+        uis.base_scale = clamp_world_scale(uis.base_scale);
+        uis.object_input = uis.build_reset_object_input();
+        uis.scale = uis.base_scale;
+        uis.apply_reset_timing_defaults();
         uis.scale_gauge = DEFAULT_SCALE_UI;
     }
 
@@ -433,14 +376,20 @@ fn format_simulation_time(simulation_time: f64) -> String {
 fn format_scale(scale_guage: f64, scale: f64) -> String {
     let scale_inv = DEFAULT_SCALE_UI / scale_guage;
     let pow10 = scale_inv.powi(4) * scale;
-    if pow10 >= AU * 1e6 {
-        format!("{:.3e} au", pow10 / AU)
+    if pow10 >= MPC {
+        format!("{:.3e} Mpc", pow10 / MPC)
+    } else if pow10 >= PC {
+        format!("{:.3e} pc", pow10 / PC)
+    } else if pow10 >= LY {
+        format!("{:.3e} ly", pow10 / LY)
     } else if pow10 >= AU {
         format!("{:.3} au", pow10 / AU)
     } else if pow10 >= 1e9 {
         format!("{:.3e} km", pow10 / 1e3)
     } else if pow10 >= 1e3 {
         format!("{:.3} km", pow10 / 1e3)
+    } else if pow10 < 1e-15 {
+        format!("{:.6} fm", pow10 * 1e15)
     } else if pow10 < 1e-9 {
         format!("{:.6} nm", pow10 * 1e9)
     } else if pow10 < 1e-3 {
@@ -450,9 +399,41 @@ fn format_scale(scale_guage: f64, scale: f64) -> String {
     }
 }
 
+/// Renders base-scale value input with selectable length units.
+fn base_scale_input(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Base Scale");
+    let previous_unit = uis.base_scale_unit;
+    let unit = uis.base_scale_unit;
+    let mut display = uis.base_scale_display_value();
+    let format_display = |value: f64| unit.format_display(value);
+    ui.horizontal(|ui| {
+        dragvalue_positive_f64(
+            ui,
+            &mut display,
+            BASE_SCALE_DRAG_SPEED,
+            unit.min_display_value(),
+            110.0,
+            None,
+            Some(&format_display),
+        );
+        display = unit.sanitize_display(display);
+        let id = ui.make_persistent_id("base_scale_unit_combobox");
+        ComboBox::from_id_salt(id)
+            .selected_text(format!("{}", uis.base_scale_unit))
+            .width(60.0)
+            .show_ui(ui, |ui| {
+                for unit in BaseScaleUnit::ALL {
+                    selectable_value(ui, &mut uis.base_scale_unit, unit);
+                }
+            });
+    });
+    uis.apply_base_scale_edit(display, uis.base_scale_unit != previous_unit);
+}
+
 /// Renders the simulation-type combo box and updates dependent UI state.
 fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Simulation Type");
+    let previous_type = uis.simulation_type;
     let id = ui.make_persistent_id("simulation_type_combobox");
     ComboBox::from_id_salt(id)
         .selected_text(format!("{}", uis.simulation_type))
@@ -470,57 +451,62 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
                 SimulationType::LorentzTransformation,
             );
         });
+    uis.apply_simulation_type_change(previous_type);
 }
 
-/// Renders the object-input type combo box and updates selected condition defaults.
+/// Renders the placement-mode combo box and updates dependent UI state.
+fn combobox_placement_mode(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Placement Mode");
+    let previous_mode = uis.placement_mode;
+    let id = ui.make_persistent_id("placement_mode_combobox");
+    ComboBox::from_id_salt(id)
+        .selected_text(format!("{}", uis.placement_mode))
+        .width(ui.available_width())
+        .show_ui(ui, |ui| {
+            for mode in PlacementMode::ALL {
+                selectable_value(ui, &mut uis.placement_mode, mode);
+            }
+        });
+    uis.apply_placement_mode_change(previous_mode);
+}
+
+/// Renders the object-input type combo box and syncs scaled parameters on change.
 fn combobox_object_input_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Object Input Type");
+    let previous_type = uis.object_input_type;
     let id = ui.make_persistent_id("object_input_type_combobox");
     ComboBox::from_id_salt(id)
         .selected_text(format!("{}", uis.object_input_type))
         .width(ui.available_width())
         .show_ui(ui, |ui| {
-            selectable_value(
-                ui,
-                &mut uis.object_input_type,
-                ObjectInputType::RandomSphere,
-            );
-            selectable_value(
-                ui,
-                &mut uis.object_input_type,
-                ObjectInputType::RandomCube,
-            );
-            selectable_value(
-                ui,
-                &mut uis.object_input_type,
-                ObjectInputType::TwoSpheres,
-            );
-            selectable_value(
-                ui,
-                &mut uis.object_input_type,
-                ObjectInputType::SpiralDisk,
-            );
-            selectable_value(
-                ui,
-                &mut uis.object_input_type,
-                ObjectInputType::SolarSystem,
-            );
-            selectable_value(
-                ui,
-                &mut uis.object_input_type,
-                ObjectInputType::SatelliteOrbit,
-            );
-            selectable_value(
-                ui,
-                &mut uis.object_input_type,
-                ObjectInputType::EllipticalOrbit,
-            );
+            for ty in ObjectInputType::ALL {
+                selectable_value(ui, &mut uis.object_input_type, ty);
+            }
         });
+    uis.apply_object_input_type_change(previous_type);
+}
+
+/// Renders parameter controls for the active placement mode.
+fn placement_mode_conditions(ui: &mut egui::Ui, uis: &mut UiState) {
+    match uis.placement_mode {
+        PlacementMode::SolarSystem => condition_solar_system(ui, uis),
+        PlacementMode::SatelliteOrbit => condition_satellite_orbit(ui, uis),
+        PlacementMode::Manual => {}
+    }
+}
+
+/// Renders parameter controls for the active object-input type.
+fn object_input_type_conditions(ui: &mut egui::Ui, uis: &mut UiState) {
+    match uis.object_input_type {
+        ObjectInputType::RandomSphere => condition_random_sphere(ui, uis),
+        ObjectInputType::RandomCube => condition_random_cube(ui, uis),
+        ObjectInputType::SpiralDisk => condition_spiral_disk(ui, uis),
+        ObjectInputType::EllipticalOrbit => condition_elliptical_orbit(ui, uis),
+    }
 }
 
 /// Renders parameter controls for the random-sphere object input.
 fn condition_random_sphere(ui: &mut egui::Ui, uis: &mut UiState) {
-    dragvalue_normal(ui, &mut uis.random_sphere.scale, 1e9, "Scale (m): ");
     dragvalue_normal(ui, &mut uis.random_sphere.radius, 1e9, "Sphere Radius (m)");
     dragvalue_normal(
         ui,
@@ -544,7 +530,6 @@ fn condition_random_sphere(ui: &mut egui::Ui, uis: &mut UiState) {
 
 /// Renders parameter controls for the random-cube object input.
 fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
-    dragvalue_normal(ui, &mut uis.random_cube.scale, 1e3, "Scale (m)");
     dragvalue_normal(ui, &mut uis.random_cube.cube_size, 1e3, "Cube Size (m)");
     dragvalue_normal(ui, &mut uis.random_cube.mass_range.0, 1e20, "Mass Min (kg)");
     dragvalue_normal(ui, &mut uis.random_cube.mass_range.1, 1e20, "Mass Max (kg)");
@@ -556,35 +541,8 @@ fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
-/// Renders parameter controls for the two-spheres object input.
-fn condition_two_spheres(ui: &mut egui::Ui, uis: &mut UiState) {
-    dragvalue_normal(ui, &mut uis.two_spheres.scale, 1e9, "Scale (m)");
-    label_normal(ui, "Sphere 1 Center");
-    dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.x, 1.0, "X");
-    dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.y, 1.0, "Y");
-    dragvalue_normal(ui, &mut uis.two_spheres.sphere1_center.z, 1.0, "Z");
-    dragvalue_normal(
-        ui,
-        &mut uis.two_spheres.sphere1_radius,
-        1e8,
-        "Sphere 1 Radius",
-    );
-    label_normal(ui, "Sphere 2 Center");
-    dragvalue_normal(ui, &mut uis.two_spheres.sphere2_center.x, 1.0, "X");
-    dragvalue_normal(ui, &mut uis.two_spheres.sphere2_center.y, 1.0, "Y");
-    dragvalue_normal(ui, &mut uis.two_spheres.sphere2_center.z, 1.0, "Z");
-    dragvalue_normal(
-        ui,
-        &mut uis.two_spheres.sphere2_radius,
-        1e8,
-        "Sphere 2 Radius",
-    );
-    dragvalue_normal(ui, &mut uis.two_spheres.mass_fixed, 1e20, "Mass Fixed (kg)");
-}
-
 /// Renders parameter controls for the spiral-disk object input.
 fn condition_spiral_disk(ui: &mut egui::Ui, uis: &mut UiState) {
-    dragvalue_normal(ui, &mut uis.spiral_disk.scale, 1e7, "Scale (m)");
     dragvalue_normal(ui, &mut uis.spiral_disk.disk_radius, 1e7, "Disk Radius (m)");
     dragvalue_normal(ui, &mut uis.spiral_disk.mass_fixed, 1e20, "Mass Fixed (kg)");
 }
@@ -634,7 +592,6 @@ fn condition_satellite_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
 
 /// Renders parameter controls for the elliptical-orbit object input.
 fn condition_elliptical_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
-    dragvalue_normal(ui, &mut uis.elliptical_orbit.scale, 1e7, "Scale (m)");
     label_normal(ui, "Central Body");
     dragvalue_normal(
         ui,
@@ -663,22 +620,72 @@ fn condition_elliptical_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
     );
 }
 
-/// Renders particle-count slider with current max-count constraints.
-fn slider_perticle_count(ui: &mut egui::Ui, uis: &mut UiState) {
+const ADD_CENTER_SLIDER_RANGE: std::ops::RangeInclusive<f64> = -10.0..=10.0;
+const ADD_CENTER_SLIDER_STEP: f64 = 0.01;
+
+fn add_center_axis_slider(value: &mut f64) -> Slider<'_> {
+    Slider::new(value, ADD_CENTER_SLIDER_RANGE.clone())
+        .step_by(ADD_CENTER_SLIDER_STEP)
+        .drag_value_speed(ADD_CENTER_SLIDER_STEP)
+}
+
+/// Renders X/Y/Z sliders as base-scale multipliers, converted via Correct.m like other inputs.
+fn slider_add_center(ui: &mut egui::Ui, uis: &mut UiState) {
+    ui.style_mut().spacing.slider_width = 140.0;
+    label_normal(ui, "Add Center");
+    ui.horizontal(|ui| {
+        label_normal(ui, "X");
+        ui.add(add_center_axis_slider(&mut uis.add_center.x));
+    });
+    ui.horizontal(|ui| {
+        label_normal(ui, "Y");
+        ui.add(add_center_axis_slider(&mut uis.add_center.y));
+    });
+    ui.horizontal(|ui| {
+        label_normal(ui, "Z");
+        ui.add(add_center_axis_slider(&mut uis.add_center.z));
+    });
+}
+
+/// Draws add button and flags particle append when clicked.
+fn button_add_particles(ui: &mut egui::Ui, uis: &mut UiState, current_count: u32) {
+    let at_limit = uis.remaining_particle_capacity(current_count) == 0;
+    if at_limit {
+        label_normal(ui, "Particle limit reached");
+    }
+    ui.add_enabled_ui(
+        !at_limit && !uis.is_add_particles_requested && uis.is_add_particles_enabled,
+        |ui| {
+            if button_normal(ui, "Add").clicked() {
+                uis.base_scale = clamp_world_scale(uis.base_scale);
+                uis.object_input = uis.build_object_input();
+                uis.is_add_particles_requested = true;
+            }
+        },
+    );
+    if !uis.is_add_particles_enabled && !at_limit {
+        label_normal(ui, "Reset required");
+    }
+    if uis.is_add_particles_requested {
+        label_normal(ui, "Adding...");
+    }
+}
+
+/// Renders add-particle-count slider capped by remaining particle capacity.
+fn slider_add_particle_count(ui: &mut egui::Ui, uis: &mut UiState, current_count: u32) {
     ui.style_mut().spacing.slider_width = 150.0;
-    label_normal(ui, "Particle Count");
-    let max_particle_count = uis.max_particle_count;
-    ui.add(Slider::new(
-        &mut uis.particle_count,
-        2..=max_particle_count as u32,
-    ));
+    label_normal(ui, "Add Particle Count");
+    let remaining = uis.remaining_particle_capacity(current_count);
+    uis.clamp_add_particle_count_to_capacity(current_count);
+    if let Some(range) = UiState::add_particle_count_range(remaining) {
+        ui.add(Slider::new(&mut uis.add_particle_count, range));
+    }
 }
 
 /// Draws reset button and flags simulation reset when clicked.
 fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
     if button_normal(ui, "Reset").clicked() {
-        uis.is_reset_requested = true;
-        uis.is_resetting = true;
+        uis.request_reset();
     }
 }
 
@@ -756,9 +763,10 @@ fn load_particles(
         );
         return;
     }
-    uis.particle_count = snapshot.particles.len() as u32;
     uis.simulation_type = snapshot.simulation_type;
-    uis.scale = snapshot.scale;
+    let scale = clamp_world_scale(snapshot.scale);
+    uis.scale = scale;
+    uis.apply_external_base_scale(scale);
     uis.frame = 1;
     uis.simulation_time = 0.0;
     uis.is_running = false;
@@ -766,7 +774,20 @@ fn load_particles(
     *need_redraw.write().unwrap() = true;
 }
 
-/// Renders graph-type combo box for Graph3D mode.
+/// Renders particle display mode combo box in the Settings panel.
+fn combobox_particle_display_mode(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Particle Display");
+    let id = ui.make_persistent_id("particle_display_mode_combobox");
+    ComboBox::from_id_salt(id)
+        .selected_text(format!("{}", uis.particle_display_mode))
+        .width(ui.available_width())
+        .show_ui(ui, |ui| {
+            for mode in ParticleDisplayMode::ALL {
+                selectable_value(ui, &mut uis.particle_display_mode, mode);
+            }
+        });
+}
+
 fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Graph Type");
     let id = ui.make_persistent_id("graph_type_combobox");

@@ -5,7 +5,10 @@ use ash::vk;
 use glam::{Mat4, Vec3};
 use gpu_allocator::vulkan::Allocator;
 use std::sync::{Arc, Mutex};
-use vulkanvil::{create_buffer_with_data, create_shader_module, AllocatedBuffer, VulkanBase};
+use vulkanvil::{
+    create_buffer_with_data, create_depth_image, create_shader_module, select_depth_format,
+    AllocatedBuffer, AllocatedImage, VulkanBase,
+};
 
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
 const MOUSE_RIGHT_DRAG_SENS: f32 = 0.001f32;
@@ -14,6 +17,32 @@ const INITIAL_POSITION: Vec3 = Vec3::new(1.6, -1.6, 3.0);
 const INITIAL_TARGET: Vec3 = Vec3::new(0.0, 0.0, 0.0);
 const AXIS_XZ_GRID_EXTENT: f32 = 2.0;
 const AXIS_XZ_GRID_LINE_COUNT: usize = 9;
+const ADD_CENTER_MARKER_EDGE_COUNT: usize = 18;
+const ADD_CENTER_MARKER_VERTICES: usize = ADD_CENTER_MARKER_EDGE_COUNT * 2;
+const ADD_CENTER_X_COLOR: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
+const ADD_CENTER_Y_COLOR: [f32; 4] = [0.2, 1.0, 0.2, 1.0];
+const ADD_CENTER_Z_COLOR: [f32; 4] = [0.3, 0.5, 1.0, 1.0];
+const ADD_CENTER_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+const ADD_CENTER_MARKER_EDGES: [([i8; 3], [i8; 3], [f32; 4]); ADD_CENTER_MARKER_EDGE_COUNT] = [
+    ([0, 0, 0], [1, 0, 0], ADD_CENTER_X_COLOR),
+    ([0, 0, 0], [-1, 0, 0], ADD_CENTER_X_COLOR),
+    ([0, 0, 0], [0, 1, 0], ADD_CENTER_Y_COLOR),
+    ([0, 0, 0], [0, -1, 0], ADD_CENTER_Y_COLOR),
+    ([0, 0, 0], [0, 0, 1], ADD_CENTER_Z_COLOR),
+    ([0, 0, 0], [0, 0, -1], ADD_CENTER_Z_COLOR),
+    ([1, 0, 0], [0, 1, 0], ADD_CENTER_WHITE),
+    ([1, 0, 0], [0, -1, 0], ADD_CENTER_WHITE),
+    ([1, 0, 0], [0, 0, 1], ADD_CENTER_WHITE),
+    ([1, 0, 0], [0, 0, -1], ADD_CENTER_WHITE),
+    ([-1, 0, 0], [0, 1, 0], ADD_CENTER_WHITE),
+    ([-1, 0, 0], [0, -1, 0], ADD_CENTER_WHITE),
+    ([-1, 0, 0], [0, 0, 1], ADD_CENTER_WHITE),
+    ([-1, 0, 0], [0, 0, -1], ADD_CENTER_WHITE),
+    ([0, 1, 0], [0, 0, 1], ADD_CENTER_WHITE),
+    ([0, 1, 0], [0, 0, -1], ADD_CENTER_WHITE),
+    ([0, -1, 0], [0, 0, 1], ADD_CENTER_WHITE),
+    ([0, -1, 0], [0, 0, -1], ADD_CENTER_WHITE),
+];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -50,14 +79,19 @@ pub struct ParticleRenderPipeline {
     framebuffers: Vec<vk::Framebuffer>,
 
     pipeline_axes: vk::Pipeline,
-    pipeline_particles: vk::Pipeline,
+    particle_pipelines: [vk::Pipeline; ParticleDisplayMode::ALL.len()],
     layout_axes: vk::PipelineLayout,
     layout_particles: vk::PipelineLayout,
+    depth_format: vk::Format,
+    depth_image: AllocatedImage,
 
     axes_buffer: AllocatedBuffer,
     axes_vertex_count: u32,
     graph_lines_buffer: Option<AllocatedBuffer>,
     graph_lines_vertex_count: u32,
+    add_center_marker_buffer: Option<AllocatedBuffer>,
+    add_center_marker_vertex_count: u32,
+    last_add_center_marker_key: Option<(glam::DVec3, u64)>,
     particle_buffer: AllocatedBuffer,
     particle_draw_vertex_count: u32,
     retired_buffers: Vec<AllocatedBuffer>,
@@ -71,16 +105,27 @@ impl ParticleRenderPipeline {
         let device = base.device.clone();
         let allocator = Arc::clone(base.allocator.as_ref().unwrap());
 
-        let render_pass = create_render_pass(&device, base.swapchain_format);
+        let depth_format =
+            select_depth_format(&base.instance, base.physical_device);
+        let render_pass = create_render_pass(&device, base.swapchain_format, depth_format);
+        let depth_image = create_depth_image(
+            &device,
+            &allocator,
+            depth_format,
+            base.swapchain_extent,
+            "particle-depth-buffer",
+        );
         let framebuffers = create_framebuffers(
             &device,
             render_pass,
             &base.swapchain_image_views,
+            depth_image.view,
             base.swapchain_extent,
         );
 
         let (layout_axes, pipeline_axes) = create_axes_pipeline(&device, render_pass);
-        let (layout_particles, pipeline_particles) = create_particles_pipeline(&device, render_pass);
+        let (layout_particles, particle_pipelines) =
+            create_particles_pipelines(&device, render_pass);
 
         let (axes_buffer, axes_vertex_count) =
             create_axes_vertices(&device, &allocator);
@@ -95,13 +140,18 @@ impl ParticleRenderPipeline {
             render_pass,
             framebuffers,
             pipeline_axes,
-            pipeline_particles,
+            particle_pipelines,
             layout_axes,
             layout_particles,
+            depth_format,
+            depth_image,
             axes_buffer,
             axes_vertex_count,
             graph_lines_buffer: None,
             graph_lines_vertex_count: 0,
+            add_center_marker_buffer: None,
+            add_center_marker_vertex_count: 0,
+            last_add_center_marker_key: None,
             particle_buffer,
             particle_draw_vertex_count: particle_vertex_count,
             retired_buffers: Vec::new(),
@@ -119,15 +169,24 @@ impl ParticleRenderPipeline {
         self.render_pass
     }
 
-    /// Recreates framebuffers to match current swapchain image views.
+    /// Recreates depth resources and framebuffers to match current swapchain dimensions.
     pub fn recreate_framebuffers(&mut self, base: &VulkanBase) {
         for fb in self.framebuffers.drain(..) {
             unsafe { self.device.destroy_framebuffer(fb, None) };
         }
+        self.depth_image.destroy(&self.device, &self.allocator);
+        self.depth_image = create_depth_image(
+            &self.device,
+            &self.allocator,
+            self.depth_format,
+            base.swapchain_extent,
+            "particle-depth-buffer",
+        );
         self.framebuffers = create_framebuffers(
             &self.device,
             self.render_pass,
             &base.swapchain_image_views,
+            self.depth_image.view,
             base.swapchain_extent,
         );
     }
@@ -143,13 +202,22 @@ impl ParticleRenderPipeline {
         link_point_size_to_scale: bool,
         show_grid: bool,
         app_mode: AppMode,
+        particle_display_mode: ParticleDisplayMode,
     ) {
         self.flush_retired_buffers();
-        let clear_values = [vk::ClearValue {
-            color: vk::ClearColorValue {
-                float32: [0.0, 0.0, 0.0, 1.0],
+        let clear_values = [
+            vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.0, 0.0, 0.0, 1.0],
+                },
             },
-        }];
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            },
+        ];
         let render_pass_info = vk::RenderPassBeginInfo::default()
             .render_pass(self.render_pass)
             .framebuffer(self.framebuffers[framebuffer_index])
@@ -205,24 +273,44 @@ impl ParticleRenderPipeline {
         } else {
             1.0
         };
-        let size_scale = extent.height as f32 * SIZE_RATIO * point_scale_factor;
+        let view_proj_cols = view_proj.to_cols_array_2d();
+        let size_scale = compute_particle_size_scale(
+            extent.height as f32,
+            point_scale_factor,
+            particle_display_mode,
+        );
         let pc = PushConstants {
-            view_proj: view_proj.to_cols_array_2d(),
+            view_proj: view_proj_cols,
             size_scale,
+        };
+
+        let line_pc = AxesPushConstants {
+            view_proj: view_proj_cols,
         };
 
         if app_mode == AppMode::Graph3D {
             if let Some(ref buf) = self.graph_lines_buffer {
-                if self.graph_lines_vertex_count > 0 {
-                    let line_pc = AxesPushConstants {
-                        view_proj: view_proj.to_cols_array_2d(),
-                    };
-                    self.draw_graph_lines(command_buffer, &line_pc, buf.buffer);
-                }
+                self.draw_axes_lines(
+                    command_buffer,
+                    &line_pc,
+                    buf.buffer,
+                    self.graph_lines_vertex_count,
+                );
             }
         }
 
-        self.draw_particles(command_buffer, &pc);
+        self.draw_particles(command_buffer, &pc, particle_display_mode);
+
+        if app_mode == AppMode::Simulation {
+            if let Some(ref buf) = self.add_center_marker_buffer {
+                self.draw_axes_lines(
+                    command_buffer,
+                    &line_pc,
+                    buf.buffer,
+                    self.add_center_marker_vertex_count,
+                );
+            }
+        }
 
         gui.draw(command_buffer, extent);
 
@@ -264,29 +352,82 @@ impl ParticleRenderPipeline {
 
     /// Uploads graph line vertices and rebuilds the line vertex buffer.
     pub fn set_graph_lines(&mut self, vertices: &[([f32; 3], [f32; 4])]) {
-        if let Some(old) = self.graph_lines_buffer.take() {
-            self.retire_buffer(old);
-        }
-        if vertices.is_empty() {
-            self.graph_lines_vertex_count = 0;
-            return;
-        }
-        let verts: Vec<AxesVertex> = vertices
-            .iter()
-            .map(|(p, c)| AxesVertex {
-                position: *p,
-                color: *c,
-            })
-            .collect();
-        let (buf, count) = create_buffer_with_data(
+        let verts = axes_vertices_from_tuples(vertices);
+        let allocator = Arc::clone(&self.allocator);
+        upload_axes_line_buffer(
             &self.device,
-            self.allocator(),
+            &allocator,
+            &mut self.retired_buffers,
+            &mut self.graph_lines_buffer,
+            &mut self.graph_lines_vertex_count,
             &verts,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
             "graph_lines",
         );
-        self.graph_lines_buffer = Some(buf);
-        self.graph_lines_vertex_count = count;
+    }
+
+    /// Uploads add-center preview marker vertices and rebuilds the marker line buffer.
+    pub fn set_add_center_marker(&mut self, vertices: &[([f32; 3], [f32; 4])]) {
+        let verts = axes_vertices_from_tuples(vertices);
+        let allocator = Arc::clone(&self.allocator);
+        upload_axes_line_buffer(
+            &self.device,
+            &allocator,
+            &mut self.retired_buffers,
+            &mut self.add_center_marker_buffer,
+            &mut self.add_center_marker_vertex_count,
+            &verts,
+            "add_center_marker",
+        );
+    }
+
+    /// Rebuilds add-center preview geometry from current UI state when needed.
+    pub fn sync_add_center_marker(&mut self, ui_state: &crate::ui_state::UiState) {
+        use crate::object_input::ObjectInput;
+        use crate::ui_state::AppMode;
+
+        let show_marker = ui_state.app_mode == AppMode::Simulation
+            && ui_state.is_object_input_panel_open
+            && ui_state.show_add_center_preview;
+        if !show_marker {
+            self.add_center_marker_vertex_count = 0;
+            self.last_add_center_marker_key = None;
+            return;
+        }
+
+        let marker_key = (ui_state.add_center, ui_state.base_scale.to_bits());
+        if self.last_add_center_marker_key == Some(marker_key) {
+            return;
+        }
+        self.last_add_center_marker_key = Some(marker_key);
+
+        let (center, half_extent) =
+            ObjectInput::add_center_marker_geometry(ui_state.add_center, ui_state.base_scale);
+        let verts = build_add_center_marker_vertices(center, half_extent);
+        let allocator = Arc::clone(&self.allocator);
+        upload_axes_line_buffer(
+            &self.device,
+            &allocator,
+            &mut self.retired_buffers,
+            &mut self.add_center_marker_buffer,
+            &mut self.add_center_marker_vertex_count,
+            &verts,
+            "add_center_marker",
+        );
+    }
+
+    /// Clears add-center preview geometry and cached sync state.
+    pub fn reset_add_center_marker(&mut self) {
+        let allocator = Arc::clone(&self.allocator);
+        upload_axes_line_buffer(
+            &self.device,
+            &allocator,
+            &mut self.retired_buffers,
+            &mut self.add_center_marker_buffer,
+            &mut self.add_center_marker_vertex_count,
+            &[],
+            "add_center_marker",
+        );
+        self.last_add_center_marker_key = None;
     }
 
     // --- Camera methods ---
@@ -352,24 +493,19 @@ impl ParticleRenderPipeline {
 
     /// Records draw commands for axis and grid line geometry.
     fn draw_axes(&self, cb: vk::CommandBuffer, pc: &AxesPushConstants) {
-        unsafe {
-            self.device
-                .cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, self.pipeline_axes);
-            self.device
-                .cmd_bind_vertex_buffers(cb, 0, &[self.axes_buffer.buffer], &[0]);
-            self.device.cmd_push_constants(
-                cb,
-                self.layout_axes,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                bytemuck::bytes_of(pc),
-            );
-            self.device.cmd_draw(cb, self.axes_vertex_count, 1, 0, 0);
-        }
+        self.draw_axes_lines(cb, pc, self.axes_buffer.buffer, self.axes_vertex_count);
     }
 
-    /// Records draw commands for optional graph line overlay geometry.
-    fn draw_graph_lines(&self, cb: vk::CommandBuffer, pc: &AxesPushConstants, buffer: vk::Buffer) {
+    fn draw_axes_lines(
+        &self,
+        cb: vk::CommandBuffer,
+        pc: &AxesPushConstants,
+        buffer: vk::Buffer,
+        vertex_count: u32,
+    ) {
+        if vertex_count == 0 {
+            return;
+        }
         unsafe {
             self.device
                 .cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, self.pipeline_axes);
@@ -382,22 +518,24 @@ impl ParticleRenderPipeline {
                 0,
                 bytemuck::bytes_of(pc),
             );
-            self.device
-                .cmd_draw(cb, self.graph_lines_vertex_count, 1, 0, 0);
+            self.device.cmd_draw(cb, vertex_count, 1, 0, 0);
         }
     }
 
     /// Records draw commands for particle point geometry.
-    fn draw_particles(&self, cb: vk::CommandBuffer, pc: &PushConstants) {
+    fn draw_particles(
+        &self,
+        cb: vk::CommandBuffer,
+        pc: &PushConstants,
+        particle_display_mode: ParticleDisplayMode,
+    ) {
         if self.particle_draw_vertex_count == 0 {
             return;
         }
+        let pipeline = self.particle_pipelines[particle_display_mode.pipeline_index()];
         unsafe {
-            self.device.cmd_bind_pipeline(
-                cb,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.pipeline_particles,
-            );
+            self.device
+                .cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, pipeline);
             self.device
                 .cmd_bind_vertex_buffers(cb, 0, &[self.particle_buffer.buffer], &[0]);
             self.device.cmd_push_constants(
@@ -455,6 +593,9 @@ impl Drop for ParticleRenderPipeline {
             if let Some(buf) = self.graph_lines_buffer.take() {
                 buf.destroy(&self.device, self.allocator());
             }
+            if let Some(buf) = self.add_center_marker_buffer.take() {
+                buf.destroy(&self.device, self.allocator());
+            }
             self.flush_retired_buffers();
 
             if let Some(alloc) = self.particle_buffer.allocation.take() {
@@ -471,8 +612,11 @@ impl Drop for ParticleRenderPipeline {
             for fb in &self.framebuffers {
                 self.device.destroy_framebuffer(*fb, None);
             }
+            self.depth_image.destroy(&self.device, &self.allocator);
             self.device.destroy_pipeline(self.pipeline_axes, None);
-            self.device.destroy_pipeline(self.pipeline_particles, None);
+            for pipeline in &self.particle_pipelines {
+                self.device.destroy_pipeline(*pipeline, None);
+            }
             self.device.destroy_pipeline_layout(self.layout_axes, None);
             self.device
                 .destroy_pipeline_layout(self.layout_particles, None);
@@ -481,12 +625,122 @@ impl Drop for ParticleRenderPipeline {
     }
 }
 
+/// Builds an octahedron marker with colored axis spokes at the target center.
+pub fn build_add_center_marker(
+    center: [f32; 3],
+    half_extent: f32,
+) -> [([f32; 3], [f32; 4]); ADD_CENTER_MARKER_VERTICES] {
+    let verts = build_add_center_marker_vertices(center, half_extent);
+    std::array::from_fn(|i| (verts[i].position, verts[i].color))
+}
+
+fn add_center_marker_tip(center: [f32; 3], half_extent: f32, tip: [i8; 3]) -> [f32; 3] {
+    [
+        center[0] + half_extent * tip[0] as f32,
+        center[1] + half_extent * tip[1] as f32,
+        center[2] + half_extent * tip[2] as f32,
+    ]
+}
+
+fn build_add_center_marker_vertices(
+    center: [f32; 3],
+    half_extent: f32,
+) -> [AxesVertex; ADD_CENTER_MARKER_VERTICES] {
+    std::array::from_fn(|i| {
+        let edge = &ADD_CENTER_MARKER_EDGES[i / 2];
+        let tip = if i.is_multiple_of(2) { edge.0 } else { edge.1 };
+        AxesVertex {
+            position: add_center_marker_tip(center, half_extent, tip),
+            color: edge.2,
+        }
+    })
+}
+
+fn upload_axes_line_buffer(
+    device: &ash::Device,
+    allocator: &Mutex<Allocator>,
+    retired_buffers: &mut Vec<AllocatedBuffer>,
+    buffer: &mut Option<AllocatedBuffer>,
+    vertex_count: &mut u32,
+    vertices: &[AxesVertex],
+    label: &str,
+) {
+    if vertices.is_empty() {
+        if let Some(old) = buffer.take() {
+            retired_buffers.push(old);
+        }
+        *vertex_count = 0;
+        return;
+    }
+
+    if let Some(buf) = buffer.as_ref() {
+        if write_mapped_axes_vertices(buf, vertices) {
+            *vertex_count = vertices.len() as u32;
+            return;
+        }
+        if let Some(old) = buffer.take() {
+            retired_buffers.push(old);
+        }
+    }
+
+    let (buf, count) = create_buffer_with_data(
+        device,
+        allocator,
+        vertices,
+        vk::BufferUsageFlags::VERTEX_BUFFER,
+        label,
+    );
+    *buffer = Some(buf);
+    *vertex_count = count;
+}
+
+fn axes_vertices_from_tuples(vertices: &[([f32; 3], [f32; 4])]) -> Vec<AxesVertex> {
+    vertices
+        .iter()
+        .map(|(position, color)| AxesVertex {
+            position: *position,
+            color: *color,
+        })
+        .collect()
+}
+
+fn write_mapped_axes_vertices(buffer: &AllocatedBuffer, vertices: &[AxesVertex]) -> bool {
+    let required_bytes = std::mem::size_of_val(vertices) as u64;
+    let Some(alloc) = buffer.allocation.as_ref() else {
+        return false;
+    };
+    if alloc.size() < required_bytes {
+        return false;
+    }
+    let Some(mapped) = alloc.mapped_ptr() else {
+        return false;
+    };
+    let bytes = bytemuck::cast_slice(vertices);
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapped.as_ptr() as *mut u8, bytes.len());
+    }
+    true
+}
+
 // --- Pipeline creation helpers ---
 
-/// Creates a render pass compatible with swapchain color attachments.
-fn create_render_pass(device: &ash::Device, format: vk::Format) -> vk::RenderPass {
-    let attachment = vk::AttachmentDescription::default()
-        .format(format)
+/// Computes perspective-correct point sprite size for the active display mode.
+fn compute_particle_size_scale(
+    framebuffer_height: f32,
+    point_scale_factor: f32,
+    mode: ParticleDisplayMode,
+) -> f32 {
+    framebuffer_height * SIZE_RATIO * point_scale_factor * mode.size_scale_factor()
+}
+
+/// Creates a render pass compatible with swapchain color and depth attachments.
+fn create_render_pass(
+    device: &ash::Device,
+    color_format: vk::Format,
+    depth_format: vk::Format,
+) -> vk::RenderPass {
+    let color = vk::AttachmentDescription::default()
+        .format(color_format)
         .samples(vk::SampleCountFlags::TYPE_1)
         .load_op(vk::AttachmentLoadOp::CLEAR)
         .store_op(vk::AttachmentStoreOp::STORE)
@@ -495,25 +749,49 @@ fn create_render_pass(device: &ash::Device, format: vk::Format) -> vk::RenderPas
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
 
+    let depth = vk::AttachmentDescription::default()
+        .format(depth_format)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
     let color_ref = vk::AttachmentReference {
         attachment: 0,
         layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+    };
+    let depth_ref = vk::AttachmentReference {
+        attachment: 1,
+        layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
     };
     let color_refs = [color_ref];
 
     let subpass = vk::SubpassDescription::default()
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(&color_refs);
+        .color_attachments(&color_refs)
+        .depth_stencil_attachment(&depth_ref);
 
     let dependency = vk::SubpassDependency::default()
         .src_subpass(vk::SUBPASS_EXTERNAL)
         .dst_subpass(0)
-        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+        .src_stage_mask(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+        )
         .src_access_mask(vk::AccessFlags::empty())
-        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
+        .dst_stage_mask(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+        )
+        .dst_access_mask(
+            vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        );
 
-    let attachments = [attachment];
+    let attachments = [color, depth];
     let subpasses = [subpass];
     let dependencies = [dependency];
 
@@ -530,12 +808,13 @@ fn create_framebuffers(
     device: &ash::Device,
     render_pass: vk::RenderPass,
     image_views: &[vk::ImageView],
+    depth_view: vk::ImageView,
     extent: vk::Extent2D,
 ) -> Vec<vk::Framebuffer> {
     image_views
         .iter()
         .map(|&iv| {
-            let attachments = [iv];
+            let attachments = [iv, depth_view];
             let ci = vk::FramebufferCreateInfo::default()
                 .render_pass(render_pass)
                 .attachments(&attachments)
@@ -575,6 +854,7 @@ fn create_graphics_pipeline(
     topology: vk::PrimitiveTopology,
     blend: vk::PipelineColorBlendAttachmentState,
     cull_mode: vk::CullModeFlags,
+    depth_enabled: bool,
 ) -> vk::Pipeline {
     let vs_mod = create_shader_module(device, vs_spv);
     let fs_mod = create_shader_module(device, fs_spv);
@@ -618,6 +898,11 @@ fn create_graphics_pipeline(
     let color_blending =
         vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
 
+    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(depth_enabled)
+        .depth_write_enable(depth_enabled)
+        .depth_compare_op(vk::CompareOp::LESS);
+
     let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
     let dynamic_state =
         vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
@@ -629,6 +914,7 @@ fn create_graphics_pipeline(
         .viewport_state(&viewport_state)
         .rasterization_state(&rasterizer)
         .multisample_state(&multisampling)
+        .depth_stencil_state(&depth_stencil)
         .color_blend_state(&color_blending)
         .dynamic_state(&dynamic_state)
         .layout(layout)
@@ -745,40 +1031,75 @@ fn create_axes_pipeline(
         vk::PrimitiveTopology::LINE_LIST,
         default_blend(),
         vk::CullModeFlags::NONE,
+        false,
     );
     (layout, pipeline)
 }
 
-/// Creates graphics pipeline specialized for particle rendering.
-fn create_particles_pipeline(
+/// Creates one particle pipeline per display mode, sharing layout and vertex shader.
+fn create_particles_pipelines(
     device: &ash::Device,
     render_pass: vk::RenderPass,
-) -> (vk::PipelineLayout, vk::Pipeline) {
+) -> (
+    vk::PipelineLayout,
+    [vk::Pipeline; ParticleDisplayMode::ALL.len()],
+) {
     let layout = create_pipeline_layout(
         device,
         std::mem::size_of::<PushConstants>() as u32,
         vk::ShaderStageFlags::VERTEX,
     );
     let (binding, attrs) = particle_vertex_desc();
-    let pipeline = create_graphics_pipeline(
-        device,
-        render_pass,
-        layout,
-        include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/shaders/particles_vertex.vert.spv"
-        )),
-        include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/shaders/particles_fragment.frag.spv"
-        )),
-        &binding,
-        &attrs,
-        vk::PrimitiveTopology::POINT_LIST,
-        additive_blend(),
-        vk::CullModeFlags::NONE,
-    );
-    (layout, pipeline)
+    let vs_spv = include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/shaders/particles_vertex.vert.spv"
+    ));
+    let mut pipelines = [vk::Pipeline::null(); ParticleDisplayMode::ALL.len()];
+    for mode in ParticleDisplayMode::ALL {
+        let (fs_spv, blend, depth_enabled) = particle_pipeline_spec(mode);
+        pipelines[mode.pipeline_index()] = create_graphics_pipeline(
+            device,
+            render_pass,
+            layout,
+            vs_spv,
+            fs_spv,
+            &binding,
+            &attrs,
+            vk::PrimitiveTopology::POINT_LIST,
+            blend,
+            vk::CullModeFlags::NONE,
+            depth_enabled,
+        );
+    }
+    (layout, pipelines)
+}
+
+/// Returns fragment shader bytes, blend state, and depth usage for a particle mode.
+fn particle_pipeline_spec(
+    mode: ParticleDisplayMode,
+) -> (
+    &'static [u8],
+    vk::PipelineColorBlendAttachmentState,
+    bool,
+) {
+    match mode {
+        ParticleDisplayMode::Glow => (
+            include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/shaders/particles_fragment.frag.spv"
+            )),
+            additive_blend(),
+            false,
+        ),
+        ParticleDisplayMode::Sphere => (
+            include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/shaders/particles_sphere_fragment.frag.spv"
+            )),
+            default_blend(),
+            true,
+        ),
+    }
 }
 
 // --- Initial vertex data ---

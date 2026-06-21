@@ -99,7 +99,7 @@
 
 ## 5. オブジェクト入力（`crates/dual-spacetime-simulator/src/object_input.rs`）
 
-乱数球・立方体、二球、渦巻き円盤、太陽系、衛星軌道、楕円軌道などを `ObjectInput` として定義し、`generate_particles` で `Particle` ベクトルを返します。
+乱数球・立方体、渦巻き円盤、太陽系、衛星軌道、楕円軌道などを `ObjectInput` として定義し、`generate_particles` で `Particle` ベクトルを返します。
 
 ---
 

@@ -19,6 +19,17 @@ pub const MASS_PLUTO: f64 = 1.3025e22;
 pub const SOLAR_SYSTEM_SCALE: f64 = 2.50e12;
 pub const SATELLITE_ORBIT_SCALE: f64 = 12_756e3 * 0.5;
 pub const EARTH_RADIUS: f64 = 6.371e6;
+/// Minimum allowed world scale in meters (0.01 fm; values at or below this are clamped).
+pub const MIN_WORLD_SCALE: f64 = 1e-17;
+
+/// Clamps a world-scale value to a finite positive minimum.
+pub fn clamp_world_scale(scale: f64) -> f64 {
+    if scale.is_finite() && scale > MIN_WORLD_SCALE {
+        scale
+    } else {
+        MIN_WORLD_SCALE
+    }
+}
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum ObjectInput {
@@ -34,26 +45,20 @@ pub enum ObjectInput {
         mass_range: (f64, f64),
         velocity_std: f64,
     },
-    TwoSpheres {
-        scale: f64,
-        sphere1_center: DVec3,
-        sphere1_radius: f64,
-        sphere2_center: DVec3,
-        sphere2_radius: f64,
-        mass_fixed: f64,
-    },
     SpiralDisk {
         scale: f64,
         disk_radius: f64,
         mass_fixed: f64,
     },
     SolarSystem {
+        scale: f64,
         start_year: i32,
         start_month: i32,
         start_day: i32,
         start_hour: i32,
     },
     SatelliteOrbit {
+        scale: f64,
         orbit_altitude_min: f64,
         orbit_altitude_max: f64,
         asteroid_mass: f64,
@@ -75,7 +80,6 @@ impl std::fmt::Display for ObjectInput {
         match self {
             ObjectInput::RandomSphere { .. } => write!(f, "Random Sphere"),
             ObjectInput::RandomCube { .. } => write!(f, "Random Cube"),
-            ObjectInput::TwoSpheres { .. } => write!(f, "Two Spheres"),
             ObjectInput::SpiralDisk { .. } => write!(f, "Spiral Disk"),
             ObjectInput::SolarSystem { .. } => write!(f, "Solar System"),
             ObjectInput::SatelliteOrbit { .. } => write!(f, "Satellite Orbit"),
@@ -84,14 +88,11 @@ impl std::fmt::Display for ObjectInput {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ObjectInputType {
     RandomSphere,
     RandomCube,
-    TwoSpheres,
     SpiralDisk,
-    SolarSystem,
-    SatelliteOrbit,
     EllipticalOrbit,
 }
 
@@ -108,63 +109,61 @@ impl std::fmt::Display for ObjectInputType {
         match self {
             ObjectInputType::RandomSphere => write!(f, "Random Sphere"),
             ObjectInputType::RandomCube => write!(f, "Random Cube"),
-            ObjectInputType::TwoSpheres => write!(f, "Two Spheres"),
             ObjectInputType::SpiralDisk => write!(f, "Spiral Disk"),
-            ObjectInputType::SolarSystem => write!(f, "Solar System"),
-            ObjectInputType::SatelliteOrbit => write!(f, "Satellite Orbit"),
             ObjectInputType::EllipticalOrbit => write!(f, "Elliptical Orbit"),
         }
     }
 }
 
 impl ObjectInputType {
-    /// Expands a condition type into concrete default object-input parameters.
-    pub fn to_object_input(&self) -> ObjectInput {
+    /// All add-type variants in UI display order.
+    pub const ALL: [Self; 4] = [
+        Self::RandomSphere,
+        Self::RandomCube,
+        Self::SpiralDisk,
+        Self::EllipticalOrbit,
+    ];
+
+    /// Returns the recommended world scale for this object-input type.
+    pub fn default_base_scale(self) -> f64 {
+        match self {
+            ObjectInputType::RandomSphere => 1e10,
+            ObjectInputType::RandomCube => 1e10,
+            ObjectInputType::SpiralDisk => 1e7,
+            ObjectInputType::EllipticalOrbit => 1.5e11,
+        }
+    }
+
+    /// Expands a condition type into concrete object-input parameters scaled for `scale`.
+    pub fn to_object_input(self, scale: f64) -> ObjectInput {
+        let scale = clamp_world_scale(scale);
+        let reference = self.default_base_scale();
+        let factor = scale / reference;
+        let factor_cubed = factor * factor * factor;
         match self {
             ObjectInputType::RandomSphere => ObjectInput::RandomSphere {
-                scale: 1e10,
-                radius: 1e10,
-                mass_range: (1e29, 1e31),
-                velocity_std: 1e6,
+                scale,
+                radius: 1e10 * factor,
+                mass_range: (1e29 * factor_cubed, 1e31 * factor_cubed),
+                velocity_std: 1e6 * factor,
             },
             ObjectInputType::RandomCube => ObjectInput::RandomCube {
-                scale: 1e10,
-                cube_size: 2e10,
-                mass_range: (1e29, 1e31),
-                velocity_std: 1e6,
-            },
-            ObjectInputType::TwoSpheres => ObjectInput::TwoSpheres {
-                scale: 1.0,
-                sphere1_center: DVec3::new(-1.0, 0.0, 0.0),
-                sphere1_radius: 0.5,
-                sphere2_center: DVec3::new(1.0, 0.0, 0.0),
-                sphere2_radius: 0.5,
-                mass_fixed: 1e-1,
+                scale,
+                cube_size: 2e10 * factor,
+                mass_range: (1e29 * factor_cubed, 1e31 * factor_cubed),
+                velocity_std: 1e6 * factor,
             },
             ObjectInputType::SpiralDisk => ObjectInput::SpiralDisk {
-                scale: 1e7,
-                disk_radius: 1.5e7,
-                mass_fixed: 1e20,
-            },
-            ObjectInputType::SolarSystem => ObjectInput::SolarSystem {
-                start_year: 2000,
-                start_month: 1,
-                start_day: 1,
-                start_hour: 12,
-            },
-            ObjectInputType::SatelliteOrbit => ObjectInput::SatelliteOrbit {
-                orbit_altitude_min: 300e3,
-                orbit_altitude_max: 800e3,
-                asteroid_mass: 1e24,
-                asteroid_distance: 2e7,
-                asteroid_speed: 3e3,
+                scale,
+                disk_radius: 1.5e7 * factor,
+                mass_fixed: 1e20 * factor_cubed,
             },
             ObjectInputType::EllipticalOrbit => ObjectInput::EllipticalOrbit {
-                scale: 1.5e11,
-                central_mass: 1.989e32,
-                planetary_mass: 5.972e24,
-                planetary_speed: 2.0e5,
-                planetary_distance: 2.0e11,
+                scale,
+                central_mass: 1.989e32 * factor_cubed,
+                planetary_mass: 5.972e24 * factor_cubed,
+                planetary_speed: 2.0e5 * factor,
+                planetary_distance: 2.0e11 * factor,
             },
         }
     }
@@ -254,15 +253,79 @@ fn get_solar_system_fallback_particles(correct: &Correct) -> Vec<Particle> {
 impl ObjectInput {
     /// Returns the canonical world scale associated with this object input.
     pub fn get_scale(&self) -> f64 {
-        match self {
+        clamp_world_scale(match self {
             ObjectInput::RandomSphere { scale, .. } => *scale,
             ObjectInput::RandomCube { scale, .. } => *scale,
-            ObjectInput::TwoSpheres { scale, .. } => *scale,
             ObjectInput::SpiralDisk { scale, .. } => *scale,
-            ObjectInput::SolarSystem { .. } => SOLAR_SYSTEM_SCALE,
-            ObjectInput::SatelliteOrbit { .. } => SATELLITE_ORBIT_SCALE,
+            ObjectInput::SolarSystem { scale, .. } => *scale,
+            ObjectInput::SatelliteOrbit { scale, .. } => *scale,
             ObjectInput::EllipticalOrbit { scale, .. } => *scale,
+        })
+    }
+
+    /// Returns a characteristic world-space size for the current object-input preset.
+    pub fn preview_group_extent(&self) -> f64 {
+        let scale = self.get_scale();
+        let correct = Correct::new(scale);
+        match self {
+            ObjectInput::RandomSphere { radius, .. } => radius * correct.m,
+            ObjectInput::RandomCube { cube_size, .. } => cube_size * 0.5 * correct.m,
+            ObjectInput::SpiralDisk { disk_radius, .. } => disk_radius * correct.m,
+            ObjectInput::SolarSystem { .. } => crate::simulation::AU * correct.m,
+            ObjectInput::SatelliteOrbit { orbit_altitude_max, .. } => {
+                (EARTH_RADIUS + orbit_altitude_max) * correct.m
+            }
+            ObjectInput::EllipticalOrbit {
+                planetary_distance, ..
+            } => planetary_distance * correct.m,
         }
+    }
+
+    /// Interprets add-center slider values; positive Y slider moves center in -Y world direction.
+    pub fn add_center_effective(center: DVec3) -> DVec3 {
+        DVec3::new(center.x, -center.y, center.z)
+    }
+
+    /// Converts add-center slider values into simulation-world coordinates.
+    pub fn add_center_world_position(center: DVec3, base_scale: f64) -> DVec3 {
+        let (scale, m) = Self::add_center_scale_factor(base_scale);
+        Self::add_center_effective(center) * scale * m
+    }
+
+    /// Returns add-center octahedron arm half-length: `(0.15 * base_scale) * Correct.m`.
+    pub fn add_center_marker_half_extent(base_scale: f64) -> f32 {
+        let (scale, m) = Self::add_center_scale_factor(base_scale);
+        (0.15 * scale * m) as f32
+    }
+
+    /// Returns marker center and arm half-length for preview rendering.
+    pub fn add_center_marker_geometry(center: DVec3, base_scale: f64) -> ([f32; 3], f32) {
+        let (scale, m) = Self::add_center_scale_factor(base_scale);
+        let world = Self::add_center_effective(center) * scale * m;
+        (
+            [world.x as f32, world.y as f32, world.z as f32],
+            (0.15 * scale * m) as f32,
+        )
+    }
+
+    fn add_center_scale_factor(base_scale: f64) -> (f64, f64) {
+        let scale = clamp_world_scale(base_scale);
+        (scale, Correct::new(scale).m)
+    }
+
+    /// Generates particles offset so the group is centered at the effective add-center position.
+    pub fn generate_particles_at_center(
+        &self,
+        particle_count: u32,
+        center: DVec3,
+        base_scale: f64,
+    ) -> SimulationNormal {
+        let mut sim = self.generate_particles(particle_count);
+        let offset = Self::add_center_world_position(center, base_scale);
+        for particle in &mut sim.particles {
+            particle.position += offset;
+        }
+        sim
     }
 
     /// Generates particles according to the selected object-input variant and settings.
@@ -357,40 +420,6 @@ impl ObjectInput {
                     .collect();
                 SimulationNormal { particles }
             }
-            ObjectInput::TwoSpheres {
-                scale,
-                sphere1_center,
-                sphere1_radius,
-                sphere2_center,
-                sphere2_radius,
-                mass_fixed,
-            } => {
-                let correct = Correct::new(*scale);
-                let sphere1_center = *sphere1_center * correct.m;
-                let sphere1_radius = *sphere1_radius * correct.m;
-                let sphere2_center = *sphere2_center * correct.m;
-                let sphere2_radius = *sphere2_radius * correct.m;
-                let mass = *mass_fixed * correct.kg;
-                let mut particles = Vec::with_capacity(particle_count as usize);
-                let half = particle_count / 2;
-                for _ in 0..half {
-                    particles.push(Self::random_in_sphere(
-                        sphere1_center,
-                        sphere1_radius,
-                        mass,
-                        &mut rng,
-                    ));
-                }
-                for _ in half..particle_count {
-                    particles.push(Self::random_in_sphere(
-                        sphere2_center,
-                        sphere2_radius,
-                        mass,
-                        &mut rng,
-                    ));
-                }
-                SimulationNormal { particles }
-            }
             ObjectInput::SpiralDisk {
                 scale,
                 disk_radius,
@@ -438,13 +467,13 @@ impl ObjectInput {
                 SimulationNormal { particles }
             }
             ObjectInput::SolarSystem {
+                scale,
                 start_year,
                 start_month,
                 start_day,
                 start_hour,
             } => {
-                let scale = SOLAR_SYSTEM_SCALE;
-                let correct = Correct::new(scale);
+                let correct = Correct::new(*scale);
                 match utils::update_datafiles(None, false) {
                     Ok(_) => {}
                     Err(_) => {
@@ -526,14 +555,14 @@ impl ObjectInput {
                 SimulationNormal { particles }
             }
             ObjectInput::SatelliteOrbit {
+                scale,
                 orbit_altitude_min,
                 orbit_altitude_max,
                 asteroid_mass,
                 asteroid_distance,
                 asteroid_speed,
             } => {
-                let scale = SATELLITE_ORBIT_SCALE;
-                let correct = Correct::new(scale);
+                let correct = Correct::new(*scale);
                 let mut particles = vec![
                     // Earth
                     Particle {
@@ -635,20 +664,6 @@ impl ObjectInput {
         sim
     }
 
-    /// Creates a particle with random position inside a sphere and zero initial velocity.
-    fn random_in_sphere(center: DVec3, radius: f64, mass: f64, rng: &mut impl Rng) -> Particle {
-        Particle {
-            position: Self::position_in_sphere(center, radius, rng),
-            velocity: DVec3 {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            },
-            mass,
-            color: [0.5, 0.5, 0.5, 1.0],
-        }
-    }
-
     /// Samples a uniformly distributed position inside a sphere around the given center.
     fn position_in_sphere(center: DVec3, radius: f64, rng: &mut impl Rng) -> DVec3 {
         let r = radius * rng.random::<f64>().cbrt();
@@ -676,7 +691,7 @@ impl ObjectInput {
 impl Default for ObjectInput {
     /// Creates the default object-input instance from the default type preset.
     fn default() -> Self {
-        ObjectInputType::RandomSphere.to_object_input()
+        ObjectInputType::RandomSphere.to_object_input(1e10)
     }
 }
 
@@ -688,6 +703,7 @@ struct Correct {
 impl Correct {
     /// Builds unit-conversion factors from world scale into simulation units.
     fn new(scale: f64) -> Self {
+        let scale = clamp_world_scale(scale);
         let m = 1.0 / scale; // Scale-corrected length
         let kg = m * m * m; // Scale-corrected mass
         Self { m, kg }

@@ -170,3 +170,41 @@ impl AllocatedImage {
         }
     }
 }
+
+/// Picks the first supported depth format with optimal-tiling depth-stencil support.
+pub fn select_depth_format(instance: &ash::Instance, pd: vk::PhysicalDevice) -> vk::Format {
+    for &fmt in &[
+        vk::Format::D32_SFLOAT,
+        vk::Format::D32_SFLOAT_S8_UINT,
+        vk::Format::D24_UNORM_S8_UINT,
+    ] {
+        let props = unsafe { instance.get_physical_device_format_properties(pd, fmt) };
+        if props
+            .optimal_tiling_features
+            .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
+        {
+            return fmt;
+        }
+    }
+    panic!("No supported depth format found");
+}
+
+/// Creates a depth image suitable for render-pass depth attachments.
+pub fn create_depth_image(
+    device: &ash::Device,
+    allocator: &Mutex<Allocator>,
+    format: vk::Format,
+    extent: vk::Extent2D,
+    name: &str,
+) -> AllocatedImage {
+    AllocatedImage::new(
+        device,
+        allocator,
+        extent.width.max(1),
+        extent.height.max(1),
+        format,
+        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+        vk::ImageAspectFlags::DEPTH,
+        name,
+    )
+}
