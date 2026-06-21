@@ -5,6 +5,12 @@ use dual_spacetime_simulator::ui_state::{
 };
 
 #[test]
+fn particle_display_mode_size_scale_factor() {
+    assert_eq!(ParticleDisplayMode::Glow.size_scale_factor(), 1.0);
+    assert!((ParticleDisplayMode::Sphere.size_scale_factor() - 0.7).abs() < f32::EPSILON);
+}
+
+#[test]
 fn apply_settings_propagates_particle_display_mode() {
     let mut ui = UiState::default();
     let mut s = AppSettings::default();

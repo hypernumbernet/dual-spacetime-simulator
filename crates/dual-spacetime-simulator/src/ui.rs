@@ -774,7 +774,7 @@ fn load_particles(
     *need_redraw.write().unwrap() = true;
 }
 
-/// Renders graph-type combo box for Graph3D mode.
+/// Renders particle display mode combo box in the Settings panel.
 fn combobox_particle_display_mode(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Particle Display");
     let id = ui.make_persistent_id("particle_display_mode_combobox");
@@ -782,8 +782,9 @@ fn combobox_particle_display_mode(ui: &mut egui::Ui, uis: &mut UiState) {
         .selected_text(format!("{}", uis.particle_display_mode))
         .width(ui.available_width())
         .show_ui(ui, |ui| {
-            selectable_value(ui, &mut uis.particle_display_mode, ParticleDisplayMode::Glow);
-            selectable_value(ui, &mut uis.particle_display_mode, ParticleDisplayMode::Sphere);
+            for mode in ParticleDisplayMode::ALL {
+                selectable_value(ui, &mut uis.particle_display_mode, mode);
+            }
         });
 }
 

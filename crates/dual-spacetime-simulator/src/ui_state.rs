@@ -274,11 +274,30 @@ pub enum PendingSnapshotDialog {
     Load,
 }
 
+#[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum ParticleDisplayMode {
     #[default]
-    Glow,
-    Sphere,
+    Glow = 0,
+    Sphere = 1,
+}
+
+impl ParticleDisplayMode {
+    pub const ALL: [Self; 2] = [Self::Glow, Self::Sphere];
+    const SPHERE_SIZE_SCALE: f32 = 0.7;
+
+    /// Returns the particle pipeline slot for this display mode.
+    pub const fn pipeline_index(self) -> usize {
+        self as usize
+    }
+
+    /// Returns the multiplier applied to point sprite size for this mode.
+    pub const fn size_scale_factor(self) -> f32 {
+        match self {
+            Self::Glow => 1.0,
+            Self::Sphere => Self::SPHERE_SIZE_SCALE,
+        }
+    }
 }
 
 impl std::fmt::Display for ParticleDisplayMode {

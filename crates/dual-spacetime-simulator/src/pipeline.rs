@@ -6,13 +6,13 @@ use glam::{Mat4, Vec3};
 use gpu_allocator::vulkan::Allocator;
 use std::sync::{Arc, Mutex};
 use vulkanvil::{
-    create_buffer_with_data, create_shader_module, AllocatedBuffer, AllocatedImage, VulkanBase,
+    create_buffer_with_data, create_depth_image, create_shader_module, select_depth_format,
+    AllocatedBuffer, AllocatedImage, VulkanBase,
 };
 
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
 const MOUSE_RIGHT_DRAG_SENS: f32 = 0.001f32;
 const SIZE_RATIO: f32 = 0.06;
-const SPHERE_SIZE_SCALE: f32 = 0.7;
 const INITIAL_POSITION: Vec3 = Vec3::new(1.6, -1.6, 3.0);
 const INITIAL_TARGET: Vec3 = Vec3::new(0.0, 0.0, 0.0);
 const AXIS_XZ_GRID_EXTENT: f32 = 2.0;
@@ -79,8 +79,7 @@ pub struct ParticleRenderPipeline {
     framebuffers: Vec<vk::Framebuffer>,
 
     pipeline_axes: vk::Pipeline,
-    pipeline_particles_glow: vk::Pipeline,
-    pipeline_particles_sphere: vk::Pipeline,
+    particle_pipelines: [vk::Pipeline; ParticleDisplayMode::ALL.len()],
     layout_axes: vk::PipelineLayout,
     layout_particles: vk::PipelineLayout,
     depth_format: vk::Format,
@@ -114,6 +113,7 @@ impl ParticleRenderPipeline {
             &allocator,
             depth_format,
             base.swapchain_extent,
+            "particle-depth-buffer",
         );
         let framebuffers = create_framebuffers(
             &device,
@@ -124,7 +124,7 @@ impl ParticleRenderPipeline {
         );
 
         let (layout_axes, pipeline_axes) = create_axes_pipeline(&device, render_pass);
-        let (layout_particles, pipeline_particles_glow, pipeline_particles_sphere) =
+        let (layout_particles, particle_pipelines) =
             create_particles_pipelines(&device, render_pass);
 
         let (axes_buffer, axes_vertex_count) =
@@ -140,8 +140,7 @@ impl ParticleRenderPipeline {
             render_pass,
             framebuffers,
             pipeline_axes,
-            pipeline_particles_glow,
-            pipeline_particles_sphere,
+            particle_pipelines,
             layout_axes,
             layout_particles,
             depth_format,
@@ -181,6 +180,7 @@ impl ParticleRenderPipeline {
             &self.allocator,
             self.depth_format,
             base.swapchain_extent,
+            "particle-depth-buffer",
         );
         self.framebuffers = create_framebuffers(
             &self.device,
@@ -273,17 +273,19 @@ impl ParticleRenderPipeline {
         } else {
             1.0
         };
-        let mut size_scale = extent.height as f32 * SIZE_RATIO * point_scale_factor;
-        if particle_display_mode == ParticleDisplayMode::Sphere {
-            size_scale *= SPHERE_SIZE_SCALE;
-        }
+        let view_proj_cols = view_proj.to_cols_array_2d();
+        let size_scale = compute_particle_size_scale(
+            extent.height as f32,
+            point_scale_factor,
+            particle_display_mode,
+        );
         let pc = PushConstants {
-            view_proj: view_proj.to_cols_array_2d(),
+            view_proj: view_proj_cols,
             size_scale,
         };
 
         let line_pc = AxesPushConstants {
-            view_proj: view_proj.to_cols_array_2d(),
+            view_proj: view_proj_cols,
         };
 
         if app_mode == AppMode::Graph3D {
@@ -530,10 +532,7 @@ impl ParticleRenderPipeline {
         if self.particle_draw_vertex_count == 0 {
             return;
         }
-        let pipeline = match particle_display_mode {
-            ParticleDisplayMode::Glow => self.pipeline_particles_glow,
-            ParticleDisplayMode::Sphere => self.pipeline_particles_sphere,
-        };
+        let pipeline = self.particle_pipelines[particle_display_mode.pipeline_index()];
         unsafe {
             self.device
                 .cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, pipeline);
@@ -615,9 +614,9 @@ impl Drop for ParticleRenderPipeline {
             }
             self.depth_image.destroy(&self.device, &self.allocator);
             self.device.destroy_pipeline(self.pipeline_axes, None);
-            self.device.destroy_pipeline(self.pipeline_particles_glow, None);
-            self.device
-                .destroy_pipeline(self.pipeline_particles_sphere, None);
+            for pipeline in &self.particle_pipelines {
+                self.device.destroy_pipeline(*pipeline, None);
+            }
             self.device.destroy_pipeline_layout(self.layout_axes, None);
             self.device
                 .destroy_pipeline_layout(self.layout_particles, None);
@@ -725,41 +724,13 @@ fn write_mapped_axes_vertices(buffer: &AllocatedBuffer, vertices: &[AxesVertex])
 
 // --- Pipeline creation helpers ---
 
-/// Picks the first supported depth format with optimal-tiling depth-stencil support.
-fn select_depth_format(instance: &ash::Instance, pd: vk::PhysicalDevice) -> vk::Format {
-    for &fmt in &[
-        vk::Format::D32_SFLOAT,
-        vk::Format::D32_SFLOAT_S8_UINT,
-        vk::Format::D24_UNORM_S8_UINT,
-    ] {
-        let props = unsafe { instance.get_physical_device_format_properties(pd, fmt) };
-        if props
-            .optimal_tiling_features
-            .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
-        {
-            return fmt;
-        }
-    }
-    panic!("No supported depth format found");
-}
-
-/// Creates a depth image used for sphere-mode particle occlusion.
-fn create_depth_image(
-    device: &ash::Device,
-    allocator: &Mutex<Allocator>,
-    format: vk::Format,
-    extent: vk::Extent2D,
-) -> AllocatedImage {
-    AllocatedImage::new(
-        device,
-        allocator,
-        extent.width.max(1),
-        extent.height.max(1),
-        format,
-        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-        vk::ImageAspectFlags::DEPTH,
-        "particle-depth-buffer",
-    )
+/// Computes perspective-correct point sprite size for the active display mode.
+fn compute_particle_size_scale(
+    framebuffer_height: f32,
+    point_scale_factor: f32,
+    mode: ParticleDisplayMode,
+) -> f32 {
+    framebuffer_height * SIZE_RATIO * point_scale_factor * mode.size_scale_factor()
 }
 
 /// Creates a render pass compatible with swapchain color and depth attachments.
@@ -1065,11 +1036,14 @@ fn create_axes_pipeline(
     (layout, pipeline)
 }
 
-/// Creates glow and sphere particle pipelines sharing one layout and vertex shader.
+/// Creates one particle pipeline per display mode, sharing layout and vertex shader.
 fn create_particles_pipelines(
     device: &ash::Device,
     render_pass: vk::RenderPass,
-) -> (vk::PipelineLayout, vk::Pipeline, vk::Pipeline) {
+) -> (
+    vk::PipelineLayout,
+    [vk::Pipeline; ParticleDisplayMode::ALL.len()],
+) {
     let layout = create_pipeline_layout(
         device,
         std::mem::size_of::<PushConstants>() as u32,
@@ -1080,39 +1054,52 @@ fn create_particles_pipelines(
         env!("OUT_DIR"),
         "/shaders/particles_vertex.vert.spv"
     ));
-    let pipeline_glow = create_graphics_pipeline(
-        device,
-        render_pass,
-        layout,
-        vs_spv,
-        include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/shaders/particles_fragment.frag.spv"
-        )),
-        &binding,
-        &attrs,
-        vk::PrimitiveTopology::POINT_LIST,
-        additive_blend(),
-        vk::CullModeFlags::NONE,
-        false,
-    );
-    let pipeline_sphere = create_graphics_pipeline(
-        device,
-        render_pass,
-        layout,
-        vs_spv,
-        include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/shaders/particles_sphere_fragment.frag.spv"
-        )),
-        &binding,
-        &attrs,
-        vk::PrimitiveTopology::POINT_LIST,
-        default_blend(),
-        vk::CullModeFlags::NONE,
-        true,
-    );
-    (layout, pipeline_glow, pipeline_sphere)
+    let mut pipelines = [vk::Pipeline::null(); ParticleDisplayMode::ALL.len()];
+    for mode in ParticleDisplayMode::ALL {
+        let (fs_spv, blend, depth_enabled) = particle_pipeline_spec(mode);
+        pipelines[mode.pipeline_index()] = create_graphics_pipeline(
+            device,
+            render_pass,
+            layout,
+            vs_spv,
+            fs_spv,
+            &binding,
+            &attrs,
+            vk::PrimitiveTopology::POINT_LIST,
+            blend,
+            vk::CullModeFlags::NONE,
+            depth_enabled,
+        );
+    }
+    (layout, pipelines)
+}
+
+/// Returns fragment shader bytes, blend state, and depth usage for a particle mode.
+fn particle_pipeline_spec(
+    mode: ParticleDisplayMode,
+) -> (
+    &'static [u8],
+    vk::PipelineColorBlendAttachmentState,
+    bool,
+) {
+    match mode {
+        ParticleDisplayMode::Glow => (
+            include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/shaders/particles_fragment.frag.spv"
+            )),
+            additive_blend(),
+            false,
+        ),
+        ParticleDisplayMode::Sphere => (
+            include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/shaders/particles_sphere_fragment.frag.spv"
+            )),
+            default_blend(),
+            true,
+        ),
+    }
 }
 
 // --- Initial vertex data ---
