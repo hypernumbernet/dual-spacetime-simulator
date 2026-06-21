@@ -116,6 +116,14 @@ impl std::fmt::Display for ObjectInputType {
 }
 
 impl ObjectInputType {
+    /// All add-type variants in UI display order.
+    pub const ALL: [Self; 4] = [
+        Self::RandomSphere,
+        Self::RandomCube,
+        Self::SpiralDisk,
+        Self::EllipticalOrbit,
+    ];
+
     /// Returns the recommended world scale for this object-input type.
     pub fn default_base_scale(self) -> f64 {
         match self {
@@ -126,23 +134,9 @@ impl ObjectInputType {
         }
     }
 
-    /// Returns whether panel parameters are derived from the current base scale.
-    pub fn uses_scaled_parameters(self) -> bool {
-        matches!(
-            self,
-            ObjectInputType::RandomSphere
-                | ObjectInputType::RandomCube
-                | ObjectInputType::SpiralDisk
-                | ObjectInputType::EllipticalOrbit
-        )
-    }
-
     /// Expands a condition type into concrete object-input parameters scaled for `scale`.
     pub fn to_object_input(self, scale: f64) -> ObjectInput {
-        self.to_scaled_object_input(clamp_world_scale(scale))
-    }
-
-    fn to_scaled_object_input(self, scale: f64) -> ObjectInput {
+        let scale = clamp_world_scale(scale);
         let reference = self.default_base_scale();
         let factor = scale / reference;
         let factor_cubed = factor * factor * factor;

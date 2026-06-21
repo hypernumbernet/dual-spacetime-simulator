@@ -255,6 +255,9 @@ impl std::fmt::Display for PlacementMode {
 }
 
 impl PlacementMode {
+    /// All placement modes in UI display order.
+    pub const ALL: [Self; 3] = [Self::Manual, Self::SolarSystem, Self::SatelliteOrbit];
+
     /// Returns the recommended base scale for preset placement modes.
     pub fn default_base_scale(self) -> Option<f64> {
         match self {
@@ -491,7 +494,7 @@ impl UiState {
     /// Disables particle append when simulation type changes until the next reset.
     pub fn apply_simulation_type_change(&mut self, previous_type: SimulationType) {
         if self.simulation_type != previous_type {
-            self.is_add_particles_enabled = false;
+            self.disable_add_until_reset();
         }
     }
 
@@ -500,7 +503,7 @@ impl UiState {
         if self.placement_mode == previous_mode {
             return;
         }
-        self.is_add_particles_enabled = false;
+        self.disable_add_until_reset();
         if let Some(scale) = self.placement_mode.default_base_scale() {
             self.set_base_scale(scale);
         }
@@ -511,9 +514,7 @@ impl UiState {
         if self.object_input_type == previous_type {
             return;
         }
-        if self.object_input_type.uses_scaled_parameters() {
-            self.sync_scaled_object_input_parameters();
-        }
+        self.sync_scaled_object_input_parameters();
     }
 
     /// Updates base scale from an external source such as snapshot load.
@@ -528,16 +529,18 @@ impl UiState {
         self.is_add_particles_enabled = true;
     }
 
+    fn disable_add_until_reset(&mut self) {
+        self.is_add_particles_enabled = false;
+    }
+
     fn set_base_scale(&mut self, scale: f64) {
         let previous_scale = self.base_scale;
         self.base_scale = clamp_world_scale(scale);
         if !Self::base_scale_value_changed(previous_scale, self.base_scale) {
             return;
         }
-        self.is_add_particles_enabled = false;
-        if self.object_input_type.uses_scaled_parameters() {
-            self.sync_scaled_object_input_parameters();
-        }
+        self.disable_add_until_reset();
+        self.sync_scaled_object_input_parameters();
     }
 
     fn base_scale_value_changed(previous: f64, next: f64) -> bool {
@@ -595,7 +598,7 @@ impl UiState {
                     planetary_distance,
                 };
             }
-            _ => {}
+            ObjectInput::SolarSystem { .. } | ObjectInput::SatelliteOrbit { .. } => unreachable!(),
         }
     }
 
@@ -603,30 +606,10 @@ impl UiState {
     pub fn build_object_input(&self) -> ObjectInput {
         let scale = self.base_scale;
         match self.object_input_type {
-            ObjectInputType::RandomSphere => ObjectInput::RandomSphere {
-                scale,
-                radius: self.random_sphere.radius,
-                mass_range: self.random_sphere.mass_range,
-                velocity_std: self.random_sphere.velocity_std,
-            },
-            ObjectInputType::RandomCube => ObjectInput::RandomCube {
-                scale,
-                cube_size: self.random_cube.cube_size,
-                mass_range: self.random_cube.mass_range,
-                velocity_std: self.random_cube.velocity_std,
-            },
-            ObjectInputType::SpiralDisk => ObjectInput::SpiralDisk {
-                scale,
-                disk_radius: self.spiral_disk.disk_radius,
-                mass_fixed: self.spiral_disk.mass_fixed,
-            },
-            ObjectInputType::EllipticalOrbit => ObjectInput::EllipticalOrbit {
-                scale,
-                central_mass: self.elliptical_orbit.central_mass,
-                planetary_mass: self.elliptical_orbit.planetary_mass,
-                planetary_speed: self.elliptical_orbit.planetary_speed,
-                planetary_distance: self.elliptical_orbit.planetary_distance,
-            },
+            ObjectInputType::RandomSphere => self.random_sphere.to_object_input(scale),
+            ObjectInputType::RandomCube => self.random_cube.to_object_input(scale),
+            ObjectInputType::SpiralDisk => self.spiral_disk.to_object_input(scale),
+            ObjectInputType::EllipticalOrbit => self.elliptical_orbit.to_object_input(scale),
         }
     }
 
@@ -635,21 +618,27 @@ impl UiState {
         let scale = self.base_scale;
         match self.placement_mode {
             PlacementMode::Manual => self.build_object_input(),
-            PlacementMode::SolarSystem => ObjectInput::SolarSystem {
-                scale,
-                start_year: self.solar_system.start_year,
-                start_month: self.solar_system.start_month,
-                start_day: self.solar_system.start_day,
-                start_hour: self.solar_system.start_hour,
-            },
-            PlacementMode::SatelliteOrbit => ObjectInput::SatelliteOrbit {
-                scale,
-                orbit_altitude_min: self.satellite_orbit.orbit_altitude_min,
-                orbit_altitude_max: self.satellite_orbit.orbit_altitude_max,
-                asteroid_mass: self.satellite_orbit.asteroid_mass,
-                asteroid_distance: self.satellite_orbit.asteroid_distance,
-                asteroid_speed: self.satellite_orbit.asteroid_speed,
-            },
+            PlacementMode::SolarSystem => self.solar_system.to_object_input(scale),
+            PlacementMode::SatelliteOrbit => self.satellite_orbit.to_object_input(scale),
+        }
+    }
+
+    /// Applies time-step defaults after a simulation reset completes.
+    pub fn apply_reset_timing_defaults(&mut self) {
+        if self.placement_mode == PlacementMode::SolarSystem {
+            self.time_per_frame = 10_000.0;
+            self.max_fps = 1000;
+            self.skip = 10;
+        } else if self.placement_mode == PlacementMode::Manual
+            && self.object_input_type == ObjectInputType::EllipticalOrbit
+        {
+            self.time_per_frame = 100_000.0;
+            self.max_fps = 1000;
+            self.skip = 0;
+        } else {
+            self.time_per_frame = 10.0;
+            self.max_fps = 60;
+            self.skip = 0;
         }
     }
 }
@@ -658,6 +647,18 @@ pub struct RandomSphereParameters {
     pub radius: f64,
     pub mass_range: (f64, f64),
     pub velocity_std: f64,
+}
+
+impl RandomSphereParameters {
+    /// Builds a random-sphere object input from panel parameters.
+    pub fn to_object_input(&self, scale: f64) -> ObjectInput {
+        ObjectInput::RandomSphere {
+            scale,
+            radius: self.radius,
+            mass_range: self.mass_range,
+            velocity_std: self.velocity_std,
+        }
+    }
 }
 
 impl Default for RandomSphereParameters {
@@ -687,6 +688,18 @@ pub struct RandomCubeParameters {
     pub velocity_std: f64,
 }
 
+impl RandomCubeParameters {
+    /// Builds a random-cube object input from panel parameters.
+    pub fn to_object_input(&self, scale: f64) -> ObjectInput {
+        ObjectInput::RandomCube {
+            scale,
+            cube_size: self.cube_size,
+            mass_range: self.mass_range,
+            velocity_std: self.velocity_std,
+        }
+    }
+}
+
 impl Default for RandomCubeParameters {
     /// Loads default random-cube parameter values from object-input presets.
     fn default() -> Self {
@@ -711,6 +724,17 @@ impl Default for RandomCubeParameters {
 pub struct SpiralDiskParameters {
     pub disk_radius: f64,
     pub mass_fixed: f64,
+}
+
+impl SpiralDiskParameters {
+    /// Builds a spiral-disk object input from panel parameters.
+    pub fn to_object_input(&self, scale: f64) -> ObjectInput {
+        ObjectInput::SpiralDisk {
+            scale,
+            disk_radius: self.disk_radius,
+            mass_fixed: self.mass_fixed,
+        }
+    }
 }
 
 impl Default for SpiralDiskParameters {
@@ -739,6 +763,19 @@ pub struct SolarSystemParameters {
     pub start_hour: i32,
 }
 
+impl SolarSystemParameters {
+    /// Builds a solar-system object input from panel parameters.
+    pub fn to_object_input(&self, scale: f64) -> ObjectInput {
+        ObjectInput::SolarSystem {
+            scale,
+            start_year: self.start_year,
+            start_month: self.start_month,
+            start_day: self.start_day,
+            start_hour: self.start_hour,
+        }
+    }
+}
+
 impl Default for SolarSystemParameters {
     /// Loads default solar-system start-time values.
     fn default() -> Self {
@@ -759,6 +796,20 @@ pub struct SatelliteOrbitParameters {
     pub asteroid_speed: f64,
 }
 
+impl SatelliteOrbitParameters {
+    /// Builds a satellite-orbit object input from panel parameters.
+    pub fn to_object_input(&self, scale: f64) -> ObjectInput {
+        ObjectInput::SatelliteOrbit {
+            scale,
+            orbit_altitude_min: self.orbit_altitude_min,
+            orbit_altitude_max: self.orbit_altitude_max,
+            asteroid_mass: self.asteroid_mass,
+            asteroid_distance: self.asteroid_distance,
+            asteroid_speed: self.asteroid_speed,
+        }
+    }
+}
+
 impl Default for SatelliteOrbitParameters {
     /// Loads default satellite-orbit parameter values.
     fn default() -> Self {
@@ -777,6 +828,19 @@ pub struct EllipticalOrbitParameters {
     pub planetary_mass: f64,
     pub planetary_speed: f64,
     pub planetary_distance: f64,
+}
+
+impl EllipticalOrbitParameters {
+    /// Builds an elliptical-orbit object input from panel parameters.
+    pub fn to_object_input(&self, scale: f64) -> ObjectInput {
+        ObjectInput::EllipticalOrbit {
+            scale,
+            central_mass: self.central_mass,
+            planetary_mass: self.planetary_mass,
+            planetary_speed: self.planetary_speed,
+            planetary_distance: self.planetary_distance,
+        }
+    }
 }
 
 impl Default for EllipticalOrbitParameters {

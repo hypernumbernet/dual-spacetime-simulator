@@ -17,25 +17,12 @@ fn clamp_world_scale_rejects_non_positive_values() {
 
 #[test]
 fn get_scale_positive_for_all_variants() {
-    for ty in [
-        ObjectInputType::RandomSphere,
-        ObjectInputType::RandomCube,
-        ObjectInputType::SpiralDisk,
-        ObjectInputType::EllipticalOrbit,
-    ] {
+    for ty in ObjectInputType::ALL {
         let scale = ty.default_base_scale();
         let ic = ty.to_object_input(scale);
         assert!(ic.get_scale() > 0.0, "{ty}");
         assert_eq!(ic.get_scale(), scale, "{ty}");
     }
-}
-
-#[test]
-fn uses_scaled_parameters_matches_expected_types() {
-    assert!(ObjectInputType::RandomSphere.uses_scaled_parameters());
-    assert!(ObjectInputType::RandomCube.uses_scaled_parameters());
-    assert!(ObjectInputType::SpiralDisk.uses_scaled_parameters());
-    assert!(ObjectInputType::EllipticalOrbit.uses_scaled_parameters());
 }
 
 #[test]

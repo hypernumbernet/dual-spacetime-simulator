@@ -1,3 +1,4 @@
+use dual_spacetime_simulator::object_input::ObjectInputType;
 use dual_spacetime_simulator::settings::AppSettings;
 use dual_spacetime_simulator::ui_state::{AppMode, PlacementMode, SimulationType, UiState};
 
@@ -55,6 +56,29 @@ fn simulation_type_unchanged_keeps_add_enabled() {
     let mut ui = UiState::default();
     ui.apply_simulation_type_change(SimulationType::Normal);
     assert!(ui.is_add_particles_enabled);
+}
+
+#[test]
+fn reset_timing_defaults_follow_placement_and_add_type() {
+    let mut ui = UiState::default();
+    ui.placement_mode = PlacementMode::SolarSystem;
+    ui.apply_reset_timing_defaults();
+    assert_eq!(ui.time_per_frame, 10_000.0);
+    assert_eq!(ui.max_fps, 1000);
+    assert_eq!(ui.skip, 10);
+
+    ui.placement_mode = PlacementMode::Manual;
+    ui.object_input_type = ObjectInputType::EllipticalOrbit;
+    ui.apply_reset_timing_defaults();
+    assert_eq!(ui.time_per_frame, 100_000.0);
+    assert_eq!(ui.max_fps, 1000);
+    assert_eq!(ui.skip, 0);
+
+    ui.object_input_type = ObjectInputType::RandomSphere;
+    ui.apply_reset_timing_defaults();
+    assert_eq!(ui.time_per_frame, 10.0);
+    assert_eq!(ui.max_fps, 60);
+    assert_eq!(ui.skip, 0);
 }
 
 #[test]
