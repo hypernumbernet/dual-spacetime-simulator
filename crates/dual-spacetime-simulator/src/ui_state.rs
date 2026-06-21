@@ -749,6 +749,11 @@ impl UiState {
         }
     }
 
+    /// Returns whether reset should repopulate particles for the current placement mode.
+    pub fn reset_repopulates_particles(&self) -> bool {
+        !matches!(self.placement_mode, PlacementMode::Manual)
+    }
+
     /// Builds object input for simulation reset from the current placement mode.
     pub fn build_reset_object_input(&self) -> ObjectInput {
         let scale = self.base_scale;

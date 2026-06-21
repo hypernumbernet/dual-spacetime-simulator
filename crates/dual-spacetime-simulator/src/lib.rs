@@ -156,12 +156,23 @@ pub(crate) fn spawn_simulation_worker(
                     let add_center = ui_state.add_center;
                     let max_particle_count = ui_state.max_particle_count;
                     let uses_gpu = ui_state.uses_gpu_simulation();
+                    let reset_repopulates = ui_state.reset_repopulates_particles();
+                    let reset_object_input = ui_state.build_reset_object_input();
                     drop(ui_state);
                     if is_reset_requested {
-                        simulation_manager
-                            .read()
-                            .unwrap()
-                            .clear(simulation_type, scale);
+                        if reset_repopulates {
+                            simulation_manager.read().unwrap().reset(
+                                reset_object_input,
+                                simulation_type,
+                                add_particle_count,
+                                base_scale,
+                            );
+                        } else {
+                            simulation_manager
+                                .read()
+                                .unwrap()
+                                .clear(simulation_type, scale);
+                        }
                         let mut ui_state = ui_state_clone.write().unwrap();
                         ui_state.frame = 1;
                         ui_state.simulation_time = 0.0;

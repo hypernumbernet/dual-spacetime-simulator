@@ -194,3 +194,42 @@ fn request_reset_stops_running_simulation() {
     assert!(!ui.is_running);
     assert!(ui.is_reset_requested);
 }
+
+#[test]
+fn reset_repopulates_particles_by_placement_mode() {
+    let mut ui = UiState::default();
+    assert!(!ui.reset_repopulates_particles());
+
+    ui.placement_mode = PlacementMode::SolarSystem;
+    assert!(ui.reset_repopulates_particles());
+
+    ui.placement_mode = PlacementMode::SatelliteOrbit;
+    assert!(ui.reset_repopulates_particles());
+}
+
+#[test]
+fn preset_placement_reset_repopulates_particles() {
+    use dual_spacetime_simulator::simulation::SimulationManager;
+
+    let mut ui = UiState::default();
+    ui.placement_mode = PlacementMode::SolarSystem;
+    let object_input = ui.build_reset_object_input();
+    let mgr = SimulationManager::new();
+    mgr.reset(
+        object_input,
+        ui.simulation_type,
+        ui.add_particle_count,
+        ui.base_scale,
+    );
+    assert!(UiState::can_start_simulation(mgr.particle_count()));
+
+    ui.placement_mode = PlacementMode::SatelliteOrbit;
+    let object_input = ui.build_reset_object_input();
+    mgr.reset(
+        object_input,
+        ui.simulation_type,
+        ui.add_particle_count,
+        ui.base_scale,
+    );
+    assert_eq!(mgr.particle_count(), ui.add_particle_count + 1);
+}
