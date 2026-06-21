@@ -168,9 +168,12 @@ impl GpuParticleSimulation {
         self.write_display_points(positions, colors);
     }
 
-    /// Records compute dispatches that advance one Normal simulation step on the GPU.
-    pub fn dispatch(&self, command_buffer: vk::CommandBuffer, delta_seconds: f64) {
-        if self.particle_count == 0 {
+    /// Records compute dispatches that advance `steps` Normal simulation steps on the GPU.
+    ///
+    /// Each step runs phase 0 (position integration) then phase 1 (velocity update),
+    /// keeping the GPU step count in lockstep with the simulation frame counter.
+    pub fn dispatch(&self, command_buffer: vk::CommandBuffer, delta_seconds: f64, steps: u32) {
+        if self.particle_count == 0 || steps == 0 {
             return;
         }
 
@@ -198,25 +201,35 @@ impl GpuParticleSimulation {
                 &[],
             );
 
-            self.dispatch_phase(command_buffer, workgroups, step);
-            shader_rw_barrier(
-                &self.device,
-                command_buffer,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-            );
+            for i in 0..steps {
+                self.dispatch_phase(command_buffer, workgroups, step);
+                shader_rw_barrier(
+                    &self.device,
+                    command_buffer,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                );
 
-            self.dispatch_phase(
-                command_buffer,
-                workgroups,
-                ComputePushConstants { phase: 1, ..step },
-            );
-            shader_rw_barrier(
-                &self.device,
-                command_buffer,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::VERTEX_SHADER,
-            );
+                self.dispatch_phase(
+                    command_buffer,
+                    workgroups,
+                    ComputePushConstants { phase: 1, ..step },
+                );
+
+                // Between steps the next dispatch reads the buffer in COMPUTE again;
+                // only the final step hands the data off to the vertex stage.
+                let dst_stage = if i + 1 == steps {
+                    vk::PipelineStageFlags::VERTEX_SHADER
+                } else {
+                    vk::PipelineStageFlags::COMPUTE_SHADER
+                };
+                shader_rw_barrier(
+                    &self.device,
+                    command_buffer,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    dst_stage,
+                );
+            }
         }
     }
 

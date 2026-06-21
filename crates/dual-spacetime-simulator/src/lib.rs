@@ -23,7 +23,7 @@ use crate::ui::{draw_ui, process_pending_snapshot_dialog};
 use crate::ui_state::{AppMode, DragOwner, UiState};
 use ash::vk;
 use vulkanvil::VulkanBase;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -57,7 +57,7 @@ pub fn run() -> Result<(), EventLoopError> {
         Arc::clone(&app.simulation_manager),
         Arc::clone(&app.need_redraw),
         Arc::clone(&app.skip_redraw),
-        Arc::clone(&app.gpu_advance_pending),
+        Arc::clone(&app.gpu_advance_steps),
         Arc::clone(&app.gpu_upload_pending),
     );
     event_loop.run_app(&mut app)
@@ -69,7 +69,7 @@ pub fn spawn_simulation_worker(
     simulation_manager: Arc<RwLock<SimulationManager>>,
     need_redraw: Arc<RwLock<bool>>,
     skip_redraw: Arc<RwLock<u32>>,
-    gpu_advance_pending: Arc<AtomicBool>,
+    gpu_advance_steps: Arc<AtomicU32>,
     gpu_upload_pending: Arc<AtomicBool>,
 ) {
     let thread_pool = rayon::ThreadPoolBuilder::new()
@@ -107,6 +107,7 @@ pub fn spawn_simulation_worker(
                         ui_state.simulation_time = 0.0;
                         ui_state.is_reset_requested = false;
                         drop(ui_state);
+                        gpu_advance_steps.store(0, Ordering::Release);
                         gpu_upload_pending.store(true, Ordering::Release);
                         need_redraw.write().unwrap().clone_from(&true);
                         skip_redraw.write().unwrap().clone_from(&skip);
@@ -124,6 +125,7 @@ pub fn spawn_simulation_worker(
                     let mut ui_state = ui_state_clone.write().unwrap();
                     ui_state.is_add_particles_requested = false;
                     drop(ui_state);
+                    gpu_advance_steps.store(0, Ordering::Release);
                     gpu_upload_pending.store(true, Ordering::Release);
                     need_redraw.write().unwrap().clone_from(&true);
                     skip_redraw.write().unwrap().clone_from(&skip);
@@ -165,7 +167,7 @@ pub fn spawn_simulation_worker(
                 continue;
             }
             if uses_gpu {
-                gpu_advance_pending.store(true, Ordering::Release);
+                gpu_advance_steps.fetch_add(1, Ordering::Release);
             } else {
                 thread_pool.install(|| {
                     simulation_manager.read().unwrap().advance(time_per_frame);
@@ -204,7 +206,7 @@ pub struct App {
     simulation_manager: Arc<RwLock<SimulationManager>>,
     need_redraw: Arc<RwLock<bool>>,
     skip_redraw: Arc<RwLock<u32>>,
-    gpu_advance_pending: Arc<AtomicBool>,
+    gpu_advance_steps: Arc<AtomicU32>,
     gpu_upload_pending: Arc<AtomicBool>,
     mouse_left_down: bool,
     mouse_right_down: bool,
@@ -259,7 +261,7 @@ impl Default for App {
             simulation_manager: Arc::new(RwLock::new(SimulationManager::default())),
             need_redraw: Arc::new(RwLock::new(true)),
             skip_redraw: Arc::new(RwLock::new(0)),
-            gpu_advance_pending: Arc::new(AtomicBool::new(false)),
+            gpu_advance_steps: Arc::new(AtomicU32::new(0)),
             gpu_upload_pending: Arc::new(AtomicBool::new(true)),
             mouse_left_down: false,
             mouse_right_down: false,
@@ -335,6 +337,7 @@ impl ApplicationHandler for App {
             scale,
         );
         self.skip_redraw.write().unwrap().clone_from(&ui_state.skip);
+        self.gpu_advance_steps.store(0, Ordering::Release);
     }
 
     /// Handles window, input, rendering, and camera events for each platform event.
@@ -440,8 +443,13 @@ impl ApplicationHandler for App {
                 let time_per_frame = ui_state.time_per_frame;
                 drop(ui_state);
 
-                if uses_gpu && self.gpu_advance_pending.swap(false, Ordering::AcqRel) {
-                    pipeline.record_gpu_advance(cb, time_per_frame);
+                let pending_steps = if uses_gpu {
+                    self.gpu_advance_steps.swap(0, Ordering::AcqRel)
+                } else {
+                    0
+                };
+                if pending_steps > 0 {
+                    pipeline.record_gpu_advance(cb, time_per_frame, pending_steps);
                 }
 
                 pipeline.render(

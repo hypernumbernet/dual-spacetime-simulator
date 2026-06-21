@@ -175,10 +175,15 @@ impl ParticleRenderPipeline {
         self.use_gpu_sim
     }
 
-    /// Records one GPU simulation step before rendering when GPU mode is active.
-    pub fn record_gpu_advance(&self, command_buffer: vk::CommandBuffer, delta_seconds: f64) {
+    /// Records `steps` GPU simulation steps before rendering when GPU mode is active.
+    pub fn record_gpu_advance(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        delta_seconds: f64,
+        steps: u32,
+    ) {
         if self.use_gpu_sim {
-            self.gpu_sim.dispatch(command_buffer, delta_seconds);
+            self.gpu_sim.dispatch(command_buffer, delta_seconds, steps);
         }
     }
 
