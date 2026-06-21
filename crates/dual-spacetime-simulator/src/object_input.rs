@@ -220,14 +220,14 @@ pub fn build_solar_system_particles(
         match jplephem::barycentric_state(body, &time) {
             Ok((position, velocity)) => {
                 let pos_dvec3 = DVec3 {
-                    x: position.x,
-                    y: position.y,
-                    z: position.z,
+                    x: position.x(),
+                    y: position.y(),
+                    z: position.z(),
                 };
                 let vel_dvec3 = DVec3 {
-                    x: velocity.x,
-                    y: velocity.y,
-                    z: velocity.z,
+                    x: velocity.x(),
+                    y: velocity.y(),
+                    z: velocity.z(),
                 };
                 particles.push(Particle {
                     position: pos_dvec3 * correct.m,

@@ -3,13 +3,18 @@ use serde_json::Value;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const BASE_URL: &str = "https://storage.googleapis.com/astrokit-astro-data";
 const FILES_REFRESH_URL: &str =
     "https://storage.googleapis.com/astrokit-astro-data/files_refresh.json";
 const HTTP_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const COPY_BUFFER_SIZE: usize = 8192;
+const DATA_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const LAST_REFRESH_FILENAME: &str = ".last_data_refresh";
+const EOP_FILENAME: &str = "EOP-All.csv";
+const SW_FILENAME: &str = "SW-All.csv";
+const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum UpdateDataError {
@@ -24,6 +29,91 @@ impl std::fmt::Display for UpdateDataError {
             Self::Other(message) => write!(f, "{message}"),
         }
     }
+}
+
+fn is_jplephem_filename(name: &str) -> bool {
+    if !(name.starts_with("linux_p") || name.starts_with("lnxp")) {
+        return false;
+    }
+    let Some(ext) = name.rsplit('.').next() else {
+        return false;
+    };
+    ext.len() == 3 && ext.starts_with('4') && ext.chars().all(|c| c.is_ascii_digit())
+}
+
+fn has_jplephem_data(downloaddir: &Path) -> bool {
+    if let Ok(filename) = std::env::var("SATKIT_JPLEPHEM_FILE") {
+        let path = PathBuf::from(&filename);
+        let resolved = if path.is_absolute() || filename.contains(std::path::MAIN_SEPARATOR) {
+            path
+        } else {
+            downloaddir.join(filename)
+        };
+        return resolved.is_file();
+    }
+
+    let Ok(entries) = std::fs::read_dir(downloaddir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry.path().is_file()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(is_jplephem_filename)
+    })
+}
+
+fn has_refresh_data(downloaddir: &Path) -> bool {
+    downloaddir.join(EOP_FILENAME).is_file() && downloaddir.join(SW_FILENAME).is_file()
+}
+
+fn is_refresh_due(downloaddir: &Path) -> bool {
+    read_last_refresh(downloaddir)
+        .and_then(|last_refresh| last_refresh.elapsed().ok())
+        .is_some_and(|elapsed| elapsed >= DATA_REFRESH_INTERVAL)
+}
+
+fn last_refresh_path(downloaddir: &Path) -> PathBuf {
+    downloaddir.join(LAST_REFRESH_FILENAME)
+}
+
+fn read_last_refresh(downloaddir: &Path) -> Option<SystemTime> {
+    let content = std::fs::read_to_string(last_refresh_path(downloaddir)).ok()?;
+    let seconds = content.trim().parse::<u64>().ok()?;
+    Some(UNIX_EPOCH + Duration::from_secs(seconds))
+}
+
+fn write_last_refresh(downloaddir: &Path) -> Result<(), UpdateDataError> {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| UpdateDataError::Other(err.to_string()))?
+        .as_secs();
+    std::fs::write(last_refresh_path(downloaddir), seconds.to_string())
+        .map_err(|err| UpdateDataError::Other(err.to_string()))
+}
+
+fn should_skip_refresh(downloaddir: &Path) -> bool {
+    if !has_jplephem_data(downloaddir) {
+        return false;
+    }
+    match read_last_refresh(downloaddir) {
+        Some(last_refresh) => last_refresh
+            .elapsed()
+            .is_ok_and(|elapsed| elapsed < DATA_REFRESH_INTERVAL),
+        None => has_refresh_data(downloaddir),
+    }
+}
+
+fn format_cached_data_log(downloaddir: &Path) -> String {
+    let Some(last_refresh) = read_last_refresh(downloaddir) else {
+        return "Using cached satkit data".to_string();
+    };
+    let Ok(elapsed) = last_refresh.elapsed() else {
+        return "Using cached satkit data".to_string();
+    };
+    let days = elapsed.as_secs() / SECONDS_PER_DAY;
+    format!("Using cached satkit data (last updated {days} days ago)")
 }
 
 fn check_abort(abort: &AtomicBool) -> Result<(), UpdateDataError> {
@@ -195,6 +285,7 @@ fn download_datadir(
 fn download_from_url_json(
     json_url: &str,
     basedir: &Path,
+    overwrite_if_exists: bool,
     log: &impl Fn(&str),
     abort: &AtomicBool,
 ) -> Result<(), UpdateDataError> {
@@ -207,7 +298,7 @@ fn download_from_url_json(
         for entry in entries {
             check_abort(abort)?;
             if let Value::String(url) = entry {
-                download_file(&url, basedir, true, log, abort)?;
+                download_file(&url, basedir, overwrite_if_exists, log, abort)?;
             } else {
                 return Err(UpdateDataError::Other(
                     "invalid refresh json entry".into(),
@@ -242,6 +333,14 @@ pub fn update_datafiles_with_log(
         ));
     }
 
+    if should_skip_refresh(&downloaddir) {
+        log(&format_cached_data_log(&downloaddir));
+        if read_last_refresh(&downloaddir).is_none() {
+            write_last_refresh(&downloaddir)?;
+        }
+        return Ok(());
+    }
+
     log(&format!(
         "Downloading data files to {}",
         downloaddir.to_str().unwrap_or("<unknown>")
@@ -256,12 +355,35 @@ pub fn update_datafiles_with_log(
 
     log("Now downloading files that are regularly updated:");
     log("  Space Weather & Earth Orientation Parameters");
-    download_from_url_json(FILES_REFRESH_URL, &downloaddir, log, abort)
+    let force_refresh = is_refresh_due(&downloaddir);
+    download_from_url_json(FILES_REFRESH_URL, &downloaddir, force_refresh, log, abort)?;
+    write_last_refresh(&downloaddir)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_data_dir(test_name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "dual-spacetime-simulator-solar-system-data-{test_name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp data dir");
+        dir
+    }
+
+    fn write_refresh_timestamp(downloaddir: &Path, at: SystemTime) {
+        let seconds = at
+            .duration_since(UNIX_EPOCH)
+            .expect("timestamp before unix epoch")
+            .as_secs();
+        fs::write(last_refresh_path(downloaddir), seconds.to_string())
+            .expect("write refresh timestamp");
+    }
 
     #[test]
     fn update_data_error_display_and_equality() {
@@ -280,5 +402,119 @@ mod tests {
 
         abort.store(false, Ordering::Release);
         assert_eq!(check_abort(&abort), Ok(()));
+    }
+
+    #[test]
+    fn is_jplephem_filename_matches_de4xx_layout() {
+        assert!(is_jplephem_filename("linux_p1550p2650.440"));
+        assert!(is_jplephem_filename("lnxp1550p2650.421"));
+        assert!(!is_jplephem_filename("EOP-All.csv"));
+        assert!(!is_jplephem_filename("linux_p1550p2650.440.bak"));
+    }
+
+    #[test]
+    fn has_jplephem_data_detects_local_ephemeris_file() {
+        let dir = temp_data_dir("has-jplephem-data");
+        assert!(!has_jplephem_data(&dir));
+
+        fs::write(dir.join("linux_p1550p2650.440"), b"stub").expect("write ephemeris stub");
+        assert!(has_jplephem_data(&dir));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_and_write_last_refresh_round_trip() {
+        let dir = temp_data_dir("refresh-round-trip");
+        let at = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+
+        write_refresh_timestamp(&dir, at);
+        assert_eq!(read_last_refresh(&dir), Some(at));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn should_skip_refresh_when_data_is_recent() {
+        let dir = temp_data_dir("skip-recent");
+        fs::write(dir.join("linux_p1550p2650.440"), b"stub").expect("write ephemeris stub");
+        write_refresh_timestamp(&dir, SystemTime::now());
+
+        assert!(should_skip_refresh(&dir));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn should_not_skip_refresh_when_data_is_stale() {
+        let dir = temp_data_dir("skip-stale");
+        fs::write(dir.join("linux_p1550p2650.440"), b"stub").expect("write ephemeris stub");
+        write_refresh_timestamp(
+            &dir,
+            SystemTime::now() - DATA_REFRESH_INTERVAL - Duration::from_secs(1),
+        );
+
+        assert!(!should_skip_refresh(&dir));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn should_not_skip_refresh_when_ephemeris_file_is_missing() {
+        let dir = temp_data_dir("skip-missing-ephemeris");
+        write_refresh_timestamp(&dir, SystemTime::now());
+
+        assert!(!should_skip_refresh(&dir));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn has_refresh_data_detects_eop_and_sw_files() {
+        let dir = temp_data_dir("has-refresh-data");
+        assert!(!has_refresh_data(&dir));
+
+        fs::write(dir.join(EOP_FILENAME), b"eop").expect("write eop stub");
+        assert!(!has_refresh_data(&dir));
+
+        fs::write(dir.join(SW_FILENAME), b"sw").expect("write sw stub");
+        assert!(has_refresh_data(&dir));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn should_skip_refresh_when_timestamp_is_missing_but_refresh_files_exist() {
+        let dir = temp_data_dir("skip-missing-timestamp-with-refresh");
+        fs::write(dir.join("linux_p1550p2650.440"), b"stub").expect("write ephemeris stub");
+        fs::write(dir.join(EOP_FILENAME), b"eop").expect("write eop stub");
+        fs::write(dir.join(SW_FILENAME), b"sw").expect("write sw stub");
+
+        assert!(should_skip_refresh(&dir));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn should_not_skip_refresh_when_timestamp_and_refresh_files_are_missing() {
+        let dir = temp_data_dir("skip-missing-timestamp");
+        fs::write(dir.join("linux_p1550p2650.440"), b"stub").expect("write ephemeris stub");
+
+        assert!(!should_skip_refresh(&dir));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn is_refresh_due_when_timestamp_is_older_than_interval() {
+        let dir = temp_data_dir("refresh-due");
+        write_refresh_timestamp(
+            &dir,
+            SystemTime::now() - DATA_REFRESH_INTERVAL - Duration::from_secs(1),
+        );
+
+        assert!(is_refresh_due(&dir));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
