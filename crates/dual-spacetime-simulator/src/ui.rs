@@ -809,16 +809,20 @@ fn load_particles(
 
 /// Renders particle display mode combo box in the Settings panel.
 fn combobox_particle_display_mode(ui: &mut egui::Ui, uis: &mut UiState) {
-    label_normal(ui, "Particle Display");
-    let id = ui.make_persistent_id("particle_display_mode_combobox");
-    ComboBox::from_id_salt(id)
-        .selected_text(format!("{}", uis.particle_display_mode))
-        .width(ui.available_width())
-        .show_ui(ui, |ui| {
-            for mode in ParticleDisplayMode::ALL {
-                selectable_value(ui, &mut uis.particle_display_mode, mode);
-            }
+    ui.horizontal(|ui| {
+        label_normal(ui, "Particle Display");
+        let id = ui.make_persistent_id("particle_display_mode_combobox");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ComboBox::from_id_salt(id)
+                .selected_text(format!("{}", uis.particle_display_mode))
+                .width(90.0)
+                .show_ui(ui, |ui| {
+                    for mode in ParticleDisplayMode::ALL {
+                        selectable_value(ui, &mut uis.particle_display_mode, mode);
+                    }
+                });
         });
+    });
 }
 
 fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {
