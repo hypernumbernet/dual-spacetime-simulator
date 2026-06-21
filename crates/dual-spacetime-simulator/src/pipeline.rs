@@ -200,6 +200,25 @@ impl ParticleRenderPipeline {
         self.gpu_sim.readback_to_cpu()
     }
 
+    /// Appends particles while keeping the simulated positions of existing ones.
+    ///
+    /// In GPU mode the CPU `SimulationManager` holds existing particles at their
+    /// initial positions, so a plain re-upload resets them. This reads the current
+    /// GPU positions back and overlays them onto the leading entries of
+    /// `all_particles` (existing + newly appended) before re-uploading the buffer.
+    pub fn add_particles_preserving_simulated(&mut self, all_particles: &[Particle]) {
+        unsafe {
+            if let Err(err) = self.device.device_wait_idle() {
+                eprintln!("add_particles_preserving_simulated device_wait_idle failed: {err:?}");
+            }
+        }
+        let simulated = self.gpu_sim.readback_to_cpu();
+        let mut combined = all_particles.to_vec();
+        let preserved = simulated.len().min(combined.len());
+        combined[..preserved].copy_from_slice(&simulated[..preserved]);
+        self.gpu_sim.upload_from_cpu(&combined);
+    }
+
     /// Returns shared allocator used for dynamic GPU buffer management.
     fn allocator(&self) -> &Mutex<Allocator> {
         &self.allocator
