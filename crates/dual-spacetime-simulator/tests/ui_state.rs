@@ -209,10 +209,17 @@ fn reset_repopulates_particles_by_placement_mode() {
 
 #[test]
 fn preset_placement_reset_repopulates_particles() {
+    use dual_spacetime_simulator::object_input::ObjectInput;
     use dual_spacetime_simulator::simulation::SimulationManager;
 
     let mut ui = UiState::default();
     ui.placement_mode = PlacementMode::SolarSystem;
+    assert!(matches!(
+        ui.build_reset_object_input(),
+        ObjectInput::SolarSystem { .. }
+    ));
+
+    ui.placement_mode = PlacementMode::SatelliteOrbit;
     let object_input = ui.build_reset_object_input();
     let mgr = SimulationManager::new();
     mgr.reset(
@@ -221,15 +228,43 @@ fn preset_placement_reset_repopulates_particles() {
         ui.add_particle_count,
         ui.base_scale,
     );
-    assert!(UiState::can_start_simulation(mgr.particle_count()));
-
-    ui.placement_mode = PlacementMode::SatelliteOrbit;
-    let object_input = ui.build_reset_object_input();
-    mgr.reset(
-        object_input,
-        ui.simulation_type,
-        ui.add_particle_count,
-        ui.base_scale,
-    );
     assert_eq!(mgr.particle_count(), ui.add_particle_count + 1);
+}
+
+#[test]
+fn solar_system_reset_opens_log_panel() {
+    let mut ui = UiState::default();
+    ui.placement_mode = PlacementMode::SolarSystem;
+    ui.request_reset();
+    assert!(ui.reset_log.is_open);
+    assert!(ui.reset_log.in_progress);
+    assert!(!ui.reset_abort_requested());
+}
+
+#[test]
+fn manual_reset_does_not_open_log_panel() {
+    let mut ui = UiState::default();
+    ui.placement_mode = PlacementMode::Manual;
+    ui.request_reset();
+    assert!(!ui.reset_log.is_open);
+    assert!(!ui.reset_log.in_progress);
+}
+
+#[test]
+fn request_reset_abort_sets_flag() {
+    let ui = UiState::default();
+    ui.request_reset_abort();
+    assert!(ui.reset_abort_requested());
+}
+
+#[test]
+fn close_reset_log_panel_requires_idle_state() {
+    let mut ui = UiState::default();
+    ui.open_solar_system_reset_log();
+    ui.close_reset_log_panel();
+    assert!(ui.reset_log.is_open);
+
+    ui.finish_reset_log();
+    ui.close_reset_log_panel();
+    assert!(!ui.reset_log.is_open);
 }

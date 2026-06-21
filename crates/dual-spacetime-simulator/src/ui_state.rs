@@ -5,6 +5,8 @@ use crate::object_input::{
 use crate::settings::AppSettings;
 use crate::simulation::{AU, LY, MPC, PC};
 use glam::DVec3;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 pub const BASE_SCALE_DRAG_SPEED: f64 = 0.01;
@@ -303,6 +305,25 @@ pub enum PendingSnapshotDialog {
     Load,
 }
 
+/// Log panel state for Solar System reset (ephemeris data download progress).
+pub struct ResetLogPanelState {
+    pub is_open: bool,
+    pub lines: Vec<String>,
+    pub in_progress: bool,
+    pub abort_requested: Arc<AtomicBool>,
+}
+
+impl Default for ResetLogPanelState {
+    fn default() -> Self {
+        Self {
+            is_open: false,
+            lines: Vec::new(),
+            in_progress: false,
+            abort_requested: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum ParticleDisplayMode {
@@ -415,6 +436,7 @@ pub struct UiState {
     pub graph_sample_count: u32,
     pub graph_radius: f64,
     pub graph_velocity_scale: f64,
+    pub reset_log: ResetLogPanelState,
 }
 
 impl Default for UiState {
@@ -475,6 +497,7 @@ impl Default for UiState {
             graph_sample_count: 1000,
             graph_radius: 1.0,
             graph_velocity_scale: 1.0,
+            reset_log: ResetLogPanelState::default(),
         }
     }
 }
@@ -643,6 +666,48 @@ impl UiState {
         requested
     }
 
+    /// Opens the Solar System reset log panel and clears prior log lines.
+    pub fn open_solar_system_reset_log(&mut self) {
+        self.reset_log.is_open = true;
+        self.reset_log.lines.clear();
+        self.reset_log.in_progress = true;
+        self.reset_log
+            .abort_requested
+            .store(false, Ordering::Release);
+    }
+
+    /// Appends a line to the reset log panel and mirrors it to stdout.
+    pub fn append_reset_log(&mut self, line: &str) {
+        self.reset_log.lines.push(line.to_string());
+        println!("{}", line);
+    }
+
+    /// Requests cooperative abort of an in-progress Solar System reset.
+    pub fn request_reset_abort(&self) {
+        self.reset_log
+            .abort_requested
+            .store(true, Ordering::Release);
+    }
+
+    /// Closes the reset log panel when processing has finished.
+    pub fn close_reset_log_panel(&mut self) {
+        if !self.reset_log.in_progress {
+            self.reset_log.is_open = false;
+        }
+    }
+
+    /// Marks the reset log panel as finished (enables Close, disables Abort).
+    pub fn finish_reset_log(&mut self) {
+        self.reset_log.in_progress = false;
+    }
+
+    /// Returns whether a Solar System reset abort was requested.
+    pub fn reset_abort_requested(&self) -> bool {
+        self.reset_log
+            .abort_requested
+            .load(Ordering::Acquire)
+    }
+
     /// Flags a simulation reset and re-enables particle append.
     pub fn request_reset(&mut self) {
         self.commit_active_computing_unit();
@@ -650,6 +715,9 @@ impl UiState {
         self.is_reset_requested = true;
         self.is_resetting = true;
         self.is_add_particles_enabled = true;
+        if self.placement_mode == PlacementMode::SolarSystem {
+            self.open_solar_system_reset_log();
+        }
     }
 
     fn commit_active_computing_unit(&mut self) {

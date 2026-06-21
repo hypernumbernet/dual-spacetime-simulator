@@ -689,6 +689,7 @@ dependencies = [
  "satkit",
  "serde",
  "serde_json",
+ "ureq",
  "vulkanvil",
  "winit",
  "zip",

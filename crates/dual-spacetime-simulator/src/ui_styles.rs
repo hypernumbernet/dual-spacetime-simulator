@@ -266,3 +266,30 @@ pub fn button_row_pair(ui: &mut Ui, left: &str, right: &str) -> (Response, Respo
     })
     .inner
 }
+
+/// Draws Close and Abort buttons side by side for the reset log panel.
+pub fn button_row_close_abort(
+    ui: &mut Ui,
+    close_enabled: bool,
+    abort_enabled: bool,
+) -> (Response, Response) {
+    let total_width = ui.available_width();
+    let spacing = ui.spacing().item_spacing.x;
+    let half_width = (total_width - spacing) * 0.5;
+    let button_height = panel_button_height(ui);
+    ui.horizontal(|ui| {
+        ui.set_max_width(total_width);
+        let close = ui.add_enabled_ui(close_enabled, |ui| {
+            ui.add_sized(vec2(half_width, button_height), Button::new("Close"))
+        });
+        let abort = ui.add_enabled_ui(abort_enabled, |ui| {
+            ui.add_sized(
+                vec2(half_width, button_height),
+                Button::new(RichText::new("Abort").color(Color32::WHITE))
+                    .fill(Color32::from_rgb(140, 45, 45)),
+            )
+        });
+        (close.inner, abort.inner)
+    })
+    .inner
+}

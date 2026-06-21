@@ -10,17 +10,18 @@ pub mod particle_snapshot;
 pub mod pipeline;
 pub mod settings;
 pub mod simulation;
+pub mod solar_system_data;
 pub mod ui;
 pub mod ui_state;
 pub mod ui_styles;
 
-use crate::object_input::ObjectInput;
+use crate::object_input::{build_solar_system_particles, ObjectInput, SolarSystemBuildError};
 use crate::integration::Gui;
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
 use crate::ui::{draw_ui, process_pending_snapshot_dialog};
-use crate::ui_state::{AppMode, DragOwner, UiState};
+use crate::ui_state::{AppMode, DragOwner, PlacementMode, UiState};
 use ash::vk;
 use vulkanvil::VulkanBase;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -158,27 +159,85 @@ pub(crate) fn spawn_simulation_worker(
                     let uses_gpu = ui_state.uses_gpu_simulation();
                     let reset_repopulates = ui_state.reset_repopulates_particles();
                     let reset_object_input = ui_state.build_reset_object_input();
+                    let placement_mode = ui_state.placement_mode;
+                    let reset_log_abort = Arc::clone(&ui_state.reset_log.abort_requested);
                     drop(ui_state);
                     if is_reset_requested {
-                        if reset_repopulates {
+                        let mut reset_applied = false;
+                        if reset_repopulates && placement_mode == PlacementMode::SolarSystem {
+                            if let ObjectInput::SolarSystem {
+                                scale,
+                                start_year,
+                                start_month,
+                                start_day,
+                                start_hour,
+                            } = reset_object_input
+                            {
+                                let ui_state_for_log = Arc::clone(&ui_state_clone);
+                                let need_redraw_for_log = Arc::clone(&need_redraw);
+                                let log = move |line: &str| {
+                                    {
+                                        let mut ui_state = ui_state_for_log.write().unwrap();
+                                        ui_state.append_reset_log(line);
+                                    }
+                                    need_redraw_for_log.write().unwrap().clone_from(&true);
+                                };
+                                match build_solar_system_particles(
+                                    scale,
+                                    start_year,
+                                    start_month,
+                                    start_day,
+                                    start_hour,
+                                    &log,
+                                    reset_log_abort.as_ref(),
+                                ) {
+                                    Ok(particles) => {
+                                        simulation_manager.read().unwrap().reset_from_particles(
+                                            particles,
+                                            simulation_type,
+                                            base_scale,
+                                        );
+                                        reset_applied = true;
+                                    }
+                                    Err(SolarSystemBuildError::Aborted) => {
+                                        let mut ui_state = ui_state_clone.write().unwrap();
+                                        ui_state.append_reset_log("Aborted.");
+                                        ui_state.finish_reset_log();
+                                        ui_state.is_reset_requested = false;
+                                        drop(ui_state);
+                                        need_redraw.write().unwrap().clone_from(&true);
+                                        continue;
+                                    }
+                                }
+                            }
+                        } else if reset_repopulates {
                             simulation_manager.read().unwrap().reset(
                                 reset_object_input,
                                 simulation_type,
                                 add_particle_count,
                                 base_scale,
                             );
+                            reset_applied = true;
                         } else {
                             simulation_manager
                                 .read()
                                 .unwrap()
                                 .clear(simulation_type, scale);
+                            reset_applied = true;
                         }
                         let mut ui_state = ui_state_clone.write().unwrap();
-                        ui_state.frame = 1;
-                        ui_state.simulation_time = 0.0;
+                        if reset_applied {
+                            ui_state.frame = 1;
+                            ui_state.simulation_time = 0.0;
+                        }
                         ui_state.is_reset_requested = false;
+                        if placement_mode == PlacementMode::SolarSystem {
+                            ui_state.finish_reset_log();
+                        }
                         drop(ui_state);
-                        gpu_particle_sync.request_full_upload();
+                        if reset_applied {
+                            gpu_particle_sync.request_full_upload();
+                        }
                         need_redraw.write().unwrap().clone_from(&true);
                         skip_redraw.write().unwrap().clone_from(&skip);
                         continue;

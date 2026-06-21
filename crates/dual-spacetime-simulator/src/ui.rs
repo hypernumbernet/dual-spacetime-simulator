@@ -379,6 +379,46 @@ pub fn draw_ui(
             });
     }
 
+    if uis.reset_log.is_open {
+        let in_progress = uis.reset_log.in_progress;
+        let log_lines = uis.reset_log.lines.clone();
+        egui::Window::new("Solar System Reset")
+            .resizable(true)
+            .collapsible(true)
+            .default_size([480.0, 320.0])
+            .show(ctx, |ui| {
+                ui.set_min_width(320.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("reset_log_scroll")
+                    .max_height(240.0)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        for line in &log_lines {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(line).monospace().size(12.0),
+                                )
+                                .selectable(true),
+                            );
+                        }
+                        ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                    });
+                ui.separator();
+                let (close, abort) =
+                    button_row_close_abort(ui, !in_progress, in_progress);
+                if close.clicked() {
+                    uis.close_reset_log_panel();
+                }
+                if abort.clicked() {
+                    uis.request_reset_abort();
+                    if uis.reset_log.in_progress {
+                        uis.append_reset_log("Abort requested...");
+                    }
+                }
+            });
+    }
+
 }
 
 /// Formats simulation time into a compact signed human-readable duration string.

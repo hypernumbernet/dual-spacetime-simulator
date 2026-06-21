@@ -311,6 +311,21 @@ impl SimulationManager {
         *state_guard = new_state;
     }
 
+    /// Replaces current simulation state with pre-built particles.
+    pub fn reset_from_particles(
+        &self,
+        particles: Vec<Particle>,
+        simulation_type: SimulationType,
+        scale: f64,
+    ) {
+        let particles = match simulation_type {
+            SimulationType::LorentzTransformation => Self::convert_to_lorentz(particles, scale),
+            _ => particles,
+        };
+        let mut state_guard = self.state.write().unwrap();
+        *state_guard = Self::state_from_particles(simulation_type, particles, scale);
+    }
+
     /// Clears all particles while preserving simulation type and scale settings.
     pub fn clear(&self, simulation_type: SimulationType, scale: f64) {
         let new_state = Self::state_from_particles(simulation_type, vec![], scale);
