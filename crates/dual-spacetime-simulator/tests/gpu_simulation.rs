@@ -22,3 +22,12 @@ fn gpu_particle_roundtrip_preserves_values() {
     assert!((particle.mass - restored.mass).abs() < 1e-3);
     assert_eq!(particle.color, restored.color);
 }
+
+#[test]
+fn gpu_particle_from_display_sets_position_and_color_only() {
+    let gpu = GpuParticle::from_display([1.0, 2.0, 3.0], [0.2, 0.4, 0.6, 1.0]);
+    assert_eq!(gpu.position[..3], [1.0, 2.0, 3.0]);
+    assert_eq!(gpu.velocity, [0.0; 4]);
+    assert_eq!(gpu.attrs, [0.0; 4]);
+    assert_eq!(gpu.color, [0.2, 0.4, 0.6, 1.0]);
+}

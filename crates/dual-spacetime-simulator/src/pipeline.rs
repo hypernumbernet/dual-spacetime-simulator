@@ -352,23 +352,9 @@ impl ParticleRenderPipeline {
         }
     }
 
-    /// Uploads particle point data into the GPU storage buffer.
+    /// Uploads display-only particle points into the shared GPU storage buffer.
     pub fn set_particles(&mut self, positions: &[[f32; 3]], colors: &[[f32; 4]]) {
-        let particles: Vec<Particle> = positions
-            .iter()
-            .zip(colors.iter())
-            .map(|(position, color)| Particle {
-                position: glam::DVec3::new(
-                    position[0] as f64,
-                    position[1] as f64,
-                    position[2] as f64,
-                ),
-                velocity: glam::DVec3::ZERO,
-                mass: 0.0,
-                color: *color,
-            })
-            .collect();
-        self.upload_particles(&particles);
+        self.gpu_sim.upload_display_points(positions, colors);
     }
 
     /// Uploads graph line vertices and rebuilds the line vertex buffer.

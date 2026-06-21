@@ -1,12 +1,12 @@
 use crate::simulation::{Particle, G, EPSILON};
 use ash::vk;
-use bytemuck::Zeroable;
 use glam::DVec3;
 use gpu_allocator::vulkan::Allocator;
 use std::sync::{Arc, Mutex};
 use vulkanvil::{create_shader_module, AllocatedBuffer};
 
 const WORKGROUP_SIZE: u32 = 64;
+const EPSILON_F32: f32 = EPSILON as f32;
 
 /// GPU particle layout: four 16-byte vec4 slots (64 bytes total).
 /// Must match GLSL `Particle` in compute and vertex shaders exactly under std430.
@@ -38,6 +38,15 @@ impl GpuParticle {
             ],
             attrs: [particle.mass as f32, 0.0, 0.0, 0.0],
             color: particle.color,
+        }
+    }
+
+    pub fn from_display(position: [f32; 3], color: [f32; 4]) -> Self {
+        Self {
+            position: [position[0], position[1], position[2], 0.0],
+            velocity: [0.0; 4],
+            attrs: [0.0; 4],
+            color,
         }
     }
 
@@ -78,6 +87,7 @@ pub struct GpuParticleSimulation {
     compute_pipeline: vk::Pipeline,
     compute_layout: vk::PipelineLayout,
     particle_count: u32,
+    buffer_capacity: usize,
 }
 
 impl GpuParticleSimulation {
@@ -93,12 +103,11 @@ impl GpuParticleSimulation {
         let compute_pipeline = create_compute_pipeline(&device, compute_layout);
         let descriptor_pool = create_descriptor_pool(&device);
         let particle_count = particles.len() as u32;
-        let gpu_particles: Vec<GpuParticle> =
-            particles.iter().map(GpuParticle::from_cpu).collect();
+        let buffer_capacity = particles.len().max(1);
         let particle_buffer = create_particle_storage_buffer(
             &device,
             &allocator,
-            &gpu_particles,
+            buffer_capacity,
             "gpu_particle_ssbo",
         );
         let descriptor_set =
@@ -107,10 +116,10 @@ impl GpuParticleSimulation {
             &device,
             descriptor_set,
             particle_buffer.buffer,
-            particle_buffer_size(gpu_particles.len()),
+            particle_buffer_size(buffer_capacity),
         );
 
-        Self {
+        let sim = Self {
             device,
             allocator,
             particle_buffer,
@@ -119,7 +128,12 @@ impl GpuParticleSimulation {
             compute_pipeline,
             compute_layout,
             particle_count,
+            buffer_capacity,
+        };
+        if !particles.is_empty() {
+            sim.write_cpu_particles(particles);
         }
+        sim
     }
 
     pub fn particle_count(&self) -> u32 {
@@ -130,30 +144,28 @@ impl GpuParticleSimulation {
         self.descriptor_set
     }
 
-    /// Uploads CPU particle data into the GPU storage buffer.
+    /// Uploads CPU simulation particles into the mapped SSBO.
     pub fn upload_from_cpu(&mut self, particles: &[Particle]) {
-        let gpu_particles: Vec<GpuParticle> =
-            particles.iter().map(GpuParticle::from_cpu).collect();
-        let count = gpu_particles.len().max(1);
         self.particle_count = particles.len() as u32;
+        if particles.is_empty() {
+            return;
+        }
+        self.ensure_buffer_capacity(particles.len());
+        self.write_cpu_particles(particles);
+    }
 
-        let alloc = Arc::clone(&self.allocator);
-        let old = std::mem::replace(
-            &mut self.particle_buffer,
-            create_particle_storage_buffer(
-                &self.device,
-                &alloc,
-                &gpu_particles,
-                "gpu_particle_ssbo",
-            ),
-        );
-        old.destroy(&self.device, &alloc);
-        update_particle_descriptor(
-            &self.device,
-            self.descriptor_set,
-            self.particle_buffer.buffer,
-            particle_buffer_size(count),
-        );
+    /// Uploads display-only point data (Graph3D and similar viewers).
+    pub fn upload_display_points(
+        &mut self,
+        positions: &[[f32; 3]],
+        colors: &[[f32; 4]],
+    ) {
+        self.particle_count = positions.len() as u32;
+        if positions.is_empty() {
+            return;
+        }
+        self.ensure_buffer_capacity(positions.len());
+        self.write_display_points(positions, colors);
     }
 
     /// Records compute dispatches that advance one Normal simulation step on the GPU.
@@ -162,8 +174,13 @@ impl GpuParticleSimulation {
             return;
         }
 
-        let gravity_dt = (G * delta_seconds) as f32;
-        let delta = delta_seconds as f32;
+        let step = ComputePushConstants {
+            particle_count: self.particle_count,
+            delta_seconds: delta_seconds as f32,
+            gravity_dt: (G * delta_seconds) as f32,
+            epsilon: EPSILON_F32,
+            phase: 0,
+        };
         let workgroups = (self.particle_count + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
 
         unsafe {
@@ -181,64 +198,24 @@ impl GpuParticleSimulation {
                 &[],
             );
 
-            let advance_pc = ComputePushConstants {
-                particle_count: self.particle_count,
-                delta_seconds: delta,
-                gravity_dt,
-                epsilon: EPSILON as f32,
-                phase: 0,
-            };
-            self.device.cmd_push_constants(
-                command_buffer,
-                self.compute_layout,
-                vk::ShaderStageFlags::COMPUTE,
-                0,
-                bytemuck::bytes_of(&advance_pc),
-            );
-            self.device
-                .cmd_dispatch(command_buffer, workgroups, 1, 1);
-
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ);
-            self.device.cmd_pipeline_barrier(
+            self.dispatch_phase(command_buffer, workgroups, step);
+            shader_rw_barrier(
+                &self.device,
                 command_buffer,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                &[barrier],
-                &[],
-                &[],
             );
 
-            let velocity_pc = ComputePushConstants {
-                particle_count: self.particle_count,
-                delta_seconds: delta,
-                gravity_dt,
-                epsilon: EPSILON as f32,
-                phase: 1,
-            };
-            self.device.cmd_push_constants(
+            self.dispatch_phase(
                 command_buffer,
-                self.compute_layout,
-                vk::ShaderStageFlags::COMPUTE,
-                0,
-                bytemuck::bytes_of(&velocity_pc),
+                workgroups,
+                ComputePushConstants { phase: 1, ..step },
             );
-            self.device
-                .cmd_dispatch(command_buffer, workgroups, 1, 1);
-
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ);
-            self.device.cmd_pipeline_barrier(
+            shader_rw_barrier(
+                &self.device,
                 command_buffer,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::PipelineStageFlags::VERTEX_SHADER,
-                vk::DependencyFlags::empty(),
-                &[barrier],
-                &[],
-                &[],
             );
         }
     }
@@ -246,6 +223,63 @@ impl GpuParticleSimulation {
     /// Copies GPU particle data back to CPU for snapshot export.
     pub fn readback_to_cpu(&self) -> Vec<Particle> {
         read_mapped_particles(&self.particle_buffer, self.particle_count as usize)
+    }
+
+    fn ensure_buffer_capacity(&mut self, count: usize) {
+        if count <= self.buffer_capacity {
+            return;
+        }
+        let capacity = count.max(1);
+        let alloc = Arc::clone(&self.allocator);
+        let old = std::mem::replace(
+            &mut self.particle_buffer,
+            create_particle_storage_buffer(&self.device, &alloc, capacity, "gpu_particle_ssbo"),
+        );
+        old.destroy(&self.device, &alloc);
+        self.buffer_capacity = capacity;
+        update_particle_descriptor(
+            &self.device,
+            self.descriptor_set,
+            self.particle_buffer.buffer,
+            particle_buffer_size(capacity),
+        );
+    }
+
+    fn write_cpu_particles(&self, particles: &[Particle]) {
+        let Some(dst) = mapped_particle_slice_mut(&self.particle_buffer, particles.len()) else {
+            return;
+        };
+        for (slot, particle) in dst.iter_mut().zip(particles) {
+            *slot = GpuParticle::from_cpu(particle);
+        }
+    }
+
+    fn write_display_points(&self, positions: &[[f32; 3]], colors: &[[f32; 4]]) {
+        let Some(dst) = mapped_particle_slice_mut(&self.particle_buffer, positions.len()) else {
+            return;
+        };
+        for (slot, (position, color)) in dst.iter_mut().zip(positions.iter().zip(colors)) {
+            *slot = GpuParticle::from_display(*position, *color);
+        }
+    }
+
+    unsafe fn dispatch_phase(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        workgroups: u32,
+        push: ComputePushConstants,
+    ) {
+        unsafe {
+            self.device.cmd_push_constants(
+                command_buffer,
+                self.compute_layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                bytemuck::bytes_of(&push),
+            );
+            self.device
+                .cmd_dispatch(command_buffer, workgroups, 1, 1);
+        }
     }
 }
 
@@ -277,54 +311,68 @@ fn particle_buffer_size(count: usize) -> u64 {
 fn create_particle_storage_buffer(
     device: &ash::Device,
     allocator: &Arc<Mutex<Allocator>>,
-    particles: &[GpuParticle],
+    capacity: usize,
     name: &str,
 ) -> AllocatedBuffer {
-    let data = if particles.is_empty() {
-        vec![GpuParticle::zeroed()]
-    } else {
-        particles.to_vec()
-    };
-    let buf = AllocatedBuffer::new(
+    AllocatedBuffer::new(
         device,
         allocator,
-        particle_buffer_size(data.len()),
+        particle_buffer_size(capacity),
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
         gpu_allocator::MemoryLocation::CpuToGpu,
         name,
-    );
-    write_buffer_data(&buf, &data);
-    buf
+    )
 }
 
-fn write_buffer_data<T: bytemuck::Pod>(buffer: &AllocatedBuffer, data: &[T]) {
-    if data.is_empty() {
-        return;
+fn mapped_particle_slice_mut(
+    buffer: &AllocatedBuffer,
+    count: usize,
+) -> Option<&mut [GpuParticle]> {
+    if count == 0 {
+        return Some(&mut []);
     }
-    if let Some(ref alloc) = buffer.allocation
-        && let Some(mapped) = alloc.mapped_ptr()
-    {
-        let bytes = bytemuck::cast_slice(data);
-        unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapped.as_ptr() as *mut u8, bytes.len());
-        }
-    }
+    let alloc = buffer.allocation.as_ref()?;
+    let mapped = alloc.mapped_ptr()?;
+    Some(unsafe {
+        std::slice::from_raw_parts_mut(mapped.as_ptr() as *mut GpuParticle, count)
+    })
 }
 
 fn read_mapped_particles(buffer: &AllocatedBuffer, count: usize) -> Vec<Particle> {
     if count == 0 {
         return Vec::new();
     }
-    let Some(ref alloc) = buffer.allocation else {
+    let Some(alloc) = buffer.allocation.as_ref() else {
         return Vec::new();
     };
     let Some(mapped) = alloc.mapped_ptr() else {
         return Vec::new();
     };
-    let gpu_particles: &[GpuParticle] = unsafe {
-        std::slice::from_raw_parts(mapped.as_ptr() as *const GpuParticle, count)
-    };
+    let gpu_particles: &[GpuParticle] =
+        unsafe { std::slice::from_raw_parts(mapped.as_ptr() as *const GpuParticle, count) };
     gpu_particles.iter().copied().map(GpuParticle::to_cpu).collect()
+}
+
+unsafe fn shader_rw_barrier(
+    device: &ash::Device,
+    command_buffer: vk::CommandBuffer,
+    src_stage: vk::PipelineStageFlags,
+    dst_stage: vk::PipelineStageFlags,
+) {
+    unsafe {
+        let barrier = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ);
+        device.cmd_pipeline_barrier(
+            command_buffer,
+            src_stage,
+            dst_stage,
+            vk::DependencyFlags::empty(),
+            &[barrier],
+            &[],
+            &[],
+        );
+    }
 }
 
 /// Creates the shared descriptor set layout for particle SSBO access.
@@ -370,12 +418,12 @@ fn create_compute_pipeline(
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(module)
         .name(entry);
-    let stages = [stage];
     let ci = vk::ComputePipelineCreateInfo::default()
-        .stage(stages[0])
+        .stage(stage)
         .layout(layout);
-    let pipelines = unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[ci], None) }
-        .unwrap();
+    let pipelines =
+        unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[ci], None) }
+            .unwrap();
     unsafe {
         device.destroy_shader_module(module, None);
     }

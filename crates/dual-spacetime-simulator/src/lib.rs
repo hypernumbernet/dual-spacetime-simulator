@@ -164,13 +164,13 @@ pub fn spawn_simulation_worker(
             if dt < 1.0 / target_fps {
                 continue;
             }
-            thread_pool.install(|| {
-                if uses_gpu {
-                    gpu_advance_pending.store(true, Ordering::Release);
-                } else {
+            if uses_gpu {
+                gpu_advance_pending.store(true, Ordering::Release);
+            } else {
+                thread_pool.install(|| {
                     simulation_manager.read().unwrap().advance(time_per_frame);
-                }
-            });
+                });
+            }
             if *skip_redraw.read().unwrap() < 1 {
                 let mut sr = skip_redraw.write().unwrap();
                 *sr = skip;
@@ -202,8 +202,6 @@ pub struct App {
     window: Option<Arc<Window>>,
     ui_state: Arc<RwLock<UiState>>,
     simulation_manager: Arc<RwLock<SimulationManager>>,
-    positions: Vec<[f32; 3]>,
-    colors: Vec<[f32; 4]>,
     need_redraw: Arc<RwLock<bool>>,
     skip_redraw: Arc<RwLock<u32>>,
     gpu_advance_pending: Arc<AtomicBool>,
@@ -259,8 +257,6 @@ impl Default for App {
             gui: None,
             ui_state: Arc::new(RwLock::new(ui_state)),
             simulation_manager: Arc::new(RwLock::new(SimulationManager::default())),
-            positions: Vec::new(),
-            colors: Vec::new(),
             need_redraw: Arc::new(RwLock::new(true)),
             skip_redraw: Arc::new(RwLock::new(0)),
             gpu_advance_pending: Arc::new(AtomicBool::new(false)),
@@ -691,21 +687,9 @@ impl ApplicationHandler for App {
             return;
         }
         if let Ok(manager) = self.simulation_manager.try_read() {
-            let particles = manager.particles();
-            self.positions = particles
-                .iter()
-                .map(|p| {
-                    [
-                        p.position.x as f32,
-                        p.position.y as f32,
-                        p.position.z as f32,
-                    ]
-                })
-                .collect();
-            self.colors = particles.iter().map(|p| p.color).collect();
             self.need_redraw.write().unwrap().clone_from(&false);
             if let Some(pipeline) = self.render_pipeline.as_mut() {
-                pipeline.set_particles(&self.positions, &self.colors);
+                pipeline.upload_particles(&manager.particles());
             }
         }
     }
