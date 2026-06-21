@@ -33,6 +33,7 @@ use winit::{
     error::EventLoopError,
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
 
@@ -374,6 +375,18 @@ impl ApplicationHandler for App {
         pipeline.set_lock_camera_up(lock_camera_up);
 
         match &event {
+            WindowEvent::KeyboardInput { event, .. } => {
+                // Pause shortcut that stays reachable even when heavy draw-skipping
+                // makes the egui controls hard to click.
+                if event.state == ElementState::Pressed
+                    && matches!(
+                        event.physical_key,
+                        PhysicalKey::Code(KeyCode::Escape) | PhysicalKey::Code(KeyCode::Pause)
+                    )
+                {
+                    self.ui_state.write().unwrap().is_running = false;
+                }
+            }
             WindowEvent::Resized(size) => {
                 if size.width > 0 && size.height > 0 {
                     vb.recreate_swapchain(window);
