@@ -52,15 +52,21 @@ fn clamp_add_particle_count_to_capacity_limits_batch_size() {
 }
 
 #[test]
-fn computing_unit_change_disables_add_until_reset() {
+fn computing_unit_change_held_until_reset() {
     let mut ui = UiState::default();
     assert!(ui.is_add_particles_enabled);
+    assert!(!ui.uses_gpu_simulation());
 
     ui.computing_unit = ComputingUnit::Gpu;
     ui.apply_computing_unit_change(ComputingUnit::Cpu);
+    assert_eq!(ui.computing_unit, ComputingUnit::Gpu);
+    assert_eq!(ui.active_computing_unit, ComputingUnit::Cpu);
+    assert!(!ui.uses_gpu_simulation());
     assert!(!ui.is_add_particles_enabled);
 
     ui.request_reset();
+    assert_eq!(ui.active_computing_unit, ComputingUnit::Gpu);
+    assert!(ui.uses_gpu_simulation());
     assert!(ui.is_add_particles_enabled);
 }
 
@@ -68,10 +74,12 @@ fn computing_unit_change_disables_add_until_reset() {
 fn simulation_type_change_resets_gpu_computing_unit() {
     let mut ui = UiState::default();
     ui.computing_unit = ComputingUnit::Gpu;
+    ui.active_computing_unit = ComputingUnit::Gpu;
 
     ui.simulation_type = SimulationType::SpeedOfLightLimit;
     ui.apply_simulation_type_change(SimulationType::Normal);
     assert_eq!(ui.computing_unit, ComputingUnit::Cpu);
+    assert_eq!(ui.active_computing_unit, ComputingUnit::Cpu);
 }
 
 #[test]
@@ -79,10 +87,11 @@ fn gpu_computing_available_only_for_normal() {
     let mut ui = UiState::default();
     ui.simulation_type = SimulationType::Normal;
     ui.computing_unit = ComputingUnit::Gpu;
+    ui.active_computing_unit = ComputingUnit::Gpu;
     assert!(ui.gpu_computing_available());
     assert!(ui.uses_gpu_simulation());
 
-    ui.computing_unit = ComputingUnit::Cpu;
+    ui.active_computing_unit = ComputingUnit::Cpu;
     assert!(!ui.uses_gpu_simulation());
 
     ui.simulation_type = SimulationType::LorentzTransformation;

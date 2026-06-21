@@ -376,6 +376,7 @@ pub struct UiState {
     pub placement_mode: PlacementMode,
     pub simulation_type: SimulationType,
     pub computing_unit: ComputingUnit,
+    pub active_computing_unit: ComputingUnit,
     pub base_scale: f64,
     pub base_scale_unit: BaseScaleUnit,
     pub random_sphere: RandomSphereParameters,
@@ -433,6 +434,7 @@ impl Default for UiState {
             placement_mode: PlacementMode::default(),
             simulation_type: SimulationType::Normal,
             computing_unit: ComputingUnit::default(),
+            active_computing_unit: ComputingUnit::default(),
             base_scale: ObjectInputType::default().default_base_scale(),
             base_scale_unit: BaseScaleUnit::default(),
             random_sphere: RandomSphereParameters::default(),
@@ -558,14 +560,17 @@ impl UiState {
 
     /// Returns whether GPU compute should drive the active Normal simulation.
     pub fn uses_gpu_simulation(&self) -> bool {
-        self.computing_unit == ComputingUnit::Gpu && self.gpu_computing_available()
+        matches!(
+            (self.simulation_type, self.active_computing_unit),
+            (SimulationType::Normal, ComputingUnit::Gpu)
+        )
     }
 
     /// Disables particle append when simulation type changes until the next reset.
     pub fn apply_simulation_type_change(&mut self, previous_type: SimulationType) {
         if self.simulation_type != previous_type {
             if !self.gpu_computing_available() {
-                self.computing_unit = ComputingUnit::Cpu;
+                self.force_cpu_computing_units();
             }
             self.disable_add_until_reset();
         }
@@ -604,9 +609,23 @@ impl UiState {
 
     /// Flags a simulation reset and re-enables particle append.
     pub fn request_reset(&mut self) {
+        self.commit_active_computing_unit();
         self.is_reset_requested = true;
         self.is_resetting = true;
         self.is_add_particles_enabled = true;
+    }
+
+    fn commit_active_computing_unit(&mut self) {
+        if !self.gpu_computing_available() {
+            self.force_cpu_computing_units();
+            return;
+        }
+        self.active_computing_unit = self.computing_unit;
+    }
+
+    fn force_cpu_computing_units(&mut self) {
+        self.computing_unit = ComputingUnit::Cpu;
+        self.active_computing_unit = ComputingUnit::Cpu;
     }
 
     fn disable_add_until_reset(&mut self) {
