@@ -460,6 +460,7 @@ fn base_scale_input(ui: &mut egui::Ui, uis: &mut UiState) {
 /// Renders the simulation-type combo box and updates dependent UI state.
 fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Simulation Type");
+    let previous_type = uis.simulation_type;
     let id = ui.make_persistent_id("simulation_type_combobox");
     ComboBox::from_id_salt(id)
         .selected_text(format!("{}", uis.simulation_type))
@@ -477,6 +478,7 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
                 SimulationType::LorentzTransformation,
             );
         });
+    uis.apply_simulation_type_change(previous_type);
 }
 
 /// Renders the object-input type combo box and syncs scaled parameters on change.

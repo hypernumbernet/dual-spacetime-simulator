@@ -1,5 +1,5 @@
 use dual_spacetime_simulator::settings::AppSettings;
-use dual_spacetime_simulator::ui_state::{AppMode, UiState};
+use dual_spacetime_simulator::ui_state::{AppMode, SimulationType, UiState};
 
 #[test]
 fn apply_settings_clamps_add_particle_count() {
@@ -31,6 +31,30 @@ fn clamp_add_particle_count_to_capacity_limits_batch_size() {
     ui.add_particle_count = 80;
     ui.clamp_add_particle_count_to_capacity(100);
     assert_eq!(ui.add_particle_count, 80);
+}
+
+#[test]
+fn simulation_type_change_disables_add_until_reset() {
+    let mut ui = UiState::default();
+    assert!(ui.is_add_particles_enabled);
+
+    ui.simulation_type = SimulationType::SpeedOfLightLimit;
+    ui.apply_simulation_type_change(SimulationType::Normal);
+    assert!(!ui.is_add_particles_enabled);
+
+    ui.request_reset();
+    assert!(ui.is_add_particles_enabled);
+
+    ui.simulation_type = SimulationType::LorentzTransformation;
+    ui.apply_simulation_type_change(SimulationType::SpeedOfLightLimit);
+    assert!(!ui.is_add_particles_enabled);
+}
+
+#[test]
+fn simulation_type_unchanged_keeps_add_enabled() {
+    let mut ui = UiState::default();
+    ui.apply_simulation_type_change(SimulationType::Normal);
+    assert!(ui.is_add_particles_enabled);
 }
 
 #[test]

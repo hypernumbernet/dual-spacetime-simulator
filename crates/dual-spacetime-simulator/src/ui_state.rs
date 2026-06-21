@@ -455,6 +455,13 @@ impl UiState {
         self.set_base_scale(unit.canonical_meters(unit.to_meters(display)));
     }
 
+    /// Disables particle append when simulation type changes until the next reset.
+    pub fn apply_simulation_type_change(&mut self, previous_type: SimulationType) {
+        if self.simulation_type != previous_type {
+            self.is_add_particles_enabled = false;
+        }
+    }
+
     /// Applies object-input type changes, including base-scale presets and parameter sync.
     pub fn apply_object_input_type_change(&mut self, previous_type: ObjectInputType) {
         if self.object_input_type == previous_type {
