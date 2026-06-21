@@ -1,5 +1,7 @@
 ﻿use crate::camera::OrbitCamera;
+use crate::gpu_simulation::{create_particle_descriptor_set_layout, GpuParticleSimulation};
 use crate::integration::Gui;
+use crate::simulation::Particle;
 use crate::ui_state::*;
 use ash::vk;
 use glam::{Mat4, Vec3};
@@ -53,13 +55,6 @@ struct AxesVertex {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct ParticleVertex {
-    position: [f32; 3],
-    color: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct AxesPushConstants {
     view_proj: [[f32; 4]; 4],
 }
@@ -92,8 +87,9 @@ pub struct ParticleRenderPipeline {
     add_center_marker_buffer: Option<AllocatedBuffer>,
     add_center_marker_vertex_count: u32,
     last_add_center_marker_key: Option<(glam::DVec3, u64)>,
-    particle_buffer: AllocatedBuffer,
-    particle_draw_vertex_count: u32,
+    particle_descriptor_set_layout: vk::DescriptorSetLayout,
+    gpu_sim: GpuParticleSimulation,
+    use_gpu_sim: bool,
     retired_buffers: Vec<AllocatedBuffer>,
 
     camera: OrbitCamera,
@@ -124,13 +120,22 @@ impl ParticleRenderPipeline {
         );
 
         let (layout_axes, pipeline_axes) = create_axes_pipeline(&device, render_pass);
-        let (layout_particles, particle_pipelines) =
-            create_particles_pipelines(&device, render_pass);
+        let particle_descriptor_set_layout =
+            create_particle_descriptor_set_layout(&device);
+        let (layout_particles, particle_pipelines) = create_particles_pipelines(
+            &device,
+            render_pass,
+            particle_descriptor_set_layout,
+        );
 
         let (axes_buffer, axes_vertex_count) =
             create_axes_vertices(&device, &allocator);
-        let (particle_buffer, particle_vertex_count) =
-            create_initial_particles(&device, &allocator);
+        let gpu_sim = GpuParticleSimulation::new(
+            device.clone(),
+            Arc::clone(&allocator),
+            particle_descriptor_set_layout,
+            &[],
+        );
 
         let camera = OrbitCamera::new(INITIAL_POSITION, INITIAL_TARGET);
 
@@ -152,11 +157,66 @@ impl ParticleRenderPipeline {
             add_center_marker_buffer: None,
             add_center_marker_vertex_count: 0,
             last_add_center_marker_key: None,
-            particle_buffer,
-            particle_draw_vertex_count: particle_vertex_count,
+            particle_descriptor_set_layout,
+            gpu_sim,
+            use_gpu_sim: false,
             retired_buffers: Vec::new(),
             camera,
         }
+    }
+
+    /// Enables or disables GPU-driven particle simulation stepping.
+    pub fn set_use_gpu_sim(&mut self, use_gpu_sim: bool) {
+        self.use_gpu_sim = use_gpu_sim;
+    }
+
+    /// Returns whether GPU compute drives particle updates.
+    pub fn uses_gpu_sim(&self) -> bool {
+        self.use_gpu_sim
+    }
+
+    /// Records `steps` GPU simulation steps before rendering when GPU mode is active.
+    pub fn record_gpu_advance(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        simulation_type: SimulationType,
+        delta_seconds: f64,
+        scale: f64,
+        steps: u32,
+    ) {
+        if self.use_gpu_sim {
+            self.gpu_sim
+                .dispatch(command_buffer, simulation_type, delta_seconds, scale, steps);
+        }
+    }
+
+    /// Uploads simulation particles into the shared GPU storage buffer.
+    pub fn upload_particles(&mut self, particles: &[Particle]) {
+        self.gpu_sim.upload_from_cpu(particles);
+    }
+
+    /// Reads back GPU particle state for snapshot export.
+    pub fn readback_particles(&self) -> Vec<Particle> {
+        self.gpu_sim.readback_to_cpu()
+    }
+
+    /// Appends particles while keeping the simulated positions of existing ones.
+    ///
+    /// In GPU mode the CPU `SimulationManager` holds existing particles at their
+    /// initial positions, so a plain re-upload resets them. This reads the current
+    /// GPU positions back and overlays them onto the leading entries of
+    /// `all_particles` (existing + newly appended) before re-uploading the buffer.
+    pub fn add_particles_preserving_simulated(&mut self, all_particles: &[Particle]) {
+        unsafe {
+            if let Err(err) = self.device.device_wait_idle() {
+                eprintln!("add_particles_preserving_simulated device_wait_idle failed: {err:?}");
+            }
+        }
+        let simulated = self.gpu_sim.readback_to_cpu();
+        let mut combined = all_particles.to_vec();
+        let preserved = simulated.len().min(combined.len());
+        combined[..preserved].copy_from_slice(&simulated[..preserved]);
+        self.gpu_sim.upload_from_cpu(&combined);
     }
 
     /// Returns shared allocator used for dynamic GPU buffer management.
@@ -319,35 +379,9 @@ impl ParticleRenderPipeline {
         }
     }
 
-    /// Uploads particle point data and rebuilds the particle vertex buffer.
+    /// Uploads display-only particle points into the shared GPU storage buffer.
     pub fn set_particles(&mut self, positions: &[[f32; 3]], colors: &[[f32; 4]]) {
-        let mut verts: Vec<ParticleVertex> = positions
-            .iter()
-            .zip(colors.iter())
-            .map(|(p, c)| ParticleVertex {
-                position: *p,
-                color: *c,
-            })
-            .collect();
-        let draw_n = verts.len() as u32;
-        if verts.is_empty() {
-            verts.push(ParticleVertex {
-                position: [0.0; 3],
-                color: [0.0; 4],
-            });
-        }
-
-        let alloc = Arc::clone(&self.allocator);
-        let (new_buf, _) = create_buffer_with_data(
-            &self.device,
-            &alloc,
-            &verts,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
-            "particle_vertices",
-        );
-        let old = std::mem::replace(&mut self.particle_buffer, new_buf);
-        self.retire_buffer(old);
-        self.particle_draw_vertex_count = draw_n;
+        self.gpu_sim.upload_display_points(positions, colors);
     }
 
     /// Uploads graph line vertices and rebuilds the line vertex buffer.
@@ -529,15 +563,36 @@ impl ParticleRenderPipeline {
         pc: &PushConstants,
         particle_display_mode: ParticleDisplayMode,
     ) {
-        if self.particle_draw_vertex_count == 0 {
+        let draw_count = self.gpu_sim.particle_count();
+        if draw_count == 0 {
             return;
         }
         let pipeline = self.particle_pipelines[particle_display_mode.pipeline_index()];
         unsafe {
+            if !self.use_gpu_sim {
+                let barrier = vk::MemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::HOST_WRITE)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ);
+                self.device.cmd_pipeline_barrier(
+                    cb,
+                    vk::PipelineStageFlags::HOST,
+                    vk::PipelineStageFlags::VERTEX_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[barrier],
+                    &[],
+                    &[],
+                );
+            }
             self.device
                 .cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, pipeline);
-            self.device
-                .cmd_bind_vertex_buffers(cb, 0, &[self.particle_buffer.buffer], &[0]);
+            self.device.cmd_bind_descriptor_sets(
+                cb,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.layout_particles,
+                0,
+                &[self.gpu_sim.descriptor_set()],
+                &[],
+            );
             self.device.cmd_push_constants(
                 cb,
                 self.layout_particles,
@@ -545,8 +600,7 @@ impl ParticleRenderPipeline {
                 0,
                 bytemuck::bytes_of(pc),
             );
-            self.device
-                .cmd_draw(cb, self.particle_draw_vertex_count, 1, 0, 0);
+            self.device.cmd_draw(cb, draw_count, 1, 0, 0);
         }
     }
 
@@ -563,11 +617,6 @@ impl ParticleRenderPipeline {
         let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect_ratio, 0.1, 100.0);
         let model = Mat4::from_scale(Vec3::splat(scale_factor));
         proj * view * model
-    }
-
-    /// Defers buffer destruction until a synchronized frame boundary.
-    fn retire_buffer(&mut self, buffer: AllocatedBuffer) {
-        self.retired_buffers.push(buffer);
     }
 
     /// Releases deferred buffers after `wait_for_fence` has completed for the frame.
@@ -598,12 +647,6 @@ impl Drop for ParticleRenderPipeline {
             }
             self.flush_retired_buffers();
 
-            if let Some(alloc) = self.particle_buffer.allocation.take() {
-                self.allocator().lock().unwrap().free(alloc).unwrap();
-            }
-            self.device
-                .destroy_buffer(self.particle_buffer.buffer, None);
-
             if let Some(alloc) = self.axes_buffer.allocation.take() {
                 self.allocator().lock().unwrap().free(alloc).unwrap();
             }
@@ -620,6 +663,8 @@ impl Drop for ParticleRenderPipeline {
             self.device.destroy_pipeline_layout(self.layout_axes, None);
             self.device
                 .destroy_pipeline_layout(self.layout_particles, None);
+            self.device
+                .destroy_descriptor_set_layout(self.particle_descriptor_set_layout, None);
             self.device.destroy_render_pass(self.render_pass, None);
         }
     }
@@ -831,6 +876,7 @@ fn create_pipeline_layout(
     device: &ash::Device,
     push_constant_size: u32,
     push_stages: vk::ShaderStageFlags,
+    descriptor_set_layout: Option<vk::DescriptorSetLayout>,
 ) -> vk::PipelineLayout {
     let push_range = vk::PushConstantRange {
         stage_flags: push_stages,
@@ -838,8 +884,17 @@ fn create_pipeline_layout(
         size: push_constant_size,
     };
     let ranges = [push_range];
-    let ci = vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&ranges);
-    unsafe { device.create_pipeline_layout(&ci, None) }.unwrap()
+    let layout = if let Some(descriptor_set_layout) = descriptor_set_layout {
+        let set_layouts = [descriptor_set_layout];
+        let ci = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&set_layouts)
+            .push_constant_ranges(&ranges);
+        unsafe { device.create_pipeline_layout(&ci, None) }.unwrap()
+    } else {
+        let ci = vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&ranges);
+        unsafe { device.create_pipeline_layout(&ci, None) }.unwrap()
+    };
+    layout
 }
 
 /// Builds a graphics pipeline from shaders and fixed-function states.
@@ -987,26 +1042,7 @@ fn particle_vertex_desc() -> (
     Vec<vk::VertexInputBindingDescription>,
     Vec<vk::VertexInputAttributeDescription>,
 ) {
-    let binding = vec![vk::VertexInputBindingDescription {
-        binding: 0,
-        stride: std::mem::size_of::<ParticleVertex>() as u32,
-        input_rate: vk::VertexInputRate::VERTEX,
-    }];
-    let attrs = vec![
-        vk::VertexInputAttributeDescription {
-            location: 0,
-            binding: 0,
-            format: vk::Format::R32G32B32_SFLOAT,
-            offset: 0,
-        },
-        vk::VertexInputAttributeDescription {
-            location: 1,
-            binding: 0,
-            format: vk::Format::R32G32B32A32_SFLOAT,
-            offset: 12,
-        },
-    ];
-    (binding, attrs)
+    (Vec::new(), Vec::new())
 }
 
 /// Creates graphics pipeline specialized for axis rendering.
@@ -1018,6 +1054,7 @@ fn create_axes_pipeline(
         device,
         std::mem::size_of::<AxesPushConstants>() as u32,
         vk::ShaderStageFlags::VERTEX,
+        None,
     );
     let (binding, attrs) = axes_vertex_desc();
     let pipeline = create_graphics_pipeline(
@@ -1040,6 +1077,7 @@ fn create_axes_pipeline(
 fn create_particles_pipelines(
     device: &ash::Device,
     render_pass: vk::RenderPass,
+    descriptor_set_layout: vk::DescriptorSetLayout,
 ) -> (
     vk::PipelineLayout,
     [vk::Pipeline; ParticleDisplayMode::ALL.len()],
@@ -1048,11 +1086,12 @@ fn create_particles_pipelines(
         device,
         std::mem::size_of::<PushConstants>() as u32,
         vk::ShaderStageFlags::VERTEX,
+        Some(descriptor_set_layout),
     );
     let (binding, attrs) = particle_vertex_desc();
     let vs_spv = include_bytes!(concat!(
         env!("OUT_DIR"),
-        "/shaders/particles_vertex.vert.spv"
+        "/shaders/particles_vertex_ssbo.vert.spv"
     ));
     let mut pipelines = [vk::Pipeline::null(); ParticleDisplayMode::ALL.len()];
     for mode in ParticleDisplayMode::ALL {
@@ -1146,30 +1185,5 @@ fn create_axes_vertices(
         &vertices,
         vk::BufferUsageFlags::VERTEX_BUFFER,
         "axes_vertices",
-    )
-}
-
-/// Creates an initial particle buffer used before simulation data arrives.
-fn create_initial_particles(
-    device: &ash::Device,
-    allocator: &Mutex<Allocator>,
-) -> (AllocatedBuffer, u32) {
-    let mut particles = Vec::with_capacity(100);
-    for _ in 0..100 {
-        particles.push(ParticleVertex {
-            position: [
-                rand::random::<f32>() * 2.0 - 1.0,
-                rand::random::<f32>() * 2.0 - 1.0,
-                rand::random::<f32>() * 2.0 - 1.0,
-            ],
-            color: [1.0, 1.0, 1.0, 1.0],
-        });
-    }
-    create_buffer_with_data(
-        device,
-        allocator,
-        &particles,
-        vk::BufferUsageFlags::VERTEX_BUFFER,
-        "particle_vertices",
     )
 }

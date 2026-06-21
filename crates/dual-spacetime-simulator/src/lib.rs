@@ -2,6 +2,7 @@
 //! Exposes modules for integration tests under `tests/`.
 
 pub mod camera;
+pub mod gpu_simulation;
 pub mod graph3d;
 pub mod object_input;
 pub mod integration;
@@ -9,19 +10,21 @@ pub mod particle_snapshot;
 pub mod pipeline;
 pub mod settings;
 pub mod simulation;
+pub mod solar_system_data;
 pub mod ui;
 pub mod ui_state;
 pub mod ui_styles;
 
-use crate::object_input::ObjectInput;
+use crate::object_input::{build_solar_system_particles, ObjectInput, SolarSystemBuildError};
 use crate::integration::Gui;
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
 use crate::ui::{draw_ui, process_pending_snapshot_dialog};
-use crate::ui_state::{AppMode, DragOwner, UiState};
+use crate::ui_state::{AppMode, DragOwner, PlacementMode, UiState};
 use ash::vk;
 use vulkanvil::VulkanBase;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -31,6 +34,7 @@ use winit::{
     error::EventLoopError,
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
 
@@ -46,6 +50,68 @@ struct Graph3dBuildResult {
     line_vertices: Vec<([f32; 3], [f32; 4])>,
 }
 
+/// Coordinates CPU→GPU particle buffer synchronization between the UI, worker, and render loop.
+#[derive(Clone)]
+struct GpuParticleSync {
+    upload_pending: Arc<AtomicBool>,
+    append_pending: Arc<AtomicBool>,
+    advance_steps: Arc<AtomicU32>,
+}
+
+impl GpuParticleSync {
+    fn new(initial_upload: bool) -> Self {
+        Self {
+            upload_pending: Arc::new(AtomicBool::new(initial_upload)),
+            append_pending: Arc::new(AtomicBool::new(false)),
+            advance_steps: Arc::new(AtomicU32::new(0)),
+        }
+    }
+
+    fn request_full_upload(&self) {
+        self.advance_steps.store(0, Ordering::Release);
+        self.upload_pending.store(true, Ordering::Release);
+        self.append_pending.store(false, Ordering::Release);
+    }
+
+    fn request_append_preserving(&self) {
+        self.advance_steps.store(0, Ordering::Release);
+        self.append_pending.store(true, Ordering::Release);
+    }
+
+    fn request_cpu_mode_upload(&self) {
+        self.advance_steps.store(0, Ordering::Release);
+        self.upload_pending.store(true, Ordering::Release);
+    }
+
+    fn has_pending_sync(&self) -> bool {
+        self.upload_pending.load(Ordering::Acquire) || self.append_pending.load(Ordering::Acquire)
+    }
+
+    fn take_upload_pending(&self) -> bool {
+        self.upload_pending.swap(false, Ordering::AcqRel)
+    }
+
+    fn append_pending(&self) -> bool {
+        self.append_pending.load(Ordering::Acquire)
+    }
+
+    fn clear_append_pending(&self) {
+        self.append_pending.store(false, Ordering::Release);
+    }
+
+    fn take_advance_steps(&self) -> u32 {
+        self.advance_steps.swap(0, Ordering::AcqRel)
+    }
+
+    fn fetch_add_advance_step(&self) {
+        self.advance_steps.fetch_add(1, Ordering::Release);
+    }
+
+    fn clear_advance_steps(&self) {
+        self.advance_steps.store(0, Ordering::Release);
+    }
+}
+
 /// Run the desktop application (window + Vulkan + UI loop).
 pub fn run() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new()?;
@@ -55,16 +121,18 @@ pub fn run() -> Result<(), EventLoopError> {
         Arc::clone(&app.simulation_manager),
         Arc::clone(&app.need_redraw),
         Arc::clone(&app.skip_redraw),
+        app.gpu_particle_sync.clone(),
     );
     event_loop.run_app(&mut app)
 }
 
 /// Spawns a background thread that advances simulation state and schedules redraws.
-pub fn spawn_simulation_worker(
+pub(crate) fn spawn_simulation_worker(
     ui_state_clone: Arc<RwLock<UiState>>,
     simulation_manager: Arc<RwLock<SimulationManager>>,
     need_redraw: Arc<RwLock<bool>>,
     skip_redraw: Arc<RwLock<u32>>,
+    gpu_particle_sync: GpuParticleSync,
 ) {
     let thread_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_cpus::get())
@@ -88,19 +156,88 @@ pub fn spawn_simulation_worker(
                     let base_scale = ui_state.base_scale;
                     let add_center = ui_state.add_center;
                     let max_particle_count = ui_state.max_particle_count;
+                    let uses_gpu = ui_state.uses_gpu_simulation();
+                    let reset_repopulates = ui_state.reset_repopulates_particles();
+                    let reset_object_input = ui_state.build_reset_object_input();
+                    let placement_mode = ui_state.placement_mode;
+                    let reset_log_abort = Arc::clone(&ui_state.reset_log.abort_requested);
                     drop(ui_state);
                     if is_reset_requested {
-                        simulation_manager.read().unwrap().reset(
-                            selected_object_input,
-                            simulation_type,
-                            add_particle_count,
-                            scale,
-                        );
+                        let mut reset_applied = false;
+                        if reset_repopulates && placement_mode == PlacementMode::SolarSystem {
+                            if let ObjectInput::SolarSystem {
+                                scale,
+                                start_year,
+                                start_month,
+                                start_day,
+                                start_hour,
+                            } = reset_object_input
+                            {
+                                let ui_state_for_log = Arc::clone(&ui_state_clone);
+                                let need_redraw_for_log = Arc::clone(&need_redraw);
+                                let log = move |line: &str| {
+                                    {
+                                        let mut ui_state = ui_state_for_log.write().unwrap();
+                                        ui_state.append_reset_log(line);
+                                    }
+                                    need_redraw_for_log.write().unwrap().clone_from(&true);
+                                };
+                                match build_solar_system_particles(
+                                    scale,
+                                    start_year,
+                                    start_month,
+                                    start_day,
+                                    start_hour,
+                                    &log,
+                                    reset_log_abort.as_ref(),
+                                ) {
+                                    Ok(particles) => {
+                                        simulation_manager.read().unwrap().reset_from_particles(
+                                            particles,
+                                            simulation_type,
+                                            base_scale,
+                                        );
+                                        reset_applied = true;
+                                    }
+                                    Err(SolarSystemBuildError::Aborted) => {
+                                        let mut ui_state = ui_state_clone.write().unwrap();
+                                        ui_state.append_reset_log("Aborted.");
+                                        ui_state.finish_reset_log();
+                                        ui_state.is_reset_requested = false;
+                                        drop(ui_state);
+                                        need_redraw.write().unwrap().clone_from(&true);
+                                        continue;
+                                    }
+                                }
+                            }
+                        } else if reset_repopulates {
+                            simulation_manager.read().unwrap().reset(
+                                reset_object_input,
+                                simulation_type,
+                                add_particle_count,
+                                base_scale,
+                            );
+                            reset_applied = true;
+                        } else {
+                            simulation_manager
+                                .read()
+                                .unwrap()
+                                .clear(simulation_type, scale);
+                            reset_applied = true;
+                        }
                         let mut ui_state = ui_state_clone.write().unwrap();
-                        ui_state.frame = 1;
-                        ui_state.simulation_time = 0.0;
+                        if reset_applied {
+                            ui_state.frame = 1;
+                            ui_state.simulation_time = 0.0;
+                        }
                         ui_state.is_reset_requested = false;
+                        if placement_mode == PlacementMode::SolarSystem {
+                            ui_state.finish_reset_log();
+                        }
                         drop(ui_state);
+                        if reset_applied {
+                            gpu_particle_sync.request_full_upload();
+                        }
                         need_redraw.write().unwrap().clone_from(&true);
                         skip_redraw.write().unwrap().clone_from(&skip);
                         continue;
@@ -117,6 +254,11 @@ pub fn spawn_simulation_worker(
                     let mut ui_state = ui_state_clone.write().unwrap();
                     ui_state.is_add_particles_requested = false;
                     drop(ui_state);
+                    if uses_gpu {
+                        gpu_particle_sync.request_append_preserving();
+                    } else {
+                        gpu_particle_sync.request_cpu_mode_upload();
+                    }
                     need_redraw.write().unwrap().clone_from(&true);
                     skip_redraw.write().unwrap().clone_from(&skip);
                     continue;
@@ -130,8 +272,10 @@ pub fn spawn_simulation_worker(
             let is_running = ui_state.is_running;
             let app_mode = ui_state.app_mode;
             let max_fps = ui_state.max_fps;
+            let max_fps_unlimited = ui_state.max_fps_unlimited;
             let time_per_frame = ui_state.time_per_frame;
             let skip = ui_state.skip;
+            let uses_gpu = ui_state.uses_gpu_simulation();
             drop(ui_state);
             let now = Instant::now();
             let dt = now.duration_since(last_fps).as_secs_f64();
@@ -150,14 +294,25 @@ pub fn spawn_simulation_worker(
                 std::thread::sleep(Duration::from_millis(16));
                 continue;
             }
-            let dt = now.duration_since(last_advance).as_secs_f64();
-            let target_fps = max_fps as f64;
-            if dt < 1.0 / target_fps {
+            let particle_count = simulation_manager.read().unwrap().particle_count();
+            if !UiState::can_start_simulation(particle_count) {
+                std::thread::sleep(Duration::from_millis(16));
                 continue;
             }
-            thread_pool.install(|| {
-                simulation_manager.read().unwrap().advance(time_per_frame);
-            });
+            let dt = now.duration_since(last_advance).as_secs_f64();
+            if !max_fps_unlimited {
+                let target_fps = max_fps as f64;
+                if dt < 1.0 / target_fps {
+                    continue;
+                }
+            }
+            if uses_gpu {
+                gpu_particle_sync.fetch_add_advance_step();
+            } else {
+                thread_pool.install(|| {
+                    simulation_manager.read().unwrap().advance(time_per_frame);
+                });
+            }
             if *skip_redraw.read().unwrap() < 1 {
                 let mut sr = skip_redraw.write().unwrap();
                 *sr = skip;
@@ -189,10 +344,9 @@ pub struct App {
     window: Option<Arc<Window>>,
     ui_state: Arc<RwLock<UiState>>,
     simulation_manager: Arc<RwLock<SimulationManager>>,
-    positions: Vec<[f32; 3]>,
-    colors: Vec<[f32; 4]>,
     need_redraw: Arc<RwLock<bool>>,
     skip_redraw: Arc<RwLock<u32>>,
+    gpu_particle_sync: GpuParticleSync,
     mouse_left_down: bool,
     mouse_right_down: bool,
     mouse_middle_down: bool,
@@ -244,10 +398,9 @@ impl Default for App {
             gui: None,
             ui_state: Arc::new(RwLock::new(ui_state)),
             simulation_manager: Arc::new(RwLock::new(SimulationManager::default())),
-            positions: Vec::new(),
-            colors: Vec::new(),
             need_redraw: Arc::new(RwLock::new(true)),
             skip_redraw: Arc::new(RwLock::new(0)),
+            gpu_particle_sync: GpuParticleSync::new(true),
             mouse_left_down: false,
             mouse_right_down: false,
             mouse_middle_down: false,
@@ -322,6 +475,7 @@ impl ApplicationHandler for App {
             scale,
         );
         self.skip_redraw.write().unwrap().clone_from(&ui_state.skip);
+        self.gpu_particle_sync.clear_advance_steps();
     }
 
     /// Handles window, input, rendering, and camera events for each platform event.
@@ -358,6 +512,18 @@ impl ApplicationHandler for App {
         pipeline.set_lock_camera_up(lock_camera_up);
 
         match &event {
+            WindowEvent::KeyboardInput { event, .. } => {
+                // Pause shortcut that stays reachable even when heavy draw-skipping
+                // makes the egui controls hard to click.
+                if event.state == ElementState::Pressed
+                    && matches!(
+                        event.physical_key,
+                        PhysicalKey::Code(KeyCode::Escape) | PhysicalKey::Code(KeyCode::Pause)
+                    )
+                {
+                    self.ui_state.write().unwrap().is_running = false;
+                }
+            }
             WindowEvent::Resized(size) => {
                 if size.width > 0 && size.height > 0 {
                     vb.recreate_swapchain(window);
@@ -423,7 +589,26 @@ impl ApplicationHandler for App {
                 let show_grid = ui_state.show_grid;
                 let app_mode = ui_state.app_mode;
                 let particle_display_mode = ui_state.particle_display_mode;
+                let uses_gpu = ui_state.uses_gpu_simulation();
+                let time_per_frame = ui_state.time_per_frame;
+                let simulation_type = ui_state.simulation_type;
+                let sim_scale = ui_state.scale;
                 drop(ui_state);
+
+                let pending_steps = if uses_gpu {
+                    self.gpu_particle_sync.take_advance_steps()
+                } else {
+                    0
+                };
+                if pending_steps > 0 {
+                    pipeline.record_gpu_advance(
+                        cb,
+                        simulation_type,
+                        time_per_frame,
+                        sim_scale,
+                        pending_steps,
+                    );
+                }
 
                 pipeline.render(
                     cb,
@@ -452,6 +637,9 @@ impl ApplicationHandler for App {
 
                 gui.finish_frame();
                 vb.advance_frame();
+                if uses_gpu {
+                    self.need_redraw.write().unwrap().clone_from(&false);
+                }
             }
             _ => (),
         }
@@ -549,10 +737,12 @@ impl ApplicationHandler for App {
                 window,
                 &self.ui_state,
                 &self.simulation_manager,
+                self.render_pipeline.as_ref(),
                 &self.need_redraw,
             );
             window.request_redraw();
         }
+        self.apply_pending_particle_buffer_reload();
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
         }
@@ -632,31 +822,68 @@ impl ApplicationHandler for App {
         }
         self.graph3d_pending_rx = None;
         self.last_graph3d_fingerprint = u64::MAX;
+        if *self.need_redraw.read().unwrap() == false && !self.gpu_particle_sync.has_pending_sync()
+        {
+            return;
+        }
+
+        let uses_gpu = {
+            let uis = self.ui_state.read().unwrap();
+            let uses_gpu = uis.uses_gpu_simulation();
+            if let Some(pipeline) = self.render_pipeline.as_mut() {
+                pipeline.set_use_gpu_sim(uses_gpu);
+            }
+            uses_gpu
+        };
+
+        if self.gpu_particle_sync.take_upload_pending() {
+            if let (Some(pipeline), Ok(manager)) = (
+                self.render_pipeline.as_mut(),
+                self.simulation_manager.try_read(),
+            ) {
+                pipeline.upload_particles(&manager.particles());
+            }
+        }
+
+        // GPU-mode "Add": preserve simulated positions of existing particles by
+        // reading back current GPU state before re-uploading the combined buffer.
+        // Cleared only after a successful upload to avoid dropping the request.
+        if self.gpu_particle_sync.append_pending() {
+            let particles = self.simulation_manager.read().unwrap().particles();
+            if let Some(pipeline) = self.render_pipeline.as_mut() {
+                pipeline.add_particles_preserving_simulated(&particles);
+            }
+            self.gpu_particle_sync.clear_append_pending();
+        }
+
+        if uses_gpu {
+            return;
+        }
+
         if *self.need_redraw.read().unwrap() == false {
             return;
         }
         if let Ok(manager) = self.simulation_manager.try_read() {
-            let particles = manager.particles();
-            self.positions = particles
-                .iter()
-                .map(|p| {
-                    [
-                        p.position.x as f32,
-                        p.position.y as f32,
-                        p.position.z as f32,
-                    ]
-                })
-                .collect();
-            self.colors = particles.iter().map(|p| p.color).collect();
             self.need_redraw.write().unwrap().clone_from(&false);
             if let Some(pipeline) = self.render_pipeline.as_mut() {
-                pipeline.set_particles(&self.positions, &self.colors);
+                pipeline.upload_particles(&manager.particles());
             }
         }
     }
 }
 
 impl App {
+    /// Applies a snapshot-load request by scheduling a full GPU particle upload.
+    fn apply_pending_particle_buffer_reload(&mut self) {
+        let mut uis = self.ui_state.write().unwrap();
+        let reload_requested = uis.take_particle_buffer_reload_requested();
+        let uses_gpu = uis.uses_gpu_simulation();
+        drop(uis);
+        if reload_requested && uses_gpu {
+            self.gpu_particle_sync.request_full_upload();
+        }
+    }
+
     /// Clears all internal mouse drag button state flags.
     fn clear_mouse_drag_flags(&mut self) {
         self.mouse_left_down = false;

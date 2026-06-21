@@ -1,9 +1,11 @@
 use crate::simulation::{Particle, SimulationNormal};
+use crate::solar_system_data::{UpdateDataError, update_datafiles_with_log};
 use glam::DVec3;
 use rand::Rng;
 use rand_distr::Distribution;
-use satkit::{Instant, SolarSystem, jplephem, utils};
+use satkit::{Instant, SolarSystem, jplephem};
 use std::f64::consts::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const MASS_SUN: f64 = 1.988475e30;
 pub const MASS_EARTH: f64 = 5.97217e24;
@@ -167,6 +169,103 @@ impl ObjectInputType {
             },
         }
     }
+}
+
+/// Error returned when Solar System particle generation is aborted.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SolarSystemBuildError {
+    Aborted,
+}
+
+/// Builds Solar System particles with progress logging and cooperative abort.
+pub fn build_solar_system_particles(
+    scale: f64,
+    start_year: i32,
+    start_month: i32,
+    start_day: i32,
+    start_hour: i32,
+    log: &impl Fn(&str),
+    abort: &AtomicBool,
+) -> Result<Vec<Particle>, SolarSystemBuildError> {
+    let correct = Correct::new(scale);
+    match update_datafiles_with_log(log, abort) {
+        Ok(()) => {}
+        Err(UpdateDataError::Aborted) => return Err(SolarSystemBuildError::Aborted),
+        Err(err) => {
+            log(&format!(
+                "Failed to update data files: {err}; using fallback particles"
+            ));
+            return Ok(get_solar_system_fallback_particles(&correct));
+        }
+    }
+    let time = Instant::from_datetime(start_year, start_month, start_day, start_hour, 0, 0.0)
+        .unwrap_or_else(|_| Instant::from_datetime(2000, 1, 1, 12, 0, 0.0).unwrap());
+    let mut particles: Vec<Particle> = vec![];
+    let bodies = vec![
+        SolarSystem::Mercury,
+        SolarSystem::Venus,
+        SolarSystem::EMB,
+        SolarSystem::Mars,
+        SolarSystem::Jupiter,
+        SolarSystem::Saturn,
+        SolarSystem::Uranus,
+        SolarSystem::Neptune,
+        SolarSystem::Pluto,
+        SolarSystem::Sun,
+    ];
+    for body in bodies {
+        if abort.load(Ordering::Acquire) {
+            return Err(SolarSystemBuildError::Aborted);
+        }
+        match jplephem::barycentric_state(body, &time) {
+            Ok((position, velocity)) => {
+                let pos_dvec3 = DVec3 {
+                    x: position.x,
+                    y: position.y,
+                    z: position.z,
+                };
+                let vel_dvec3 = DVec3 {
+                    x: velocity.x,
+                    y: velocity.y,
+                    z: velocity.z,
+                };
+                particles.push(Particle {
+                    position: pos_dvec3 * correct.m,
+                    velocity: vel_dvec3 * correct.m,
+                    mass: match body {
+                        SolarSystem::Mercury => MASS_MERCURY * correct.kg,
+                        SolarSystem::Venus => MASS_VENUS * correct.kg,
+                        SolarSystem::EMB => MASS_EARTH * correct.kg,
+                        SolarSystem::Mars => MASS_MARS * correct.kg,
+                        SolarSystem::Jupiter => MASS_JUPITER * correct.kg,
+                        SolarSystem::Saturn => MASS_SATURN * correct.kg,
+                        SolarSystem::Uranus => MASS_URANUS * correct.kg,
+                        SolarSystem::Neptune => MASS_NEPTUNE * correct.kg,
+                        SolarSystem::Pluto => MASS_PLUTO * correct.kg,
+                        SolarSystem::Sun => MASS_SUN * correct.kg,
+                        _ => 1.0 * correct.kg,
+                    },
+                    color: match body {
+                        SolarSystem::Mercury => [0.5, 0.5, 0.5, 1.0],
+                        SolarSystem::Venus => [1.0, 0.8, 0.2, 1.0],
+                        SolarSystem::EMB => [0.2, 0.5, 1.0, 1.0],
+                        SolarSystem::Mars => [1.0, 0.3, 0.2, 1.0],
+                        SolarSystem::Jupiter => [1.0, 0.9, 0.6, 1.0],
+                        SolarSystem::Saturn => [1.0, 1.0, 0.6, 1.0],
+                        SolarSystem::Uranus => [0.5, 1.0, 1.0, 1.0],
+                        SolarSystem::Neptune => [0.2, 0.4, 1.0, 1.0],
+                        SolarSystem::Pluto => [0.8, 0.7, 0.6, 1.0],
+                        SolarSystem::Sun => [1.0, 1.0, 0.0, 1.0],
+                        _ => [1.0, 1.0, 1.0, 1.0],
+                    },
+                });
+            }
+            Err(e) => {
+                log(&format!("Error for {:?}: {}", body, e));
+            }
+        }
+    }
+    Ok(particles)
 }
 
 /// Provides a small deterministic solar-system particle set when ephemeris data is unavailable.
@@ -473,85 +572,19 @@ impl ObjectInput {
                 start_day,
                 start_hour,
             } => {
-                let correct = Correct::new(*scale);
-                match utils::update_datafiles(None, false) {
-                    Ok(_) => {}
-                    Err(_) => {
-                        let particles = get_solar_system_fallback_particles(&correct);
-                        return SimulationNormal { particles };
-                    }
-                }
-                let time = Instant::from_datetime(
+                static NO_ABORT: AtomicBool = AtomicBool::new(false);
+                let particles = build_solar_system_particles(
+                    *scale,
                     *start_year,
                     *start_month,
                     *start_day,
                     *start_hour,
-                    0,
-                    0.0,
+                    &|line| println!("{}", line),
+                    &NO_ABORT,
                 )
-                .unwrap_or_else(|_| Instant::from_datetime(2000, 1, 1, 12, 0, 0.0).unwrap());
-                let mut particles: Vec<Particle> = vec![];
-                let bodies = vec![
-                    SolarSystem::Mercury,
-                    SolarSystem::Venus,
-                    SolarSystem::EMB,
-                    SolarSystem::Mars,
-                    SolarSystem::Jupiter,
-                    SolarSystem::Saturn,
-                    SolarSystem::Uranus,
-                    SolarSystem::Neptune,
-                    SolarSystem::Pluto,
-                    SolarSystem::Sun,
-                ];
-                for body in bodies {
-                    match jplephem::barycentric_state(body, &time) {
-                        Ok((position, velocity)) => {
-                            let pos_dvec3 = DVec3 {
-                                x: position.x,
-                                y: position.y,
-                                z: position.z,
-                            };
-                            let vel_dvec3 = DVec3 {
-                                x: velocity.x,
-                                y: velocity.y,
-                                z: velocity.z,
-                            };
-                            particles.push(Particle {
-                                position: pos_dvec3 * correct.m,
-                                velocity: vel_dvec3 * correct.m,
-                                mass: match body {
-                                    SolarSystem::Mercury => MASS_MERCURY * correct.kg,
-                                    SolarSystem::Venus => MASS_VENUS * correct.kg,
-                                    SolarSystem::EMB => MASS_EARTH * correct.kg,
-                                    SolarSystem::Mars => MASS_MARS * correct.kg,
-                                    SolarSystem::Jupiter => MASS_JUPITER * correct.kg,
-                                    SolarSystem::Saturn => MASS_SATURN * correct.kg,
-                                    SolarSystem::Uranus => MASS_URANUS * correct.kg,
-                                    SolarSystem::Neptune => MASS_NEPTUNE * correct.kg,
-                                    SolarSystem::Pluto => MASS_PLUTO * correct.kg,
-                                    SolarSystem::Sun => MASS_SUN * correct.kg,
-                                    _ => 1.0 * correct.kg,
-                                },
-                                color: match body {
-                                    SolarSystem::Mercury => [0.5, 0.5, 0.5, 1.0], // Grayish
-                                    SolarSystem::Venus => [1.0, 0.8, 0.2, 1.0],   // Yellowish
-                                    SolarSystem::EMB => [0.2, 0.5, 1.0, 1.0],     // Blueish
-                                    SolarSystem::Mars => [1.0, 0.3, 0.2, 1.0],    // Reddish
-                                    SolarSystem::Jupiter => [1.0, 0.9, 0.6, 1.0], // Light Brown
-                                    SolarSystem::Saturn => [1.0, 1.0, 0.6, 1.0],  // Pale Yellow
-                                    SolarSystem::Uranus => [0.5, 1.0, 1.0, 1.0],  // Cyanish
-                                    SolarSystem::Neptune => [0.2, 0.4, 1.0, 1.0], // Blueish
-                                    SolarSystem::Pluto => [0.8, 0.7, 0.6, 1.0],   // Light Brownish
-                                    SolarSystem::Sun => [1.0, 1.0, 0.0, 1.0],     // Yellow
-                                    _ => [1.0, 1.0, 1.0, 1.0],
-                                },
-                            });
-                        }
-                        Err(e) => {
-                            eprintln!("Error for {:?}: {}", body, e);
-                        }
-                    }
-                }
+                .unwrap_or_else(|_| {
+                    get_solar_system_fallback_particles(&Correct::new(*scale))
+                });
                 SimulationNormal { particles }
             }
             ObjectInput::SatelliteOrbit {

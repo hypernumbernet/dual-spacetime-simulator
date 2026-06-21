@@ -5,6 +5,8 @@ use crate::object_input::{
 use crate::settings::AppSettings;
 use crate::simulation::{AU, LY, MPC, PC};
 use glam::DVec3;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 pub const BASE_SCALE_DRAG_SPEED: f64 = 0.01;
@@ -222,6 +224,35 @@ pub enum SimulationType {
     LorentzTransformation,
 }
 
+impl SimulationType {
+    /// Returns the discriminant passed to the GPU compute shader push constants.
+    pub fn gpu_code(self) -> u32 {
+        match self {
+            SimulationType::Normal => 0,
+            SimulationType::SpeedOfLightLimit => 1,
+            SimulationType::LorentzTransformation => 2,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub enum ComputingUnit {
+    #[default]
+    Cpu,
+    Gpu,
+}
+
+impl std::fmt::Display for ComputingUnit {
+    /// Formats computing unit for combo-box and labels.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            ComputingUnit::Cpu => "CPU",
+            ComputingUnit::Gpu => "GPU",
+        };
+        write!(f, "{}", text)
+    }
+}
+
 impl std::fmt::Display for SimulationType {
     /// Formats simulation type for combo-box and labels.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -272,6 +303,25 @@ impl PlacementMode {
 pub enum PendingSnapshotDialog {
     Save,
     Load,
+}
+
+/// Log panel state for Solar System reset (ephemeris data download progress).
+pub struct ResetLogPanelState {
+    pub is_open: bool,
+    pub lines: Vec<String>,
+    pub in_progress: bool,
+    pub abort_requested: Arc<AtomicBool>,
+}
+
+impl Default for ResetLogPanelState {
+    fn default() -> Self {
+        Self {
+            is_open: false,
+            lines: Vec::new(),
+            in_progress: false,
+            abort_requested: Arc::new(AtomicBool::new(false)),
+        }
+    }
 }
 
 #[repr(u8)]
@@ -344,6 +394,7 @@ pub struct UiState {
     pub scale_gauge: f64,
     pub is_running: bool,
     pub max_fps: u32,
+    pub max_fps_unlimited: bool,
     pub is_reset_requested: bool,
     pub is_resetting: bool,
     pub add_center: DVec3,
@@ -357,6 +408,8 @@ pub struct UiState {
     pub object_input: ObjectInput,
     pub placement_mode: PlacementMode,
     pub simulation_type: SimulationType,
+    pub computing_unit: ComputingUnit,
+    pub active_computing_unit: ComputingUnit,
     pub base_scale: f64,
     pub base_scale_unit: BaseScaleUnit,
     pub random_sphere: RandomSphereParameters,
@@ -377,10 +430,13 @@ pub struct UiState {
     pub particle_display_mode: ParticleDisplayMode,
     pub request_exit: bool,
     pub pending_snapshot_dialog: Option<PendingSnapshotDialog>,
+    /// CPU-side particle data was replaced (e.g. snapshot load); GPU buffer must be refreshed.
+    pub particle_buffer_reload_requested: bool,
     pub graph_type: GraphType,
     pub graph_sample_count: u32,
     pub graph_radius: f64,
     pub graph_velocity_scale: f64,
+    pub reset_log: ResetLogPanelState,
 }
 
 impl Default for UiState {
@@ -400,6 +456,7 @@ impl Default for UiState {
             scale_gauge: DEFAULT_SCALE_UI,
             is_running: false,
             max_fps: 60,
+            max_fps_unlimited: false,
             is_reset_requested: false,
             is_resetting: false,
             add_center: DVec3::ZERO,
@@ -413,6 +470,8 @@ impl Default for UiState {
             object_input: ObjectInput::default(),
             placement_mode: PlacementMode::default(),
             simulation_type: SimulationType::Normal,
+            computing_unit: ComputingUnit::default(),
+            active_computing_unit: ComputingUnit::default(),
             base_scale: ObjectInputType::default().default_base_scale(),
             base_scale_unit: BaseScaleUnit::default(),
             random_sphere: RandomSphereParameters::default(),
@@ -433,15 +492,25 @@ impl Default for UiState {
             particle_display_mode: ParticleDisplayMode::default(),
             request_exit: false,
             pending_snapshot_dialog: None,
+            particle_buffer_reload_requested: false,
             graph_type: GraphType::SphericalFibonacciLattice,
             graph_sample_count: 1000,
             graph_radius: 1.0,
             graph_velocity_scale: 1.0,
+            reset_log: ResetLogPanelState::default(),
         }
     }
 }
 
 impl UiState {
+    /// Minimum particle count required before simulation can start.
+    pub const MIN_PARTICLES_TO_START: u32 = 2;
+
+    /// Returns whether the simulation has enough particles to start advancing.
+    pub fn can_start_simulation(particle_count: u32) -> bool {
+        particle_count >= Self::MIN_PARTICLES_TO_START
+    }
+
     /// Returns how many more particles can be added before hitting the configured maximum.
     pub fn remaining_particle_capacity(&self, current_count: u32) -> u32 {
         self.max_particle_count.saturating_sub(current_count)
@@ -531,9 +600,32 @@ impl UiState {
         self.set_base_scale(unit.canonical_meters(unit.to_meters(display)));
     }
 
+    /// Returns whether GPU particle simulation is available for the current settings.
+    ///
+    /// All simulation types now have a GPU compute implementation, so GPU computing
+    /// is always offered.
+    pub fn gpu_computing_available(&self) -> bool {
+        true
+    }
+
+    /// Returns whether GPU compute should drive the active simulation.
+    pub fn uses_gpu_simulation(&self) -> bool {
+        self.active_computing_unit == ComputingUnit::Gpu
+    }
+
     /// Disables particle append when simulation type changes until the next reset.
     pub fn apply_simulation_type_change(&mut self, previous_type: SimulationType) {
         if self.simulation_type != previous_type {
+            if !self.gpu_computing_available() {
+                self.force_cpu_computing_units();
+            }
+            self.disable_add_until_reset();
+        }
+    }
+
+    /// Disables particle append when computing unit changes until the next reset.
+    pub fn apply_computing_unit_change(&mut self, previous_unit: ComputingUnit) {
+        if self.computing_unit != previous_unit {
             self.disable_add_until_reset();
         }
     }
@@ -562,11 +654,83 @@ impl UiState {
         self.set_base_scale(scale);
     }
 
+    /// Schedules a GPU particle-buffer reload after CPU-side particles were replaced.
+    pub fn request_particle_buffer_reload(&mut self) {
+        self.particle_buffer_reload_requested = true;
+    }
+
+    /// Returns and clears a pending GPU particle-buffer reload request.
+    pub fn take_particle_buffer_reload_requested(&mut self) -> bool {
+        let requested = self.particle_buffer_reload_requested;
+        self.particle_buffer_reload_requested = false;
+        requested
+    }
+
+    /// Opens the Solar System reset log panel and clears prior log lines.
+    pub fn open_solar_system_reset_log(&mut self) {
+        self.reset_log.is_open = true;
+        self.reset_log.lines.clear();
+        self.reset_log.in_progress = true;
+        self.reset_log
+            .abort_requested
+            .store(false, Ordering::Release);
+    }
+
+    /// Appends a line to the reset log panel and mirrors it to stdout.
+    pub fn append_reset_log(&mut self, line: &str) {
+        self.reset_log.lines.push(line.to_string());
+        println!("{}", line);
+    }
+
+    /// Requests cooperative abort of an in-progress Solar System reset.
+    pub fn request_reset_abort(&self) {
+        self.reset_log
+            .abort_requested
+            .store(true, Ordering::Release);
+    }
+
+    /// Closes the reset log panel when processing has finished.
+    pub fn close_reset_log_panel(&mut self) {
+        if !self.reset_log.in_progress {
+            self.reset_log.is_open = false;
+        }
+    }
+
+    /// Marks the reset log panel as finished (enables Close, disables Abort).
+    pub fn finish_reset_log(&mut self) {
+        self.reset_log.in_progress = false;
+    }
+
+    /// Returns whether a Solar System reset abort was requested.
+    pub fn reset_abort_requested(&self) -> bool {
+        self.reset_log
+            .abort_requested
+            .load(Ordering::Acquire)
+    }
+
     /// Flags a simulation reset and re-enables particle append.
     pub fn request_reset(&mut self) {
+        self.commit_active_computing_unit();
+        self.is_running = false;
         self.is_reset_requested = true;
         self.is_resetting = true;
         self.is_add_particles_enabled = true;
+        if self.placement_mode == PlacementMode::SolarSystem {
+            self.open_solar_system_reset_log();
+        }
+    }
+
+    fn commit_active_computing_unit(&mut self) {
+        if !self.gpu_computing_available() {
+            self.force_cpu_computing_units();
+            return;
+        }
+        self.active_computing_unit = self.computing_unit;
+    }
+
+    fn force_cpu_computing_units(&mut self) {
+        self.computing_unit = ComputingUnit::Cpu;
+        self.active_computing_unit = ComputingUnit::Cpu;
     }
 
     fn disable_add_until_reset(&mut self) {
@@ -651,6 +815,11 @@ impl UiState {
             ObjectInputType::SpiralDisk => self.spiral_disk.to_object_input(scale),
             ObjectInputType::EllipticalOrbit => self.elliptical_orbit.to_object_input(scale),
         }
+    }
+
+    /// Returns whether reset should repopulate particles for the current placement mode.
+    pub fn reset_repopulates_particles(&self) -> bool {
+        !matches!(self.placement_mode, PlacementMode::Manual)
     }
 
     /// Builds object input for simulation reset from the current placement mode.

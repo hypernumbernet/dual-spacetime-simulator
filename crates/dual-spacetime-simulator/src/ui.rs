@@ -111,13 +111,18 @@ pub fn draw_ui(
                 if uis.app_mode == AppMode::Simulation {
                     ui.menu_button("Simulation", |ui| {
                         ui.set_min_width(MENU_POPUP_WIDTH);
-                        if ui
-                            .button(if uis.is_running { "Pause" } else { "Start" })
-                            .clicked()
-                        {
-                            uis.is_running = !uis.is_running;
-                            ui.close_menu();
-                        }
+                        let particle_count =
+                            simulation_manager.read().unwrap().particle_count();
+                        let can_start = UiState::can_start_simulation(particle_count);
+                        ui.add_enabled_ui(can_start || uis.is_running, |ui| {
+                            if ui
+                                .button(if uis.is_running { "Pause" } else { "Start" })
+                                .clicked()
+                            {
+                                uis.is_running = !uis.is_running;
+                                ui.close_menu();
+                            }
+                        });
                         if ui.button("Reset").clicked() {
                             uis.request_reset();
                             ui.close_menu();
@@ -171,11 +176,24 @@ pub fn draw_ui(
                     label_indicator(ui, &count.to_string());
                 });
                 ui.separator();
-                if button_normal(ui, "Start/Pause").clicked() {
-                    uis.is_running = !uis.is_running;
+                let particle_count = simulation_manager.read().unwrap().particle_count();
+                let can_start = UiState::can_start_simulation(particle_count);
+                ui.add_enabled_ui(can_start || uis.is_running, |ui| {
+                    if button_normal(
+                        ui,
+                        if uis.is_running { "Pause" } else { "Start" },
+                        uis.is_running,
+                    )
+                    .clicked()
+                    {
+                        uis.is_running = !uis.is_running;
+                    }
+                });
+                if !can_start && !uis.is_running {
+                    label_normal(ui, "Need at least 2 particles");
                 }
                 ui.separator();
-                if button_normal(ui, "Object Input").clicked() {
+                if button_normal(ui, "Object Input", false).clicked() {
                     uis.is_object_input_panel_open = !uis.is_object_input_panel_open;
                 }
                 ui.separator();
@@ -192,8 +210,14 @@ pub fn draw_ui(
                 );
                 ui.separator();
                 ui.style_mut().spacing.slider_width = 160.0;
-                label_normal(ui, "Max FPS");
-                ui.add(Slider::new(&mut uis.max_fps, 1..=1000));
+                ui.horizontal(|ui| {
+                    label_normal(ui, "Max FPS");
+                    ui.checkbox(&mut uis.max_fps_unlimited, "Unlimited");
+                });
+                ui.add_enabled(
+                    !uis.max_fps_unlimited,
+                    Slider::new(&mut uis.max_fps, 1..=1000),
+                );
                 ui.separator();
                 label_normal(ui, "Skip drawing frames");
                 ui.add(Slider::new(&mut uis.skip, 0..=1000));
@@ -260,7 +284,7 @@ pub fn draw_ui(
                     }
                 });
                 ui.separator();
-                if button_normal(ui, "Save Settings").clicked() {
+                if button_normal(ui, "Save Settings", false).clicked() {
                     settings.window_min_width = uis.min_window_width;
                     settings.window_min_height = uis.min_window_height;
                     settings.max_particle_count = uis.max_particle_count;
@@ -285,9 +309,15 @@ pub fn draw_ui(
             .show(ctx, |ui| {
                 ui.set_width(uis.input_panel_width);
                 combobox_simulation_type(ui, &mut uis);
+                combobox_computing_unit(ui, &mut uis);
                 base_scale_input(ui, &mut uis);
                 combobox_placement_mode(ui, &mut uis);
                 placement_mode_conditions(ui, &mut uis);
+                if !uis.is_reset_requested {
+                    button_reset(ui, &mut uis);
+                } else {
+                    label_normal(ui, "Resetting...");
+                }
                 ui.separator();
                 combobox_object_input_type(ui, &mut uis);
                 object_input_type_conditions(ui, &mut uis);
@@ -306,12 +336,6 @@ pub fn draw_ui(
                     }
                 });
                 button_add_particles(ui, &mut uis, current_count);
-                ui.separator();
-                if !uis.is_reset_requested {
-                    button_reset(ui, &mut uis);
-                } else {
-                    label_normal(ui, "Resetting...");
-                }
             });
     }
 
@@ -352,6 +376,46 @@ pub fn draw_ui(
                 ui.separator();
                 label_normal(ui, "Sample Count");
                 ui.add(Slider::new(&mut uis.graph_sample_count, 1..=5000).drag_value_speed(1.0));
+            });
+    }
+
+    if uis.reset_log.is_open {
+        let in_progress = uis.reset_log.in_progress;
+        let log_lines = uis.reset_log.lines.clone();
+        egui::Window::new("Solar System Reset")
+            .resizable(true)
+            .collapsible(true)
+            .default_size([480.0, 320.0])
+            .show(ctx, |ui| {
+                ui.set_min_width(320.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("reset_log_scroll")
+                    .max_height(240.0)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        for line in &log_lines {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(line).monospace().size(12.0),
+                                )
+                                .selectable(true),
+                            );
+                        }
+                        ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                    });
+                ui.separator();
+                let (close, abort) =
+                    button_row_close_abort(ui, !in_progress, in_progress);
+                if close.clicked() {
+                    uis.close_reset_log_panel();
+                }
+                if abort.clicked() {
+                    uis.request_reset_abort();
+                    if uis.reset_log.in_progress {
+                        uis.append_reset_log("Abort requested...");
+                    }
+                }
             });
     }
 
@@ -452,6 +516,21 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
             );
         });
     uis.apply_simulation_type_change(previous_type);
+}
+
+/// Renders the computing-unit combo box and updates dependent UI state.
+fn combobox_computing_unit(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Computing Unit");
+    let previous_unit = uis.computing_unit;
+    let id = ui.make_persistent_id("computing_unit_combobox");
+    ComboBox::from_id_salt(id)
+        .selected_text(format!("{}", uis.computing_unit))
+        .width(ui.available_width())
+        .show_ui(ui, |ui| {
+            selectable_value(ui, &mut uis.computing_unit, ComputingUnit::Cpu);
+            selectable_value(ui, &mut uis.computing_unit, ComputingUnit::Gpu);
+        });
+    uis.apply_computing_unit_change(previous_unit);
 }
 
 /// Renders the placement-mode combo box and updates dependent UI state.
@@ -656,7 +735,7 @@ fn button_add_particles(ui: &mut egui::Ui, uis: &mut UiState, current_count: u32
     ui.add_enabled_ui(
         !at_limit && !uis.is_add_particles_requested && uis.is_add_particles_enabled,
         |ui| {
-            if button_normal(ui, "Add").clicked() {
+            if button_normal(ui, "Add", false).clicked() {
                 uis.base_scale = clamp_world_scale(uis.base_scale);
                 uis.object_input = uis.build_object_input();
                 uis.is_add_particles_requested = true;
@@ -684,7 +763,7 @@ fn slider_add_particle_count(ui: &mut egui::Ui, uis: &mut UiState, current_count
 
 /// Draws reset button and flags simulation reset when clicked.
 fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
-    if button_normal(ui, "Reset").clicked() {
+    if button_normal(ui, "Reset", false).clicked() {
         uis.request_reset();
     }
 }
@@ -694,6 +773,7 @@ pub fn process_pending_snapshot_dialog(
     window: &Window,
     ui_state: &Arc<RwLock<UiState>>,
     simulation_manager: &Arc<RwLock<SimulationManager>>,
+    render_pipeline: Option<&crate::pipeline::ParticleRenderPipeline>,
     need_redraw: &Arc<RwLock<bool>>,
 ) {
     let pending = ui_state.write().unwrap().pending_snapshot_dialog.take();
@@ -702,7 +782,7 @@ pub fn process_pending_snapshot_dialog(
     };
     match pending {
         PendingSnapshotDialog::Save => {
-            save_particles(window, ui_state, simulation_manager);
+            save_particles(window, ui_state, simulation_manager, render_pipeline);
         }
         PendingSnapshotDialog::Load => {
             load_particles(window, ui_state, simulation_manager, need_redraw);
@@ -722,6 +802,7 @@ fn save_particles(
     window: &Window,
     ui_state: &Arc<RwLock<UiState>>,
     simulation_manager: &Arc<RwLock<SimulationManager>>,
+    render_pipeline: Option<&crate::pipeline::ParticleRenderPipeline>,
 ) {
     let Some(path) = snapshot_file_dialog(window)
         .set_file_name("particles.zip")
@@ -730,7 +811,13 @@ fn save_particles(
         return;
     };
     let uis = ui_state.read().unwrap();
-    let particles = simulation_manager.read().unwrap().particles();
+    let particles = if uis.uses_gpu_simulation() {
+        render_pipeline
+            .map(crate::pipeline::ParticleRenderPipeline::readback_particles)
+            .unwrap_or_else(|| simulation_manager.read().unwrap().particles())
+    } else {
+        simulation_manager.read().unwrap().particles()
+    };
     let snapshot = ParticleSnapshot::new(uis.simulation_type, uis.scale, particles);
     if let Err(e) = snapshot.save(&path) {
         eprintln!("Failed to save particles: {}", e);
@@ -771,21 +858,26 @@ fn load_particles(
     uis.simulation_time = 0.0;
     uis.is_running = false;
     simulation_manager.write().unwrap().load_from_snapshot(snapshot);
+    uis.request_particle_buffer_reload();
     *need_redraw.write().unwrap() = true;
 }
 
 /// Renders particle display mode combo box in the Settings panel.
 fn combobox_particle_display_mode(ui: &mut egui::Ui, uis: &mut UiState) {
-    label_normal(ui, "Particle Display");
-    let id = ui.make_persistent_id("particle_display_mode_combobox");
-    ComboBox::from_id_salt(id)
-        .selected_text(format!("{}", uis.particle_display_mode))
-        .width(ui.available_width())
-        .show_ui(ui, |ui| {
-            for mode in ParticleDisplayMode::ALL {
-                selectable_value(ui, &mut uis.particle_display_mode, mode);
-            }
+    ui.horizontal(|ui| {
+        label_normal(ui, "Particle Display");
+        let id = ui.make_persistent_id("particle_display_mode_combobox");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ComboBox::from_id_salt(id)
+                .selected_text(format!("{}", uis.particle_display_mode))
+                .width(90.0)
+                .show_ui(ui, |ui| {
+                    for mode in ParticleDisplayMode::ALL {
+                        selectable_value(ui, &mut uis.particle_display_mode, mode);
+                    }
+                });
         });
+    });
 }
 
 fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {

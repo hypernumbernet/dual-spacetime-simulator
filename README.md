@@ -64,6 +64,12 @@ cargo run -p dst-expand -- expr "(ai+bkI)(cj+dkK)"
 cargo test --workspace
 ```
 
+### テストと外部ネットワーク
+
+**`cargo test` は外部ネットワーク（HTTP 等）に接続しません。** CI やオフライン環境でもそのまま実行できます。
+
+太陽系配置モード（Solar System）の暦データ取得は **アプリ実行時のみ** 行われます。`satkit` 用の JPL 暦ファイル等を Google Cloud Storage 上のミラー（`astrokit-astro-data`）から `ureq` でダウンロードします。ダウンロードに失敗した場合は、組み込みのフォールバック粒子配置に切り替わります。
+
 ## 現在の主要依存
 
 - **Vulkan 基盤**: `ash`, `ash-window`, `gpu-allocator`

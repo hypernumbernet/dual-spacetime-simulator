@@ -1,7 +1,7 @@
 use dual_spacetime_simulator::object_input::ObjectInputType;
 use dual_spacetime_simulator::settings::AppSettings;
 use dual_spacetime_simulator::ui_state::{
-    AppMode, ParticleDisplayMode, PlacementMode, SimulationType, UiState,
+    AppMode, ComputingUnit, ParticleDisplayMode, PlacementMode, SimulationType, UiState,
 };
 
 #[test]
@@ -49,6 +49,60 @@ fn clamp_add_particle_count_to_capacity_limits_batch_size() {
     ui.add_particle_count = 80;
     ui.clamp_add_particle_count_to_capacity(100);
     assert_eq!(ui.add_particle_count, 80);
+}
+
+#[test]
+fn computing_unit_change_held_until_reset() {
+    let mut ui = UiState::default();
+    assert!(ui.is_add_particles_enabled);
+    assert!(!ui.uses_gpu_simulation());
+
+    ui.computing_unit = ComputingUnit::Gpu;
+    ui.apply_computing_unit_change(ComputingUnit::Cpu);
+    assert_eq!(ui.computing_unit, ComputingUnit::Gpu);
+    assert_eq!(ui.active_computing_unit, ComputingUnit::Cpu);
+    assert!(!ui.uses_gpu_simulation());
+    assert!(!ui.is_add_particles_enabled);
+
+    ui.request_reset();
+    assert_eq!(ui.active_computing_unit, ComputingUnit::Gpu);
+    assert!(ui.uses_gpu_simulation());
+    assert!(ui.is_add_particles_enabled);
+}
+
+#[test]
+fn simulation_type_change_keeps_gpu_computing_unit() {
+    let mut ui = UiState::default();
+    ui.computing_unit = ComputingUnit::Gpu;
+    ui.active_computing_unit = ComputingUnit::Gpu;
+
+    ui.simulation_type = SimulationType::SpeedOfLightLimit;
+    ui.apply_simulation_type_change(SimulationType::Normal);
+    assert_eq!(ui.computing_unit, ComputingUnit::Gpu);
+    assert_eq!(ui.active_computing_unit, ComputingUnit::Gpu);
+}
+
+#[test]
+fn gpu_computing_available_for_all_types() {
+    let mut ui = UiState::default();
+    ui.simulation_type = SimulationType::Normal;
+    ui.computing_unit = ComputingUnit::Gpu;
+    ui.active_computing_unit = ComputingUnit::Gpu;
+    assert!(ui.gpu_computing_available());
+    assert!(ui.uses_gpu_simulation());
+
+    ui.active_computing_unit = ComputingUnit::Cpu;
+    assert!(!ui.uses_gpu_simulation());
+
+    // Relativistic types now also support GPU compute.
+    ui.simulation_type = SimulationType::SpeedOfLightLimit;
+    ui.active_computing_unit = ComputingUnit::Gpu;
+    assert!(ui.gpu_computing_available());
+    assert!(ui.uses_gpu_simulation());
+
+    ui.simulation_type = SimulationType::LorentzTransformation;
+    assert!(ui.gpu_computing_available());
+    assert!(ui.uses_gpu_simulation());
 }
 
 #[test]
@@ -123,4 +177,94 @@ fn app_mode_change_resets_panels() {
     ui.apply_panel_defaults_on_app_mode_change(AppMode::Simulation, AppMode::Graph3D);
     assert!(!ui.is_simulation_panel_open);
     assert!(ui.is_graph3d_panel_open);
+}
+
+#[test]
+fn can_start_simulation_requires_at_least_two_particles() {
+    assert!(!UiState::can_start_simulation(0));
+    assert!(!UiState::can_start_simulation(1));
+    assert!(UiState::can_start_simulation(2));
+}
+
+#[test]
+fn request_reset_stops_running_simulation() {
+    let mut ui = UiState::default();
+    ui.is_running = true;
+    ui.request_reset();
+    assert!(!ui.is_running);
+    assert!(ui.is_reset_requested);
+}
+
+#[test]
+fn reset_repopulates_particles_by_placement_mode() {
+    let mut ui = UiState::default();
+    assert!(!ui.reset_repopulates_particles());
+
+    ui.placement_mode = PlacementMode::SolarSystem;
+    assert!(ui.reset_repopulates_particles());
+
+    ui.placement_mode = PlacementMode::SatelliteOrbit;
+    assert!(ui.reset_repopulates_particles());
+}
+
+#[test]
+fn preset_placement_reset_repopulates_particles() {
+    use dual_spacetime_simulator::object_input::ObjectInput;
+    use dual_spacetime_simulator::simulation::SimulationManager;
+
+    let mut ui = UiState::default();
+    ui.placement_mode = PlacementMode::SolarSystem;
+    assert!(matches!(
+        ui.build_reset_object_input(),
+        ObjectInput::SolarSystem { .. }
+    ));
+
+    ui.placement_mode = PlacementMode::SatelliteOrbit;
+    let object_input = ui.build_reset_object_input();
+    let mgr = SimulationManager::new();
+    mgr.reset(
+        object_input,
+        ui.simulation_type,
+        ui.add_particle_count,
+        ui.base_scale,
+    );
+    assert_eq!(mgr.particle_count(), ui.add_particle_count + 1);
+}
+
+#[test]
+fn solar_system_reset_opens_log_panel() {
+    let mut ui = UiState::default();
+    ui.placement_mode = PlacementMode::SolarSystem;
+    ui.request_reset();
+    assert!(ui.reset_log.is_open);
+    assert!(ui.reset_log.in_progress);
+    assert!(!ui.reset_abort_requested());
+}
+
+#[test]
+fn manual_reset_does_not_open_log_panel() {
+    let mut ui = UiState::default();
+    ui.placement_mode = PlacementMode::Manual;
+    ui.request_reset();
+    assert!(!ui.reset_log.is_open);
+    assert!(!ui.reset_log.in_progress);
+}
+
+#[test]
+fn request_reset_abort_sets_flag() {
+    let ui = UiState::default();
+    ui.request_reset_abort();
+    assert!(ui.reset_abort_requested());
+}
+
+#[test]
+fn close_reset_log_panel_requires_idle_state() {
+    let mut ui = UiState::default();
+    ui.open_solar_system_reset_log();
+    ui.close_reset_log_panel();
+    assert!(ui.reset_log.is_open);
+
+    ui.finish_reset_log();
+    ui.close_reset_log_panel();
+    assert!(!ui.reset_log.is_open);
 }
