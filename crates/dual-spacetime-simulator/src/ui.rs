@@ -471,16 +471,7 @@ fn combobox_computing_unit(ui: &mut egui::Ui, uis: &mut UiState) {
         .width(ui.available_width())
         .show_ui(ui, |ui| {
             selectable_value(ui, &mut uis.computing_unit, ComputingUnit::Cpu);
-            if uis.gpu_computing_available() {
-                selectable_value(ui, &mut uis.computing_unit, ComputingUnit::Gpu);
-            } else {
-                ui.add_enabled_ui(false, |ui| {
-                    let _ = ui.selectable_label(false, "GPU (Not Implemented)");
-                });
-                if uis.computing_unit == ComputingUnit::Gpu {
-                    uis.computing_unit = ComputingUnit::Cpu;
-                }
-            }
+            selectable_value(ui, &mut uis.computing_unit, ComputingUnit::Gpu);
         });
     uis.apply_computing_unit_change(previous_unit);
 }

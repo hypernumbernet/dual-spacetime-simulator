@@ -457,6 +457,8 @@ impl ApplicationHandler for App {
                 let particle_display_mode = ui_state.particle_display_mode;
                 let uses_gpu = ui_state.uses_gpu_simulation();
                 let time_per_frame = ui_state.time_per_frame;
+                let simulation_type = ui_state.simulation_type;
+                let sim_scale = ui_state.scale;
                 drop(ui_state);
 
                 let pending_steps = if uses_gpu {
@@ -465,7 +467,13 @@ impl ApplicationHandler for App {
                     0
                 };
                 if pending_steps > 0 {
-                    pipeline.record_gpu_advance(cb, time_per_frame, pending_steps);
+                    pipeline.record_gpu_advance(
+                        cb,
+                        simulation_type,
+                        time_per_frame,
+                        sim_scale,
+                        pending_steps,
+                    );
                 }
 
                 pipeline.render(

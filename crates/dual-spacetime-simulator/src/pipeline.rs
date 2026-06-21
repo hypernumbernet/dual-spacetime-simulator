@@ -179,11 +179,14 @@ impl ParticleRenderPipeline {
     pub fn record_gpu_advance(
         &self,
         command_buffer: vk::CommandBuffer,
+        simulation_type: SimulationType,
         delta_seconds: f64,
+        scale: f64,
         steps: u32,
     ) {
         if self.use_gpu_sim {
-            self.gpu_sim.dispatch(command_buffer, delta_seconds, steps);
+            self.gpu_sim
+                .dispatch(command_buffer, simulation_type, delta_seconds, scale, steps);
         }
     }
 

@@ -222,6 +222,17 @@ pub enum SimulationType {
     LorentzTransformation,
 }
 
+impl SimulationType {
+    /// Returns the discriminant passed to the GPU compute shader push constants.
+    pub fn gpu_code(self) -> u32 {
+        match self {
+            SimulationType::Normal => 0,
+            SimulationType::SpeedOfLightLimit => 1,
+            SimulationType::LorentzTransformation => 2,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum ComputingUnit {
     #[default]
@@ -556,16 +567,16 @@ impl UiState {
     }
 
     /// Returns whether GPU particle simulation is available for the current settings.
+    ///
+    /// All simulation types now have a GPU compute implementation, so GPU computing
+    /// is always offered.
     pub fn gpu_computing_available(&self) -> bool {
-        self.simulation_type == SimulationType::Normal
+        true
     }
 
-    /// Returns whether GPU compute should drive the active Normal simulation.
+    /// Returns whether GPU compute should drive the active simulation.
     pub fn uses_gpu_simulation(&self) -> bool {
-        matches!(
-            (self.simulation_type, self.active_computing_unit),
-            (SimulationType::Normal, ComputingUnit::Gpu)
-        )
+        self.active_computing_unit == ComputingUnit::Gpu
     }
 
     /// Disables particle append when simulation type changes until the next reset.

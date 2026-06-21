@@ -1,4 +1,5 @@
-use crate::simulation::{Particle, G, EPSILON};
+use crate::simulation::{Particle, G, EPSILON, LIGHT_SPEED};
+use crate::ui_state::SimulationType;
 use ash::vk;
 use glam::DVec3;
 use gpu_allocator::vulkan::Allocator;
@@ -75,6 +76,8 @@ struct ComputePushConstants {
     delta_seconds: f32,
     gravity_dt: f32,
     epsilon: f32,
+    light_speed_per_scale: f32,
+    sim_type: u32,
     phase: u32,
 }
 
@@ -168,11 +171,19 @@ impl GpuParticleSimulation {
         self.write_display_points(positions, colors);
     }
 
-    /// Records compute dispatches that advance `steps` Normal simulation steps on the GPU.
+    /// Records compute dispatches that advance `steps` simulation steps on the GPU.
     ///
     /// Each step runs phase 0 (position integration) then phase 1 (velocity update),
     /// keeping the GPU step count in lockstep with the simulation frame counter.
-    pub fn dispatch(&self, command_buffer: vk::CommandBuffer, delta_seconds: f64, steps: u32) {
+    /// `scale` is only consulted for the relativistic simulation types.
+    pub fn dispatch(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        simulation_type: SimulationType,
+        delta_seconds: f64,
+        scale: f64,
+        steps: u32,
+    ) {
         if self.particle_count == 0 || steps == 0 {
             return;
         }
@@ -182,6 +193,8 @@ impl GpuParticleSimulation {
             delta_seconds: delta_seconds as f32,
             gravity_dt: (G * delta_seconds) as f32,
             epsilon: EPSILON_F32,
+            light_speed_per_scale: (LIGHT_SPEED / scale) as f32,
+            sim_type: simulation_type.gpu_code(),
             phase: 0,
         };
         let workgroups = (self.particle_count + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
