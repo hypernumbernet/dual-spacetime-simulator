@@ -111,13 +111,18 @@ pub fn draw_ui(
                 if uis.app_mode == AppMode::Simulation {
                     ui.menu_button("Simulation", |ui| {
                         ui.set_min_width(MENU_POPUP_WIDTH);
-                        if ui
-                            .button(if uis.is_running { "Pause" } else { "Start" })
-                            .clicked()
-                        {
-                            uis.is_running = !uis.is_running;
-                            ui.close_menu();
-                        }
+                        let particle_count =
+                            simulation_manager.read().unwrap().particle_count();
+                        let can_start = UiState::can_start_simulation(particle_count);
+                        ui.add_enabled_ui(can_start || uis.is_running, |ui| {
+                            if ui
+                                .button(if uis.is_running { "Pause" } else { "Start" })
+                                .clicked()
+                            {
+                                uis.is_running = !uis.is_running;
+                                ui.close_menu();
+                            }
+                        });
                         if ui.button("Reset").clicked() {
                             uis.request_reset();
                             ui.close_menu();
@@ -171,8 +176,21 @@ pub fn draw_ui(
                     label_indicator(ui, &count.to_string());
                 });
                 ui.separator();
-                if button_normal(ui, if uis.is_running { "Pause" } else { "Start" }, uis.is_running).clicked() {
-                    uis.is_running = !uis.is_running;
+                let particle_count = simulation_manager.read().unwrap().particle_count();
+                let can_start = UiState::can_start_simulation(particle_count);
+                ui.add_enabled_ui(can_start || uis.is_running, |ui| {
+                    if button_normal(
+                        ui,
+                        if uis.is_running { "Pause" } else { "Start" },
+                        uis.is_running,
+                    )
+                    .clicked()
+                    {
+                        uis.is_running = !uis.is_running;
+                    }
+                });
+                if !can_start && !uis.is_running {
+                    label_normal(ui, "Need at least 2 particles");
                 }
                 ui.separator();
                 if button_normal(ui, "Object Input", false).clicked() {
@@ -295,6 +313,11 @@ pub fn draw_ui(
                 base_scale_input(ui, &mut uis);
                 combobox_placement_mode(ui, &mut uis);
                 placement_mode_conditions(ui, &mut uis);
+                if !uis.is_reset_requested {
+                    button_reset(ui, &mut uis);
+                } else {
+                    label_normal(ui, "Resetting...");
+                }
                 ui.separator();
                 combobox_object_input_type(ui, &mut uis);
                 object_input_type_conditions(ui, &mut uis);
@@ -313,12 +336,6 @@ pub fn draw_ui(
                     }
                 });
                 button_add_particles(ui, &mut uis, current_count);
-                ui.separator();
-                if !uis.is_reset_requested {
-                    button_reset(ui, &mut uis);
-                } else {
-                    label_normal(ui, "Resetting...");
-                }
             });
     }
 

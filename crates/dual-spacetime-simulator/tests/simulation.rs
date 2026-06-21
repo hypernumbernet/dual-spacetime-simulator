@@ -90,3 +90,20 @@ fn speed_of_light_limit_advance_stays_finite() {
         assert!(p.velocity.length_squared().is_finite());
     }
 }
+
+#[test]
+fn clear_removes_all_particles() {
+    let ic = ObjectInput::RandomSphere {
+        scale: 1e10,
+        radius: 1e9,
+        mass_range: (1e28, 1e29),
+        velocity_std: 1e5,
+    };
+    let state = SimulationManager::create_simulation(ic, UiSimType::Normal, 10, 1e10);
+    let mgr = SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(state)),
+    };
+    assert_eq!(mgr.particle_count(), 10);
+    mgr.clear(UiSimType::Normal, 1e10);
+    assert_eq!(mgr.particle_count(), 0);
+}

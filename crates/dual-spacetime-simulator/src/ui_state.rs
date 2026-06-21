@@ -477,6 +477,14 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Minimum particle count required before simulation can start.
+    pub const MIN_PARTICLES_TO_START: u32 = 2;
+
+    /// Returns whether the simulation has enough particles to start advancing.
+    pub fn can_start_simulation(particle_count: u32) -> bool {
+        particle_count >= Self::MIN_PARTICLES_TO_START
+    }
+
     /// Returns how many more particles can be added before hitting the configured maximum.
     pub fn remaining_particle_capacity(&self, current_count: u32) -> u32 {
         self.max_particle_count.saturating_sub(current_count)
@@ -623,6 +631,7 @@ impl UiState {
     /// Flags a simulation reset and re-enables particle append.
     pub fn request_reset(&mut self) {
         self.commit_active_computing_unit();
+        self.is_running = false;
         self.is_reset_requested = true;
         self.is_resetting = true;
         self.is_add_particles_enabled = true;

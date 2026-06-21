@@ -97,12 +97,10 @@ pub fn spawn_simulation_worker(
                     let max_particle_count = ui_state.max_particle_count;
                     drop(ui_state);
                     if is_reset_requested {
-                        simulation_manager.read().unwrap().reset(
-                            selected_object_input,
-                            simulation_type,
-                            add_particle_count,
-                            scale,
-                        );
+                        simulation_manager
+                            .read()
+                            .unwrap()
+                            .clear(simulation_type, scale);
                         let mut ui_state = ui_state_clone.write().unwrap();
                         ui_state.frame = 1;
                         ui_state.simulation_time = 0.0;
@@ -160,6 +158,11 @@ pub fn spawn_simulation_worker(
                 last_fps = now;
             }
             if !is_running || app_mode != AppMode::Simulation {
+                std::thread::sleep(Duration::from_millis(16));
+                continue;
+            }
+            let particle_count = simulation_manager.read().unwrap().particle_count();
+            if !UiState::can_start_simulation(particle_count) {
                 std::thread::sleep(Duration::from_millis(16));
                 continue;
             }

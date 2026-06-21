@@ -311,6 +311,13 @@ impl SimulationManager {
         *state_guard = new_state;
     }
 
+    /// Clears all particles while preserving simulation type and scale settings.
+    pub fn clear(&self, simulation_type: SimulationType, scale: f64) {
+        let new_state = Self::state_from_particles(simulation_type, vec![], scale);
+        let mut state_guard = self.state.write().unwrap();
+        *state_guard = new_state;
+    }
+
     /// Advances the active simulation by one frame and updates velocities.
     pub fn advance(&self, time_per_frame: f64) {
         let mut sim = self.state.write().unwrap();

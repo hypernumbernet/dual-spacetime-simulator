@@ -178,3 +178,19 @@ fn app_mode_change_resets_panels() {
     assert!(!ui.is_simulation_panel_open);
     assert!(ui.is_graph3d_panel_open);
 }
+
+#[test]
+fn can_start_simulation_requires_at_least_two_particles() {
+    assert!(!UiState::can_start_simulation(0));
+    assert!(!UiState::can_start_simulation(1));
+    assert!(UiState::can_start_simulation(2));
+}
+
+#[test]
+fn request_reset_stops_running_simulation() {
+    let mut ui = UiState::default();
+    ui.is_running = true;
+    ui.request_reset();
+    assert!(!ui.is_running);
+    assert!(ui.is_reset_requested);
+}
