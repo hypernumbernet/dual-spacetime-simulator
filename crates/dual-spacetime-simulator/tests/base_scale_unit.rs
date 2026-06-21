@@ -1,7 +1,7 @@
 use dual_spacetime_simulator::object_input::{
     clamp_world_scale, ObjectInputType, SATELLITE_ORBIT_SCALE, SOLAR_SYSTEM_SCALE,
 };
-use dual_spacetime_simulator::ui_state::{BaseScaleUnit, UiState};
+use dual_spacetime_simulator::ui_state::{BaseScaleUnit, PlacementMode, UiState};
 
 #[test]
 fn default_base_scale_unit_is_km() {
@@ -79,19 +79,31 @@ fn object_input_type_change_preserves_base_scale_for_scaled_types() {
 }
 
 #[test]
-fn object_input_type_change_sets_base_scale_for_solar_system_and_satellite_orbit() {
+fn placement_mode_change_sets_base_scale_for_solar_system_and_satellite_orbit() {
     let mut ui = UiState::default();
     ui.base_scale = 42.0;
-    ui.object_input_type = ObjectInputType::SolarSystem;
-    ui.apply_object_input_type_change(ObjectInputType::RandomSphere);
+    ui.placement_mode = PlacementMode::SolarSystem;
+    ui.apply_placement_mode_change(PlacementMode::Manual);
     assert_eq!(ui.base_scale, SOLAR_SYSTEM_SCALE);
     assert!(!ui.is_add_particles_enabled);
 
     ui.is_add_particles_enabled = true;
-    ui.object_input_type = ObjectInputType::SatelliteOrbit;
-    ui.apply_object_input_type_change(ObjectInputType::SolarSystem);
+    ui.placement_mode = PlacementMode::SatelliteOrbit;
+    ui.apply_placement_mode_change(PlacementMode::SolarSystem);
     assert_eq!(ui.base_scale, SATELLITE_ORBIT_SCALE);
     assert!(!ui.is_add_particles_enabled);
+}
+
+#[test]
+fn object_input_type_change_does_not_disable_add() {
+    let mut ui = UiState::default();
+    assert!(ui.is_add_particles_enabled);
+    ui.object_input_type = ObjectInputType::SpiralDisk;
+    ui.apply_object_input_type_change(ObjectInputType::RandomSphere);
+    assert!(ui.is_add_particles_enabled);
+    ui.object_input_type = ObjectInputType::EllipticalOrbit;
+    ui.apply_object_input_type_change(ObjectInputType::SpiralDisk);
+    assert!(ui.is_add_particles_enabled);
 }
 
 #[test]
@@ -162,12 +174,12 @@ fn base_scale_edit_disables_add_until_reset() {
 }
 
 #[test]
-fn base_scale_edit_does_not_sync_unrelated_parameters_for_non_scaled_types() {
+fn base_scale_edit_does_not_sync_placement_mode_parameters() {
     let mut ui = UiState::default();
-    ui.object_input_type = ObjectInputType::SolarSystem;
-    let before = ui.random_sphere.radius;
+    ui.placement_mode = PlacementMode::SolarSystem;
+    ui.solar_system.start_year = 1999;
     ui.apply_base_scale_edit(2.0, false);
-    assert_eq!(ui.random_sphere.radius, before);
+    assert_eq!(ui.solar_system.start_year, 1999);
 }
 
 #[test]

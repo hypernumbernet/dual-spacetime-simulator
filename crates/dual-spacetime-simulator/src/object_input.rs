@@ -93,8 +93,6 @@ pub enum ObjectInputType {
     RandomSphere,
     RandomCube,
     SpiralDisk,
-    SolarSystem,
-    SatelliteOrbit,
     EllipticalOrbit,
 }
 
@@ -112,8 +110,6 @@ impl std::fmt::Display for ObjectInputType {
             ObjectInputType::RandomSphere => write!(f, "Random Sphere"),
             ObjectInputType::RandomCube => write!(f, "Random Cube"),
             ObjectInputType::SpiralDisk => write!(f, "Spiral Disk"),
-            ObjectInputType::SolarSystem => write!(f, "Solar System"),
-            ObjectInputType::SatelliteOrbit => write!(f, "Satellite Orbit"),
             ObjectInputType::EllipticalOrbit => write!(f, "Elliptical Orbit"),
         }
     }
@@ -126,8 +122,6 @@ impl ObjectInputType {
             ObjectInputType::RandomSphere => 1e10,
             ObjectInputType::RandomCube => 1e10,
             ObjectInputType::SpiralDisk => 1e7,
-            ObjectInputType::SolarSystem => SOLAR_SYSTEM_SCALE,
-            ObjectInputType::SatelliteOrbit => SATELLITE_ORBIT_SCALE,
             ObjectInputType::EllipticalOrbit => 1.5e11,
         }
     }
@@ -145,28 +139,7 @@ impl ObjectInputType {
 
     /// Expands a condition type into concrete object-input parameters scaled for `scale`.
     pub fn to_object_input(self, scale: f64) -> ObjectInput {
-        let scale = clamp_world_scale(scale);
-        if self.uses_scaled_parameters() {
-            return self.to_scaled_object_input(scale);
-        }
-        match self {
-            ObjectInputType::SolarSystem => ObjectInput::SolarSystem {
-                scale,
-                start_year: 2000,
-                start_month: 1,
-                start_day: 1,
-                start_hour: 12,
-            },
-            ObjectInputType::SatelliteOrbit => ObjectInput::SatelliteOrbit {
-                scale,
-                orbit_altitude_min: 300e3,
-                orbit_altitude_max: 800e3,
-                asteroid_mass: 1e24,
-                asteroid_distance: 2e7,
-                asteroid_speed: 3e3,
-            },
-            _ => unreachable!("scaled types are handled above"),
-        }
+        self.to_scaled_object_input(clamp_world_scale(scale))
     }
 
     fn to_scaled_object_input(self, scale: f64) -> ObjectInput {
@@ -198,7 +171,6 @@ impl ObjectInputType {
                 planetary_speed: 2.0e5 * factor,
                 planetary_distance: 2.0e11 * factor,
             },
-            _ => unreachable!("only scaled types call this helper"),
         }
     }
 }

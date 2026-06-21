@@ -1,5 +1,5 @@
 use dual_spacetime_simulator::settings::AppSettings;
-use dual_spacetime_simulator::ui_state::{AppMode, SimulationType, UiState};
+use dual_spacetime_simulator::ui_state::{AppMode, PlacementMode, SimulationType, UiState};
 
 #[test]
 fn apply_settings_clamps_add_particle_count() {
@@ -55,6 +55,23 @@ fn simulation_type_unchanged_keeps_add_enabled() {
     let mut ui = UiState::default();
     ui.apply_simulation_type_change(SimulationType::Normal);
     assert!(ui.is_add_particles_enabled);
+}
+
+#[test]
+fn placement_mode_change_disables_add_until_reset() {
+    let mut ui = UiState::default();
+    assert!(ui.is_add_particles_enabled);
+
+    ui.placement_mode = PlacementMode::SolarSystem;
+    ui.apply_placement_mode_change(PlacementMode::Manual);
+    assert!(!ui.is_add_particles_enabled);
+
+    ui.request_reset();
+    assert!(ui.is_add_particles_enabled);
+
+    ui.placement_mode = PlacementMode::SatelliteOrbit;
+    ui.apply_placement_mode_change(PlacementMode::SolarSystem);
+    assert!(!ui.is_add_particles_enabled);
 }
 
 #[test]

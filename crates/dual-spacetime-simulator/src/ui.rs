@@ -284,6 +284,16 @@ pub fn draw_ui(
                 ui.set_width(uis.input_panel_width);
                 combobox_simulation_type(ui, &mut uis);
                 base_scale_input(ui, &mut uis);
+                combobox_placement_mode(ui, &mut uis);
+                match uis.placement_mode {
+                    PlacementMode::SolarSystem => {
+                        condition_solar_system(ui, &mut uis);
+                    }
+                    PlacementMode::SatelliteOrbit => {
+                        condition_satellite_orbit(ui, &mut uis);
+                    }
+                    PlacementMode::Manual => {}
+                }
                 ui.separator();
                 combobox_object_input_type(ui, &mut uis);
                 match uis.object_input_type {
@@ -295,12 +305,6 @@ pub fn draw_ui(
                     }
                     ObjectInputType::SpiralDisk => {
                         condition_spiral_disk(ui, &mut uis);
-                    }
-                    ObjectInputType::SolarSystem => {
-                        condition_solar_system(ui, &mut uis);
-                    }
-                    ObjectInputType::SatelliteOrbit => {
-                        condition_satellite_orbit(ui, &mut uis);
                     }
                     ObjectInputType::EllipticalOrbit => {
                         condition_elliptical_orbit(ui, &mut uis);
@@ -333,13 +337,15 @@ pub fn draw_ui(
     if uis.is_resetting && uis.is_reset_requested {
         uis.is_resetting = false;
         uis.base_scale = clamp_world_scale(uis.base_scale);
-        uis.object_input = uis.build_object_input();
+        uis.object_input = uis.build_reset_object_input();
         uis.scale = uis.base_scale;
-        if uis.object_input_type == ObjectInputType::SolarSystem {
+        if uis.placement_mode == PlacementMode::SolarSystem {
             uis.time_per_frame = 10_000.0;
             uis.max_fps = 1000;
             uis.skip = 10;
-        } else if uis.object_input_type == ObjectInputType::EllipticalOrbit {
+        } else if uis.placement_mode == PlacementMode::Manual
+            && uis.object_input_type == ObjectInputType::EllipticalOrbit
+        {
             uis.time_per_frame = 100_000.0;
             uis.max_fps = 1000;
             uis.skip = 0;
@@ -481,6 +487,22 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
     uis.apply_simulation_type_change(previous_type);
 }
 
+/// Renders the placement-mode combo box and updates dependent UI state.
+fn combobox_placement_mode(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Placement Mode");
+    let previous_mode = uis.placement_mode;
+    let id = ui.make_persistent_id("placement_mode_combobox");
+    ComboBox::from_id_salt(id)
+        .selected_text(format!("{}", uis.placement_mode))
+        .width(ui.available_width())
+        .show_ui(ui, |ui| {
+            selectable_value(ui, &mut uis.placement_mode, PlacementMode::Manual);
+            selectable_value(ui, &mut uis.placement_mode, PlacementMode::SolarSystem);
+            selectable_value(ui, &mut uis.placement_mode, PlacementMode::SatelliteOrbit);
+        });
+    uis.apply_placement_mode_change(previous_mode);
+}
+
 /// Renders the object-input type combo box and syncs scaled parameters on change.
 fn combobox_object_input_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Object Input Type");
@@ -504,16 +526,6 @@ fn combobox_object_input_type(ui: &mut egui::Ui, uis: &mut UiState) {
                 ui,
                 &mut uis.object_input_type,
                 ObjectInputType::SpiralDisk,
-            );
-            selectable_value(
-                ui,
-                &mut uis.object_input_type,
-                ObjectInputType::SolarSystem,
-            );
-            selectable_value(
-                ui,
-                &mut uis.object_input_type,
-                ObjectInputType::SatelliteOrbit,
             );
             selectable_value(
                 ui,

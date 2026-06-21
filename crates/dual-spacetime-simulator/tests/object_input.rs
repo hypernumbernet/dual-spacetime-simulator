@@ -21,8 +21,6 @@ fn get_scale_positive_for_all_variants() {
         ObjectInputType::RandomSphere,
         ObjectInputType::RandomCube,
         ObjectInputType::SpiralDisk,
-        ObjectInputType::SolarSystem,
-        ObjectInputType::SatelliteOrbit,
         ObjectInputType::EllipticalOrbit,
     ] {
         let scale = ty.default_base_scale();
@@ -38,8 +36,6 @@ fn uses_scaled_parameters_matches_expected_types() {
     assert!(ObjectInputType::RandomCube.uses_scaled_parameters());
     assert!(ObjectInputType::SpiralDisk.uses_scaled_parameters());
     assert!(ObjectInputType::EllipticalOrbit.uses_scaled_parameters());
-    assert!(!ObjectInputType::SolarSystem.uses_scaled_parameters());
-    assert!(!ObjectInputType::SatelliteOrbit.uses_scaled_parameters());
 }
 
 #[test]
@@ -47,14 +43,6 @@ fn default_base_scale_matches_type_presets() {
     assert_eq!(ObjectInputType::RandomSphere.default_base_scale(), 1e10);
     assert_eq!(ObjectInputType::RandomCube.default_base_scale(), 1e10);
     assert_eq!(ObjectInputType::SpiralDisk.default_base_scale(), 1e7);
-    assert_eq!(
-        ObjectInputType::SolarSystem.default_base_scale(),
-        SOLAR_SYSTEM_SCALE
-    );
-    assert_eq!(
-        ObjectInputType::SatelliteOrbit.default_base_scale(),
-        SATELLITE_ORBIT_SCALE
-    );
     assert_eq!(ObjectInputType::EllipticalOrbit.default_base_scale(), 1.5e11);
 }
 
@@ -82,7 +70,14 @@ fn elliptical_orbit_always_two_bodies() {
 
 #[test]
 fn satellite_orbit_adds_satellites_beyond_two_bodies() {
-    let ic = ObjectInputType::SatelliteOrbit.to_object_input(SATELLITE_ORBIT_SCALE);
+    let ic = ObjectInput::SatelliteOrbit {
+        scale: SATELLITE_ORBIT_SCALE,
+        orbit_altitude_min: 300e3,
+        orbit_altitude_max: 800e3,
+        asteroid_mass: 1e24,
+        asteroid_distance: 2e7,
+        asteroid_speed: 3e3,
+    };
     let sim = ic.generate_particles(10);
     // Earth + asteroid + (n-1) satellites
     assert_eq!(sim.particles.len(), 11);

@@ -234,6 +234,37 @@ impl std::fmt::Display for SimulationType {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum PlacementMode {
+    #[default]
+    Manual,
+    SolarSystem,
+    SatelliteOrbit,
+}
+
+impl std::fmt::Display for PlacementMode {
+    /// Formats placement mode for combo-box and labels.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            PlacementMode::Manual => "Manual",
+            PlacementMode::SolarSystem => "Solar System",
+            PlacementMode::SatelliteOrbit => "Satellite Orbit",
+        };
+        write!(f, "{}", text)
+    }
+}
+
+impl PlacementMode {
+    /// Returns the recommended base scale for preset placement modes.
+    pub fn default_base_scale(self) -> Option<f64> {
+        match self {
+            PlacementMode::Manual => None,
+            PlacementMode::SolarSystem => Some(SOLAR_SYSTEM_SCALE),
+            PlacementMode::SatelliteOrbit => Some(SATELLITE_ORBIT_SCALE),
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PendingSnapshotDialog {
     Save,
@@ -284,6 +315,7 @@ pub struct UiState {
     pub last_app_mode_for_panel_sync: AppMode,
     pub object_input_type: ObjectInputType,
     pub object_input: ObjectInput,
+    pub placement_mode: PlacementMode,
     pub simulation_type: SimulationType,
     pub base_scale: f64,
     pub base_scale_unit: BaseScaleUnit,
@@ -338,6 +370,7 @@ impl Default for UiState {
             last_app_mode_for_panel_sync: AppMode::default(),
             object_input_type: ObjectInputType::default(),
             object_input: ObjectInput::default(),
+            placement_mode: PlacementMode::default(),
             simulation_type: SimulationType::Normal,
             base_scale: ObjectInputType::default().default_base_scale(),
             base_scale_unit: BaseScaleUnit::default(),
@@ -462,19 +495,24 @@ impl UiState {
         }
     }
 
-    /// Applies object-input type changes, including base-scale presets and parameter sync.
+    /// Disables particle append when placement mode changes until the next reset.
+    pub fn apply_placement_mode_change(&mut self, previous_mode: PlacementMode) {
+        if self.placement_mode == previous_mode {
+            return;
+        }
+        self.is_add_particles_enabled = false;
+        if let Some(scale) = self.placement_mode.default_base_scale() {
+            self.set_base_scale(scale);
+        }
+    }
+
+    /// Syncs scaled object-input parameters when the add type changes.
     pub fn apply_object_input_type_change(&mut self, previous_type: ObjectInputType) {
         if self.object_input_type == previous_type {
             return;
         }
-        match self.object_input_type {
-            ObjectInputType::SolarSystem | ObjectInputType::SatelliteOrbit => {
-                self.set_base_scale(self.object_input_type.default_base_scale());
-            }
-            _ if self.object_input_type.uses_scaled_parameters() => {
-                self.sync_scaled_object_input_parameters();
-            }
-            _ => {}
+        if self.object_input_type.uses_scaled_parameters() {
+            self.sync_scaled_object_input_parameters();
         }
     }
 
@@ -561,7 +599,7 @@ impl UiState {
         }
     }
 
-    /// Builds an object-input snapshot from the current panel state.
+    /// Builds object input for particle append from the current add-type panel state.
     pub fn build_object_input(&self) -> ObjectInput {
         let scale = self.base_scale;
         match self.object_input_type {
@@ -582,27 +620,35 @@ impl UiState {
                 disk_radius: self.spiral_disk.disk_radius,
                 mass_fixed: self.spiral_disk.mass_fixed,
             },
-            ObjectInputType::SolarSystem => ObjectInput::SolarSystem {
-                scale,
-                start_year: self.solar_system.start_year,
-                start_month: self.solar_system.start_month,
-                start_day: self.solar_system.start_day,
-                start_hour: self.solar_system.start_hour,
-            },
-            ObjectInputType::SatelliteOrbit => ObjectInput::SatelliteOrbit {
-                scale,
-                orbit_altitude_min: self.satellite_orbit.orbit_altitude_min,
-                orbit_altitude_max: self.satellite_orbit.orbit_altitude_max,
-                asteroid_mass: self.satellite_orbit.asteroid_mass,
-                asteroid_distance: self.satellite_orbit.asteroid_distance,
-                asteroid_speed: self.satellite_orbit.asteroid_speed,
-            },
             ObjectInputType::EllipticalOrbit => ObjectInput::EllipticalOrbit {
                 scale,
                 central_mass: self.elliptical_orbit.central_mass,
                 planetary_mass: self.elliptical_orbit.planetary_mass,
                 planetary_speed: self.elliptical_orbit.planetary_speed,
                 planetary_distance: self.elliptical_orbit.planetary_distance,
+            },
+        }
+    }
+
+    /// Builds object input for simulation reset from the current placement mode.
+    pub fn build_reset_object_input(&self) -> ObjectInput {
+        let scale = self.base_scale;
+        match self.placement_mode {
+            PlacementMode::Manual => self.build_object_input(),
+            PlacementMode::SolarSystem => ObjectInput::SolarSystem {
+                scale,
+                start_year: self.solar_system.start_year,
+                start_month: self.solar_system.start_month,
+                start_day: self.solar_system.start_day,
+                start_hour: self.solar_system.start_hour,
+            },
+            PlacementMode::SatelliteOrbit => ObjectInput::SatelliteOrbit {
+                scale,
+                orbit_altitude_min: self.satellite_orbit.orbit_altitude_min,
+                orbit_altitude_max: self.satellite_orbit.orbit_altitude_max,
+                asteroid_mass: self.satellite_orbit.asteroid_mass,
+                asteroid_distance: self.satellite_orbit.asteroid_distance,
+                asteroid_speed: self.satellite_orbit.asteroid_speed,
             },
         }
     }
@@ -694,24 +740,13 @@ pub struct SolarSystemParameters {
 }
 
 impl Default for SolarSystemParameters {
-    /// Loads default solar-system start-time values from object-input presets.
+    /// Loads default solar-system start-time values.
     fn default() -> Self {
-        if let ObjectInput::SolarSystem {
-            start_year,
-            start_month,
-            start_day,
-            start_hour,
-            ..
-        } = ObjectInputType::SolarSystem.to_object_input(SOLAR_SYSTEM_SCALE)
-        {
-            Self {
-                start_year,
-                start_month,
-                start_day,
-                start_hour,
-            }
-        } else {
-            panic!();
+        Self {
+            start_year: 2000,
+            start_month: 1,
+            start_day: 1,
+            start_hour: 12,
         }
     }
 }
@@ -725,26 +760,14 @@ pub struct SatelliteOrbitParameters {
 }
 
 impl Default for SatelliteOrbitParameters {
-    /// Loads default satellite-orbit parameter values from object-input presets.
+    /// Loads default satellite-orbit parameter values.
     fn default() -> Self {
-        if let ObjectInput::SatelliteOrbit {
-            orbit_altitude_min,
-            orbit_altitude_max,
-            asteroid_mass,
-            asteroid_distance,
-            asteroid_speed,
-            ..
-        } = ObjectInputType::SatelliteOrbit.to_object_input(SATELLITE_ORBIT_SCALE)
-        {
-            Self {
-                orbit_altitude_min,
-                orbit_altitude_max,
-                asteroid_mass,
-                asteroid_distance,
-                asteroid_speed,
-            }
-        } else {
-            panic!();
+        Self {
+            orbit_altitude_min: 300e3,
+            orbit_altitude_max: 800e3,
+            asteroid_mass: 1e24,
+            asteroid_distance: 2e7,
+            asteroid_speed: 3e3,
         }
     }
 }
