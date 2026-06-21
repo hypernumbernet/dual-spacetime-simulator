@@ -171,11 +171,11 @@ pub fn draw_ui(
                     label_indicator(ui, &count.to_string());
                 });
                 ui.separator();
-                if button_normal(ui, "Start/Pause").clicked() {
+                if button_normal(ui, if uis.is_running { "Pause" } else { "Start" }, uis.is_running).clicked() {
                     uis.is_running = !uis.is_running;
                 }
                 ui.separator();
-                if button_normal(ui, "Object Input").clicked() {
+                if button_normal(ui, "Object Input", false).clicked() {
                     uis.is_object_input_panel_open = !uis.is_object_input_panel_open;
                 }
                 ui.separator();
@@ -260,7 +260,7 @@ pub fn draw_ui(
                     }
                 });
                 ui.separator();
-                if button_normal(ui, "Save Settings").clicked() {
+                if button_normal(ui, "Save Settings", false).clicked() {
                     settings.window_min_width = uis.min_window_width;
                     settings.window_min_height = uis.min_window_height;
                     settings.max_particle_count = uis.max_particle_count;
@@ -681,7 +681,7 @@ fn button_add_particles(ui: &mut egui::Ui, uis: &mut UiState, current_count: u32
     ui.add_enabled_ui(
         !at_limit && !uis.is_add_particles_requested && uis.is_add_particles_enabled,
         |ui| {
-            if button_normal(ui, "Add").clicked() {
+            if button_normal(ui, "Add", false).clicked() {
                 uis.base_scale = clamp_world_scale(uis.base_scale);
                 uis.object_input = uis.build_object_input();
                 uis.is_add_particles_requested = true;
@@ -709,7 +709,7 @@ fn slider_add_particle_count(ui: &mut egui::Ui, uis: &mut UiState, current_count
 
 /// Draws reset button and flags simulation reset when clicked.
 fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
-    if button_normal(ui, "Reset").clicked() {
+    if button_normal(ui, "Reset", false).clicked() {
         uis.request_reset();
     }
 }

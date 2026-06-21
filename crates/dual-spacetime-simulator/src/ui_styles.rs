@@ -239,9 +239,17 @@ fn panel_button_height(ui: &Ui) -> f32 {
 }
 
 /// Draws a full-width normal button with enlarged interactive height.
-pub fn button_normal(ui: &mut Ui, text: &str) -> Response {
+/// When `inverted` is true, uses white background + black text (and border) to indicate running state.
+pub fn button_normal(ui: &mut Ui, text: &str, inverted: bool) -> Response {
     let button_size = vec2(ui.available_width(), panel_button_height(ui));
-    ui.add_sized(button_size, Button::new(text))
+    let button = if inverted {
+        Button::new(RichText::new(text).color(Color32::BLACK))
+            .fill(Color32::WHITE)
+            .stroke(Stroke::new(1.0, Color32::BLACK))
+    } else {
+        Button::new(text)
+    };
+    ui.add_sized(button_size, button)
 }
 
 /// Draws two equal-width buttons side by side without expanding the parent width.
