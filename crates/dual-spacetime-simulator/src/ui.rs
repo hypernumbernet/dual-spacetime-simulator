@@ -818,6 +818,7 @@ fn load_particles(
     uis.simulation_time = 0.0;
     uis.is_running = false;
     simulation_manager.write().unwrap().load_from_snapshot(snapshot);
+    uis.request_particle_buffer_reload();
     *need_redraw.write().unwrap() = true;
 }
 

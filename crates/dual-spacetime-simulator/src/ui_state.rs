@@ -409,6 +409,8 @@ pub struct UiState {
     pub particle_display_mode: ParticleDisplayMode,
     pub request_exit: bool,
     pub pending_snapshot_dialog: Option<PendingSnapshotDialog>,
+    /// CPU-side particle data was replaced (e.g. snapshot load); GPU buffer must be refreshed.
+    pub particle_buffer_reload_requested: bool,
     pub graph_type: GraphType,
     pub graph_sample_count: u32,
     pub graph_radius: f64,
@@ -468,6 +470,7 @@ impl Default for UiState {
             particle_display_mode: ParticleDisplayMode::default(),
             request_exit: false,
             pending_snapshot_dialog: None,
+            particle_buffer_reload_requested: false,
             graph_type: GraphType::SphericalFibonacciLattice,
             graph_sample_count: 1000,
             graph_radius: 1.0,
@@ -626,6 +629,18 @@ impl UiState {
     /// Updates base scale from an external source such as snapshot load.
     pub fn apply_external_base_scale(&mut self, scale: f64) {
         self.set_base_scale(scale);
+    }
+
+    /// Schedules a GPU particle-buffer reload after CPU-side particles were replaced.
+    pub fn request_particle_buffer_reload(&mut self) {
+        self.particle_buffer_reload_requested = true;
+    }
+
+    /// Returns and clears a pending GPU particle-buffer reload request.
+    pub fn take_particle_buffer_reload_requested(&mut self) -> bool {
+        let requested = self.particle_buffer_reload_requested;
+        self.particle_buffer_reload_requested = false;
+        requested
     }
 
     /// Flags a simulation reset and re-enables particle append.

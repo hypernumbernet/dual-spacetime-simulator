@@ -49,6 +49,68 @@ struct Graph3dBuildResult {
     line_vertices: Vec<([f32; 3], [f32; 4])>,
 }
 
+/// Coordinates CPU→GPU particle buffer synchronization between the UI, worker, and render loop.
+#[derive(Clone)]
+struct GpuParticleSync {
+    upload_pending: Arc<AtomicBool>,
+    append_pending: Arc<AtomicBool>,
+    advance_steps: Arc<AtomicU32>,
+}
+
+impl GpuParticleSync {
+    fn new(initial_upload: bool) -> Self {
+        Self {
+            upload_pending: Arc::new(AtomicBool::new(initial_upload)),
+            append_pending: Arc::new(AtomicBool::new(false)),
+            advance_steps: Arc::new(AtomicU32::new(0)),
+        }
+    }
+
+    fn request_full_upload(&self) {
+        self.advance_steps.store(0, Ordering::Release);
+        self.upload_pending.store(true, Ordering::Release);
+        self.append_pending.store(false, Ordering::Release);
+    }
+
+    fn request_append_preserving(&self) {
+        self.advance_steps.store(0, Ordering::Release);
+        self.append_pending.store(true, Ordering::Release);
+    }
+
+    fn request_cpu_mode_upload(&self) {
+        self.advance_steps.store(0, Ordering::Release);
+        self.upload_pending.store(true, Ordering::Release);
+    }
+
+    fn has_pending_sync(&self) -> bool {
+        self.upload_pending.load(Ordering::Acquire) || self.append_pending.load(Ordering::Acquire)
+    }
+
+    fn take_upload_pending(&self) -> bool {
+        self.upload_pending.swap(false, Ordering::AcqRel)
+    }
+
+    fn append_pending(&self) -> bool {
+        self.append_pending.load(Ordering::Acquire)
+    }
+
+    fn clear_append_pending(&self) {
+        self.append_pending.store(false, Ordering::Release);
+    }
+
+    fn take_advance_steps(&self) -> u32 {
+        self.advance_steps.swap(0, Ordering::AcqRel)
+    }
+
+    fn fetch_add_advance_step(&self) {
+        self.advance_steps.fetch_add(1, Ordering::Release);
+    }
+
+    fn clear_advance_steps(&self) {
+        self.advance_steps.store(0, Ordering::Release);
+    }
+}
+
 /// Run the desktop application (window + Vulkan + UI loop).
 pub fn run() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new()?;
@@ -58,22 +120,18 @@ pub fn run() -> Result<(), EventLoopError> {
         Arc::clone(&app.simulation_manager),
         Arc::clone(&app.need_redraw),
         Arc::clone(&app.skip_redraw),
-        Arc::clone(&app.gpu_advance_steps),
-        Arc::clone(&app.gpu_upload_pending),
-        Arc::clone(&app.gpu_append_pending),
+        app.gpu_particle_sync.clone(),
     );
     event_loop.run_app(&mut app)
 }
 
 /// Spawns a background thread that advances simulation state and schedules redraws.
-pub fn spawn_simulation_worker(
+pub(crate) fn spawn_simulation_worker(
     ui_state_clone: Arc<RwLock<UiState>>,
     simulation_manager: Arc<RwLock<SimulationManager>>,
     need_redraw: Arc<RwLock<bool>>,
     skip_redraw: Arc<RwLock<u32>>,
-    gpu_advance_steps: Arc<AtomicU32>,
-    gpu_upload_pending: Arc<AtomicBool>,
-    gpu_append_pending: Arc<AtomicBool>,
+    gpu_particle_sync: GpuParticleSync,
 ) {
     let thread_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_cpus::get())
@@ -109,9 +167,7 @@ pub fn spawn_simulation_worker(
                         ui_state.simulation_time = 0.0;
                         ui_state.is_reset_requested = false;
                         drop(ui_state);
-                        gpu_advance_steps.store(0, Ordering::Release);
-                        gpu_upload_pending.store(true, Ordering::Release);
-                        gpu_append_pending.store(false, Ordering::Release);
+                        gpu_particle_sync.request_full_upload();
                         need_redraw.write().unwrap().clone_from(&true);
                         skip_redraw.write().unwrap().clone_from(&skip);
                         continue;
@@ -128,11 +184,10 @@ pub fn spawn_simulation_worker(
                     let mut ui_state = ui_state_clone.write().unwrap();
                     ui_state.is_add_particles_requested = false;
                     drop(ui_state);
-                    gpu_advance_steps.store(0, Ordering::Release);
                     if uses_gpu {
-                        gpu_append_pending.store(true, Ordering::Release);
+                        gpu_particle_sync.request_append_preserving();
                     } else {
-                        gpu_upload_pending.store(true, Ordering::Release);
+                        gpu_particle_sync.request_cpu_mode_upload();
                     }
                     need_redraw.write().unwrap().clone_from(&true);
                     skip_redraw.write().unwrap().clone_from(&skip);
@@ -182,7 +237,7 @@ pub fn spawn_simulation_worker(
                 }
             }
             if uses_gpu {
-                gpu_advance_steps.fetch_add(1, Ordering::Release);
+                gpu_particle_sync.fetch_add_advance_step();
             } else {
                 thread_pool.install(|| {
                     simulation_manager.read().unwrap().advance(time_per_frame);
@@ -221,9 +276,7 @@ pub struct App {
     simulation_manager: Arc<RwLock<SimulationManager>>,
     need_redraw: Arc<RwLock<bool>>,
     skip_redraw: Arc<RwLock<u32>>,
-    gpu_advance_steps: Arc<AtomicU32>,
-    gpu_upload_pending: Arc<AtomicBool>,
-    gpu_append_pending: Arc<AtomicBool>,
+    gpu_particle_sync: GpuParticleSync,
     mouse_left_down: bool,
     mouse_right_down: bool,
     mouse_middle_down: bool,
@@ -277,9 +330,7 @@ impl Default for App {
             simulation_manager: Arc::new(RwLock::new(SimulationManager::default())),
             need_redraw: Arc::new(RwLock::new(true)),
             skip_redraw: Arc::new(RwLock::new(0)),
-            gpu_advance_steps: Arc::new(AtomicU32::new(0)),
-            gpu_upload_pending: Arc::new(AtomicBool::new(true)),
-            gpu_append_pending: Arc::new(AtomicBool::new(false)),
+            gpu_particle_sync: GpuParticleSync::new(true),
             mouse_left_down: false,
             mouse_right_down: false,
             mouse_middle_down: false,
@@ -354,7 +405,7 @@ impl ApplicationHandler for App {
             scale,
         );
         self.skip_redraw.write().unwrap().clone_from(&ui_state.skip);
-        self.gpu_advance_steps.store(0, Ordering::Release);
+        self.gpu_particle_sync.clear_advance_steps();
     }
 
     /// Handles window, input, rendering, and camera events for each platform event.
@@ -475,7 +526,7 @@ impl ApplicationHandler for App {
                 drop(ui_state);
 
                 let pending_steps = if uses_gpu {
-                    self.gpu_advance_steps.swap(0, Ordering::AcqRel)
+                    self.gpu_particle_sync.take_advance_steps()
                 } else {
                     0
                 };
@@ -621,6 +672,7 @@ impl ApplicationHandler for App {
             );
             window.request_redraw();
         }
+        self.apply_pending_particle_buffer_reload();
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
         }
@@ -700,9 +752,7 @@ impl ApplicationHandler for App {
         }
         self.graph3d_pending_rx = None;
         self.last_graph3d_fingerprint = u64::MAX;
-        if *self.need_redraw.read().unwrap() == false
-            && !self.gpu_upload_pending.load(Ordering::Acquire)
-            && !self.gpu_append_pending.load(Ordering::Acquire)
+        if *self.need_redraw.read().unwrap() == false && !self.gpu_particle_sync.has_pending_sync()
         {
             return;
         }
@@ -716,7 +766,7 @@ impl ApplicationHandler for App {
             uses_gpu
         };
 
-        if self.gpu_upload_pending.swap(false, Ordering::AcqRel) {
+        if self.gpu_particle_sync.take_upload_pending() {
             if let (Some(pipeline), Ok(manager)) = (
                 self.render_pipeline.as_mut(),
                 self.simulation_manager.try_read(),
@@ -728,12 +778,12 @@ impl ApplicationHandler for App {
         // GPU-mode "Add": preserve simulated positions of existing particles by
         // reading back current GPU state before re-uploading the combined buffer.
         // Cleared only after a successful upload to avoid dropping the request.
-        if self.gpu_append_pending.load(Ordering::Acquire) {
+        if self.gpu_particle_sync.append_pending() {
             let particles = self.simulation_manager.read().unwrap().particles();
             if let Some(pipeline) = self.render_pipeline.as_mut() {
                 pipeline.add_particles_preserving_simulated(&particles);
             }
-            self.gpu_append_pending.store(false, Ordering::Release);
+            self.gpu_particle_sync.clear_append_pending();
         }
 
         if uses_gpu {
@@ -753,6 +803,17 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    /// Applies a snapshot-load request by scheduling a full GPU particle upload.
+    fn apply_pending_particle_buffer_reload(&mut self) {
+        let mut uis = self.ui_state.write().unwrap();
+        let reload_requested = uis.take_particle_buffer_reload_requested();
+        let uses_gpu = uis.uses_gpu_simulation();
+        drop(uis);
+        if reload_requested && uses_gpu {
+            self.gpu_particle_sync.request_full_upload();
+        }
+    }
+
     /// Clears all internal mouse drag button state flags.
     fn clear_mouse_drag_flags(&mut self) {
         self.mouse_left_down = false;
