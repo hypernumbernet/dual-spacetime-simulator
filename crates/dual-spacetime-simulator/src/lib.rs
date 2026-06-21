@@ -141,6 +141,7 @@ pub fn spawn_simulation_worker(
             let is_running = ui_state.is_running;
             let app_mode = ui_state.app_mode;
             let max_fps = ui_state.max_fps;
+            let max_fps_unlimited = ui_state.max_fps_unlimited;
             let time_per_frame = ui_state.time_per_frame;
             let skip = ui_state.skip;
             let uses_gpu = ui_state.uses_gpu_simulation();
@@ -163,9 +164,11 @@ pub fn spawn_simulation_worker(
                 continue;
             }
             let dt = now.duration_since(last_advance).as_secs_f64();
-            let target_fps = max_fps as f64;
-            if dt < 1.0 / target_fps {
-                continue;
+            if !max_fps_unlimited {
+                let target_fps = max_fps as f64;
+                if dt < 1.0 / target_fps {
+                    continue;
+                }
             }
             if uses_gpu {
                 gpu_advance_steps.fetch_add(1, Ordering::Release);

@@ -192,8 +192,14 @@ pub fn draw_ui(
                 );
                 ui.separator();
                 ui.style_mut().spacing.slider_width = 160.0;
-                label_normal(ui, "Max FPS");
-                ui.add(Slider::new(&mut uis.max_fps, 1..=1000));
+                ui.horizontal(|ui| {
+                    label_normal(ui, "Max FPS");
+                    ui.checkbox(&mut uis.max_fps_unlimited, "Unlimited");
+                });
+                ui.add_enabled(
+                    !uis.max_fps_unlimited,
+                    Slider::new(&mut uis.max_fps, 1..=1000),
+                );
                 ui.separator();
                 label_normal(ui, "Skip drawing frames");
                 ui.add(Slider::new(&mut uis.skip, 0..=1000));
