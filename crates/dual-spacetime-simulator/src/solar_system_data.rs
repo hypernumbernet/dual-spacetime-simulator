@@ -219,10 +219,14 @@ fn download_from_url_json(
 }
 
 /// Downloads satkit data files with progress logging and cooperative abort checks.
+///
+/// This function performs HTTP requests and is intended for interactive app use only.
+/// Unit and integration tests must not call it (see `docs/design_overview.md`).
 pub fn update_datafiles_with_log(
     log: &impl Fn(&str),
     abort: &AtomicBool,
 ) -> Result<(), UpdateDataError> {
+    check_abort(abort)?;
     let downloaddir = datadir().map_err(|err| UpdateDataError::Other(err.to_string()))?;
     let metadata = downloaddir
         .metadata()
@@ -260,9 +264,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn abort_before_download_returns_aborted() {
+    fn update_data_error_display_and_equality() {
+        assert_eq!(UpdateDataError::Aborted, UpdateDataError::Aborted);
+        assert_eq!(UpdateDataError::Aborted.to_string(), "aborted");
+        assert_eq!(
+            UpdateDataError::Other("network failure".into()).to_string(),
+            "network failure"
+        );
+    }
+
+    #[test]
+    fn check_abort_returns_error_when_flag_is_set() {
         let abort = AtomicBool::new(true);
-        let result = update_datafiles_with_log(&|_| {}, &abort);
-        assert_eq!(result, Err(UpdateDataError::Aborted));
+        assert_eq!(check_abort(&abort), Err(UpdateDataError::Aborted));
+
+        abort.store(false, Ordering::Release);
+        assert_eq!(check_abort(&abort), Ok(()));
     }
 }

@@ -38,7 +38,8 @@
 | CPU 並列（粒子の力積分など） | `rayon`, `num_cpus` |
 | 乱数・分布 | `rand`, `rand_distr` |
 | 設定ファイル | `serde`, `serde_json` |
-| 太陽系オブジェクト入力（暦） | `satkit` |
+| 太陽系オブジェクト入力（暦） | `satkit`（実行時に暦ファイルを HTTP で取得。テストでは未使用） |
+| HTTP（太陽系暦データのみ） | `ureq` |
 | その他 | `bytemuck`, `raw-window-handle`, `ahash` |
 
 ---
@@ -152,10 +153,26 @@
 
 ## 10. テスト
 
+### 10.1 方針：テストはオフライン
+
+**ユニットテスト・統合テストは外部ネットワーク（HTTP / HTTPS 等）に接続しません。** オフライン環境や CI でも `cargo test` をそのまま実行できるようにしています。
+
+- 太陽系モード用の暦ダウンロード（`solar_system_data::update_datafiles_with_log`）は **アプリ実行時のみ** 呼ばれ、テストからは呼び出しません。
+- 太陽系関連のテスト（`ui_state`、`object_input` 等）は UI 状態・スケール・オブジェクト入力の組み立てのみを検証し、`generate_particles` による HTTP ダウンロード経路には入りません。
+- 暦データ取得に失敗した場合のフォールバック粒子（`get_solar_system_fallback_particles`）はローカル定数のみで構成され、ネットワーク不要です。
+
+### 10.2 実行コマンド
+
 - **数学**: `cargo test -p dst-math`（`crates/dst-math/tests/` および `spacetime` / `biquaternion` 内の `#[cfg(test)]`）
 - **シミュレータ**: `cargo test -p dual-spacetime-simulator`（`crates/dual-spacetime-simulator/tests/`）。例：`simulation`、`object_input`、`camera`、`settings`、`ui_state`、`graph3d` など。
 - **Vulkan ヘッドレス系**（`vulkan_base_headless.rs`）: 通常の `cargo test -p dual-spacetime-simulator` に含まれる。Vulkan ローダーと対応 GPU が必要（無い環境では失敗する）。
 - **ワークスペース全体**: `cargo test --workspace`
+
+### 10.3 アプリ実行時のみのネットワーク利用（太陽系モード）
+
+Solar System 配置でリセットすると、`satkit` 用データ（JPL 暦等）を **Google Cloud Storage** 上の公開ミラー（`https://storage.googleapis.com/astrokit-astro-data`）から取得します。実装は `solar_system_data.rs`（`ureq`）です。取得後、`satkit::jplephem` で重心座標・速度を計算します。
+
+これはユーザー操作に応じた **ランタイム機能** であり、テストスイートの一部ではありません。
 
 ---
 
