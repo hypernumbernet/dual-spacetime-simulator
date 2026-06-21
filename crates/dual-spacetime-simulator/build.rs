@@ -13,8 +13,10 @@ fn main() {
         "axes_vertex.vert",
         "axes_fragment.frag",
         "particles_vertex.vert",
+        "particles_vertex_ssbo.vert",
         "particles_fragment.frag",
         "particles_sphere_fragment.frag",
+        "particles_compute.comp",
         "egui_vertex.vert",
         "egui_fragment.frag",
     ];

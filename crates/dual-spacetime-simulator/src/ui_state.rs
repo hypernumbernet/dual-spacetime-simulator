@@ -222,6 +222,24 @@ pub enum SimulationType {
     LorentzTransformation,
 }
 
+#[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub enum ComputingUnit {
+    #[default]
+    Cpu,
+    Gpu,
+}
+
+impl std::fmt::Display for ComputingUnit {
+    /// Formats computing unit for combo-box and labels.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            ComputingUnit::Cpu => "CPU",
+            ComputingUnit::Gpu => "GPU",
+        };
+        write!(f, "{}", text)
+    }
+}
+
 impl std::fmt::Display for SimulationType {
     /// Formats simulation type for combo-box and labels.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -357,6 +375,7 @@ pub struct UiState {
     pub object_input: ObjectInput,
     pub placement_mode: PlacementMode,
     pub simulation_type: SimulationType,
+    pub computing_unit: ComputingUnit,
     pub base_scale: f64,
     pub base_scale_unit: BaseScaleUnit,
     pub random_sphere: RandomSphereParameters,
@@ -413,6 +432,7 @@ impl Default for UiState {
             object_input: ObjectInput::default(),
             placement_mode: PlacementMode::default(),
             simulation_type: SimulationType::Normal,
+            computing_unit: ComputingUnit::default(),
             base_scale: ObjectInputType::default().default_base_scale(),
             base_scale_unit: BaseScaleUnit::default(),
             random_sphere: RandomSphereParameters::default(),
@@ -531,9 +551,29 @@ impl UiState {
         self.set_base_scale(unit.canonical_meters(unit.to_meters(display)));
     }
 
+    /// Returns whether GPU particle simulation is available for the current settings.
+    pub fn gpu_computing_available(&self) -> bool {
+        self.simulation_type == SimulationType::Normal
+    }
+
+    /// Returns whether GPU compute should drive the active Normal simulation.
+    pub fn uses_gpu_simulation(&self) -> bool {
+        self.computing_unit == ComputingUnit::Gpu && self.gpu_computing_available()
+    }
+
     /// Disables particle append when simulation type changes until the next reset.
     pub fn apply_simulation_type_change(&mut self, previous_type: SimulationType) {
         if self.simulation_type != previous_type {
+            if !self.gpu_computing_available() {
+                self.computing_unit = ComputingUnit::Cpu;
+            }
+            self.disable_add_until_reset();
+        }
+    }
+
+    /// Disables particle append when computing unit changes until the next reset.
+    pub fn apply_computing_unit_change(&mut self, previous_unit: ComputingUnit) {
+        if self.computing_unit != previous_unit {
             self.disable_add_until_reset();
         }
     }

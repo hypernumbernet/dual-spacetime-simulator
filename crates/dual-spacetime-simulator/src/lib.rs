@@ -2,6 +2,7 @@
 //! Exposes modules for integration tests under `tests/`.
 
 pub mod camera;
+pub mod gpu_simulation;
 pub mod graph3d;
 pub mod object_input;
 pub mod integration;
@@ -22,6 +23,7 @@ use crate::ui::{draw_ui, process_pending_snapshot_dialog};
 use crate::ui_state::{AppMode, DragOwner, UiState};
 use ash::vk;
 use vulkanvil::VulkanBase;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -55,6 +57,8 @@ pub fn run() -> Result<(), EventLoopError> {
         Arc::clone(&app.simulation_manager),
         Arc::clone(&app.need_redraw),
         Arc::clone(&app.skip_redraw),
+        Arc::clone(&app.gpu_advance_pending),
+        Arc::clone(&app.gpu_upload_pending),
     );
     event_loop.run_app(&mut app)
 }
@@ -65,6 +69,8 @@ pub fn spawn_simulation_worker(
     simulation_manager: Arc<RwLock<SimulationManager>>,
     need_redraw: Arc<RwLock<bool>>,
     skip_redraw: Arc<RwLock<u32>>,
+    gpu_advance_pending: Arc<AtomicBool>,
+    gpu_upload_pending: Arc<AtomicBool>,
 ) {
     let thread_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_cpus::get())
@@ -101,6 +107,7 @@ pub fn spawn_simulation_worker(
                         ui_state.simulation_time = 0.0;
                         ui_state.is_reset_requested = false;
                         drop(ui_state);
+                        gpu_upload_pending.store(true, Ordering::Release);
                         need_redraw.write().unwrap().clone_from(&true);
                         skip_redraw.write().unwrap().clone_from(&skip);
                         continue;
@@ -117,6 +124,7 @@ pub fn spawn_simulation_worker(
                     let mut ui_state = ui_state_clone.write().unwrap();
                     ui_state.is_add_particles_requested = false;
                     drop(ui_state);
+                    gpu_upload_pending.store(true, Ordering::Release);
                     need_redraw.write().unwrap().clone_from(&true);
                     skip_redraw.write().unwrap().clone_from(&skip);
                     continue;
@@ -132,6 +140,7 @@ pub fn spawn_simulation_worker(
             let max_fps = ui_state.max_fps;
             let time_per_frame = ui_state.time_per_frame;
             let skip = ui_state.skip;
+            let uses_gpu = ui_state.uses_gpu_simulation();
             drop(ui_state);
             let now = Instant::now();
             let dt = now.duration_since(last_fps).as_secs_f64();
@@ -156,7 +165,11 @@ pub fn spawn_simulation_worker(
                 continue;
             }
             thread_pool.install(|| {
-                simulation_manager.read().unwrap().advance(time_per_frame);
+                if uses_gpu {
+                    gpu_advance_pending.store(true, Ordering::Release);
+                } else {
+                    simulation_manager.read().unwrap().advance(time_per_frame);
+                }
             });
             if *skip_redraw.read().unwrap() < 1 {
                 let mut sr = skip_redraw.write().unwrap();
@@ -193,6 +206,8 @@ pub struct App {
     colors: Vec<[f32; 4]>,
     need_redraw: Arc<RwLock<bool>>,
     skip_redraw: Arc<RwLock<u32>>,
+    gpu_advance_pending: Arc<AtomicBool>,
+    gpu_upload_pending: Arc<AtomicBool>,
     mouse_left_down: bool,
     mouse_right_down: bool,
     mouse_middle_down: bool,
@@ -248,6 +263,8 @@ impl Default for App {
             colors: Vec::new(),
             need_redraw: Arc::new(RwLock::new(true)),
             skip_redraw: Arc::new(RwLock::new(0)),
+            gpu_advance_pending: Arc::new(AtomicBool::new(false)),
+            gpu_upload_pending: Arc::new(AtomicBool::new(true)),
             mouse_left_down: false,
             mouse_right_down: false,
             mouse_middle_down: false,
@@ -423,7 +440,13 @@ impl ApplicationHandler for App {
                 let show_grid = ui_state.show_grid;
                 let app_mode = ui_state.app_mode;
                 let particle_display_mode = ui_state.particle_display_mode;
+                let uses_gpu = ui_state.uses_gpu_simulation();
+                let time_per_frame = ui_state.time_per_frame;
                 drop(ui_state);
+
+                if uses_gpu && self.gpu_advance_pending.swap(false, Ordering::AcqRel) {
+                    pipeline.record_gpu_advance(cb, time_per_frame);
+                }
 
                 pipeline.render(
                     cb,
@@ -452,6 +475,9 @@ impl ApplicationHandler for App {
 
                 gui.finish_frame();
                 vb.advance_frame();
+                if uses_gpu {
+                    self.need_redraw.write().unwrap().clone_from(&false);
+                }
             }
             _ => (),
         }
@@ -549,6 +575,7 @@ impl ApplicationHandler for App {
                 window,
                 &self.ui_state,
                 &self.simulation_manager,
+                self.render_pipeline.as_ref(),
                 &self.need_redraw,
             );
             window.request_redraw();
@@ -632,6 +659,34 @@ impl ApplicationHandler for App {
         }
         self.graph3d_pending_rx = None;
         self.last_graph3d_fingerprint = u64::MAX;
+        if *self.need_redraw.read().unwrap() == false
+            && !self.gpu_upload_pending.load(Ordering::Acquire)
+        {
+            return;
+        }
+
+        let uses_gpu = {
+            let uis = self.ui_state.read().unwrap();
+            let uses_gpu = uis.uses_gpu_simulation();
+            if let Some(pipeline) = self.render_pipeline.as_mut() {
+                pipeline.set_use_gpu_sim(uses_gpu);
+            }
+            uses_gpu
+        };
+
+        if self.gpu_upload_pending.swap(false, Ordering::AcqRel) {
+            if let (Some(pipeline), Ok(manager)) = (
+                self.render_pipeline.as_mut(),
+                self.simulation_manager.try_read(),
+            ) {
+                pipeline.upload_particles(&manager.particles());
+            }
+        }
+
+        if uses_gpu {
+            return;
+        }
+
         if *self.need_redraw.read().unwrap() == false {
             return;
         }

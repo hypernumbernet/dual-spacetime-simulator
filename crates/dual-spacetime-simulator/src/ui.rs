@@ -285,6 +285,7 @@ pub fn draw_ui(
             .show(ctx, |ui| {
                 ui.set_width(uis.input_panel_width);
                 combobox_simulation_type(ui, &mut uis);
+                combobox_computing_unit(ui, &mut uis);
                 base_scale_input(ui, &mut uis);
                 combobox_placement_mode(ui, &mut uis);
                 placement_mode_conditions(ui, &mut uis);
@@ -452,6 +453,28 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
             );
         });
     uis.apply_simulation_type_change(previous_type);
+}
+
+/// Renders the computing-unit combo box and updates dependent UI state.
+fn combobox_computing_unit(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Computing Unit");
+    let previous_unit = uis.computing_unit;
+    let id = ui.make_persistent_id("computing_unit_combobox");
+    ComboBox::from_id_salt(id)
+        .selected_text(format!("{}", uis.computing_unit))
+        .width(ui.available_width())
+        .show_ui(ui, |ui| {
+            selectable_value(ui, &mut uis.computing_unit, ComputingUnit::Cpu);
+            if uis.gpu_computing_available() {
+                selectable_value(ui, &mut uis.computing_unit, ComputingUnit::Gpu);
+            } else {
+                ui.add_enabled_ui(false, |ui| {
+                    let _ = ui.selectable_label(false, "GPU (Not Implemented)");
+                });
+                uis.computing_unit = ComputingUnit::Cpu;
+            }
+        });
+    uis.apply_computing_unit_change(previous_unit);
 }
 
 /// Renders the placement-mode combo box and updates dependent UI state.
@@ -694,6 +717,7 @@ pub fn process_pending_snapshot_dialog(
     window: &Window,
     ui_state: &Arc<RwLock<UiState>>,
     simulation_manager: &Arc<RwLock<SimulationManager>>,
+    render_pipeline: Option<&crate::pipeline::ParticleRenderPipeline>,
     need_redraw: &Arc<RwLock<bool>>,
 ) {
     let pending = ui_state.write().unwrap().pending_snapshot_dialog.take();
@@ -702,7 +726,7 @@ pub fn process_pending_snapshot_dialog(
     };
     match pending {
         PendingSnapshotDialog::Save => {
-            save_particles(window, ui_state, simulation_manager);
+            save_particles(window, ui_state, simulation_manager, render_pipeline);
         }
         PendingSnapshotDialog::Load => {
             load_particles(window, ui_state, simulation_manager, need_redraw);
@@ -722,6 +746,7 @@ fn save_particles(
     window: &Window,
     ui_state: &Arc<RwLock<UiState>>,
     simulation_manager: &Arc<RwLock<SimulationManager>>,
+    render_pipeline: Option<&crate::pipeline::ParticleRenderPipeline>,
 ) {
     let Some(path) = snapshot_file_dialog(window)
         .set_file_name("particles.zip")
@@ -730,7 +755,13 @@ fn save_particles(
         return;
     };
     let uis = ui_state.read().unwrap();
-    let particles = simulation_manager.read().unwrap().particles();
+    let particles = if uis.uses_gpu_simulation() {
+        render_pipeline
+            .map(crate::pipeline::ParticleRenderPipeline::readback_particles)
+            .unwrap_or_else(|| simulation_manager.read().unwrap().particles())
+    } else {
+        simulation_manager.read().unwrap().particles()
+    };
     let snapshot = ParticleSnapshot::new(uis.simulation_type, uis.scale, particles);
     if let Err(e) = snapshot.save(&path) {
         eprintln!("Failed to save particles: {}", e);

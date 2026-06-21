@@ -1,7 +1,7 @@
 use dual_spacetime_simulator::object_input::ObjectInputType;
 use dual_spacetime_simulator::settings::AppSettings;
 use dual_spacetime_simulator::ui_state::{
-    AppMode, ParticleDisplayMode, PlacementMode, SimulationType, UiState,
+    AppMode, ComputingUnit, ParticleDisplayMode, PlacementMode, SimulationType, UiState,
 };
 
 #[test]
@@ -49,6 +49,44 @@ fn clamp_add_particle_count_to_capacity_limits_batch_size() {
     ui.add_particle_count = 80;
     ui.clamp_add_particle_count_to_capacity(100);
     assert_eq!(ui.add_particle_count, 80);
+}
+
+#[test]
+fn computing_unit_change_disables_add_until_reset() {
+    let mut ui = UiState::default();
+    assert!(ui.is_add_particles_enabled);
+
+    ui.computing_unit = ComputingUnit::Gpu;
+    ui.apply_computing_unit_change(ComputingUnit::Cpu);
+    assert!(!ui.is_add_particles_enabled);
+
+    ui.request_reset();
+    assert!(ui.is_add_particles_enabled);
+}
+
+#[test]
+fn simulation_type_change_resets_gpu_computing_unit() {
+    let mut ui = UiState::default();
+    ui.computing_unit = ComputingUnit::Gpu;
+
+    ui.simulation_type = SimulationType::SpeedOfLightLimit;
+    ui.apply_simulation_type_change(SimulationType::Normal);
+    assert_eq!(ui.computing_unit, ComputingUnit::Cpu);
+}
+
+#[test]
+fn gpu_computing_available_only_for_normal() {
+    let mut ui = UiState::default();
+    ui.simulation_type = SimulationType::Normal;
+    ui.computing_unit = ComputingUnit::Gpu;
+    assert!(ui.gpu_computing_available());
+    assert!(ui.uses_gpu_simulation());
+
+    ui.computing_unit = ComputingUnit::Cpu;
+    assert!(!ui.uses_gpu_simulation());
+
+    ui.simulation_type = SimulationType::LorentzTransformation;
+    assert!(!ui.gpu_computing_available());
 }
 
 #[test]
