@@ -309,8 +309,11 @@ pub fn draw_ui(
             .show(ctx, |ui| {
                 ui.set_width(uis.input_panel_width);
                 combobox_simulation_type(ui, &mut uis);
+                ui.separator();
                 combobox_computing_unit(ui, &mut uis);
+                ui.separator();
                 base_scale_input(ui, &mut uis);
+                ui.separator();
                 combobox_placement_mode(ui, &mut uis);
                 placement_mode_conditions(ui, &mut uis);
                 if !uis.is_reset_requested {
@@ -320,6 +323,7 @@ pub fn draw_ui(
                 }
                 ui.separator();
                 combobox_object_input_type(ui, &mut uis);
+                ui.separator();
                 object_input_type_conditions(ui, &mut uis);
                 ui.separator();
                 let current_count = simulation_manager.read().unwrap().particle_count();
@@ -329,7 +333,7 @@ pub fn draw_ui(
                 ui.horizontal(|ui| {
                     let mut v = uis.show_add_center_preview;
                     if ui
-                        .add(Checkbox::new(&mut v, "Show Add Center Preview"))
+                        .add(Checkbox::new(&mut v, "Show Add Center Pointer"))
                         .changed()
                     {
                         uis.show_add_center_preview = v;
@@ -380,45 +384,52 @@ pub fn draw_ui(
     }
 
     if uis.reset_log.is_open {
-        let in_progress = uis.reset_log.in_progress;
-        let log_lines = uis.reset_log.lines.clone();
-        egui::Window::new("Solar System Reset")
-            .resizable(true)
-            .collapsible(true)
-            .default_size([480.0, 320.0])
-            .show(ctx, |ui| {
-                ui.set_min_width(320.0);
-                egui::ScrollArea::vertical()
-                    .id_salt("reset_log_scroll")
-                    .max_height(240.0)
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        for line in &log_lines {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(line).monospace().size(12.0),
-                                )
-                                .selectable(true),
-                            );
-                        }
-                        ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
-                    });
-                ui.separator();
-                let (close, abort) =
-                    button_row_close_abort(ui, !in_progress, in_progress);
-                if close.clicked() {
-                    uis.close_reset_log_panel();
-                }
-                if abort.clicked() {
-                    uis.request_reset_abort();
-                    if uis.reset_log.in_progress {
-                        uis.append_reset_log("Abort requested...");
-                    }
-                }
-            });
+        solar_system_reset_log_window(ctx, &mut uis);
     }
 
+}
+
+const RESET_LOG_MONO_SIZE: f32 = 12.0;
+const RESET_LOG_ROW_HEIGHT: f32 = 14.0;
+
+fn solar_system_reset_log_window(ctx: &egui::Context, uis: &mut UiState) {
+    let in_progress = uis.reset_log.in_progress;
+    egui::Window::new("Solar System Reset")
+        .resizable(true)
+        .collapsible(true)
+        .default_size([480.0, 320.0])
+        .show(ctx, |ui| {
+            ui.set_min_width(320.0);
+            let line_count = uis.reset_log.lines.len();
+            egui::ScrollArea::vertical()
+                .id_salt("reset_log_scroll")
+                .max_height(240.0)
+                .stick_to_bottom(true)
+                .show_rows(ui, RESET_LOG_ROW_HEIGHT, line_count, |ui, row_range| {
+                    ui.set_width(ui.available_width());
+                    for row in row_range {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&uis.reset_log.lines[row])
+                                    .monospace()
+                                    .size(RESET_LOG_MONO_SIZE),
+                            )
+                            .selectable(true),
+                        );
+                    }
+                });
+            ui.separator();
+            let (close, abort) = button_row_close_abort(ui, !in_progress, in_progress);
+            if close.clicked() {
+                uis.close_reset_log_panel();
+            }
+            if abort.clicked() {
+                uis.request_reset_abort();
+                if uis.reset_log.in_progress {
+                    uis.append_reset_log("Abort requested...");
+                }
+            }
+        });
 }
 
 /// Formats simulation time into a compact signed human-readable duration string.

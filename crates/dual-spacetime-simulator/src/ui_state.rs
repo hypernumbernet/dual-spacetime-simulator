@@ -715,6 +715,7 @@ impl UiState {
         self.is_reset_requested = true;
         self.is_resetting = true;
         self.is_add_particles_enabled = true;
+        self.add_center = DVec3::ZERO;
         if self.placement_mode == PlacementMode::SolarSystem {
             self.open_solar_system_reset_log();
         }

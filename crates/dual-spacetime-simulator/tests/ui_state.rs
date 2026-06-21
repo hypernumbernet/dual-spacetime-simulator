@@ -190,9 +190,11 @@ fn can_start_simulation_requires_at_least_two_particles() {
 fn request_reset_stops_running_simulation() {
     let mut ui = UiState::default();
     ui.is_running = true;
+    ui.add_center = glam::DVec3::new(1.0, 2.0, 3.0);
     ui.request_reset();
     assert!(!ui.is_running);
     assert!(ui.is_reset_requested);
+    assert_eq!(ui.add_center, glam::DVec3::ZERO);
 }
 
 #[test]
