@@ -65,4 +65,3 @@ impl AppSettings {
         fs::write(path, text)
     }
 }
-

@@ -1,5 +1,5 @@
-﻿use crate::camera::OrbitCamera;
-use crate::gpu_simulation::{create_particle_descriptor_set_layout, GpuParticleSimulation};
+use crate::camera::OrbitCamera;
+use crate::gpu_simulation::{GpuParticleSimulation, create_particle_descriptor_set_layout};
 use crate::integration::Gui;
 use crate::simulation::Particle;
 use crate::ui_state::*;
@@ -8,8 +8,8 @@ use glam::{Mat4, Vec3};
 use gpu_allocator::vulkan::Allocator;
 use std::sync::{Arc, Mutex};
 use vulkanvil::{
-    create_buffer_with_data, create_depth_image, create_shader_module, select_depth_format,
-    AllocatedBuffer, AllocatedImage, VulkanBase,
+    AllocatedBuffer, AllocatedImage, VulkanBase, create_buffer_with_data, create_depth_image,
+    create_shader_module, select_depth_format,
 };
 
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
@@ -101,8 +101,7 @@ impl ParticleRenderPipeline {
         let device = base.device.clone();
         let allocator = Arc::clone(base.allocator.as_ref().unwrap());
 
-        let depth_format =
-            select_depth_format(&base.instance, base.physical_device);
+        let depth_format = select_depth_format(&base.instance, base.physical_device);
         let render_pass = create_render_pass(&device, base.swapchain_format, depth_format);
         let depth_image = create_depth_image(
             &device,
@@ -120,16 +119,11 @@ impl ParticleRenderPipeline {
         );
 
         let (layout_axes, pipeline_axes) = create_axes_pipeline(&device, render_pass);
-        let particle_descriptor_set_layout =
-            create_particle_descriptor_set_layout(&device);
-        let (layout_particles, particle_pipelines) = create_particles_pipelines(
-            &device,
-            render_pass,
-            particle_descriptor_set_layout,
-        );
+        let particle_descriptor_set_layout = create_particle_descriptor_set_layout(&device);
+        let (layout_particles, particle_pipelines) =
+            create_particles_pipelines(&device, render_pass, particle_descriptor_set_layout);
 
-        let (axes_buffer, axes_vertex_count) =
-            create_axes_vertices(&device, &allocator);
+        let (axes_buffer, axes_vertex_count) = create_axes_vertices(&device, &allocator);
         let gpu_sim = GpuParticleSimulation::new(
             device.clone(),
             Arc::clone(&allocator),
@@ -304,8 +298,7 @@ impl ParticleRenderPipeline {
             max_depth: 1.0,
         };
         unsafe {
-            self.device
-                .cmd_set_viewport(command_buffer, 0, &[viewport]);
+            self.device.cmd_set_viewport(command_buffer, 0, &[viewport]);
             self.device.cmd_set_scissor(
                 command_buffer,
                 0,
@@ -543,8 +536,7 @@ impl ParticleRenderPipeline {
         unsafe {
             self.device
                 .cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, self.pipeline_axes);
-            self.device
-                .cmd_bind_vertex_buffers(cb, 0, &[buffer], &[0]);
+            self.device.cmd_bind_vertex_buffers(cb, 0, &[buffer], &[0]);
             self.device.cmd_push_constants(
                 cb,
                 self.layout_axes,
@@ -1116,11 +1108,7 @@ fn create_particles_pipelines(
 /// Returns fragment shader bytes, blend state, and depth usage for a particle mode.
 fn particle_pipeline_spec(
     mode: ParticleDisplayMode,
-) -> (
-    &'static [u8],
-    vk::PipelineColorBlendAttachmentState,
-    bool,
-) {
+) -> (&'static [u8], vk::PipelineColorBlendAttachmentState, bool) {
     match mode {
         ParticleDisplayMode::Glow => (
             include_bytes!(concat!(

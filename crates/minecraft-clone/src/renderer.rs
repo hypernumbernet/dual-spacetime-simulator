@@ -4,7 +4,7 @@
 
 use crate::hud::{self, TextVertex};
 use crate::mesher::{ChunkMeshData, VoxelVertex};
-use crate::texture::{create_atlas_texture, create_texture_rgba, Texture};
+use crate::texture::{Texture, create_atlas_texture, create_texture_rgba};
 use crate::worldgen::SEA_LEVEL;
 use ash::vk;
 use glam::{IVec2, Mat4, Vec3, Vec4, Vec4Swizzles};
@@ -12,8 +12,8 @@ use gpu_allocator::vulkan::Allocator;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use vulkanvil::{
-    create_buffer_with_data, create_shader_module, AllocatedBuffer, AllocatedImage, VulkanBase,
-    MAX_FRAMES_IN_FLIGHT,
+    AllocatedBuffer, AllocatedImage, MAX_FRAMES_IN_FLIGHT, VulkanBase, create_buffer_with_data,
+    create_shader_module,
 };
 
 /// SPIR-V compiled by build.rs.
@@ -134,7 +134,8 @@ impl Renderer {
 
         let depth_format = select_depth_format(&vb.instance, vb.physical_device);
         let render_pass = create_render_pass(&device, vb.swapchain_format, depth_format);
-        let depth_image = create_depth_image(&device, &allocator, depth_format, vb.swapchain_extent);
+        let depth_image =
+            create_depth_image(&device, &allocator, depth_format, vb.swapchain_extent);
         let framebuffers = create_framebuffers(
             &device,
             render_pass,
@@ -153,7 +154,8 @@ impl Renderer {
             .stage_flags(vk::ShaderStageFlags::FRAGMENT);
         let bindings = [binding];
         let layout_ci = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-        let desc_set_layout = unsafe { device.create_descriptor_set_layout(&layout_ci, None) }.unwrap();
+        let desc_set_layout =
+            unsafe { device.create_descriptor_set_layout(&layout_ci, None) }.unwrap();
 
         // The HUD font texture shares the sampler-only set layout (set 0 = atlas,
         // set 1 = font, both allocated from the same pool).
@@ -248,7 +250,8 @@ impl Renderer {
         };
         let sky_ranges = [sky_range];
         let sky_pl_ci = vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&sky_ranges);
-        let sky_pipeline_layout = unsafe { device.create_pipeline_layout(&sky_pl_ci, None) }.unwrap();
+        let sky_pipeline_layout =
+            unsafe { device.create_pipeline_layout(&sky_pl_ci, None) }.unwrap();
         let sky_pipeline = create_sky_pipeline(&device, render_pass, sky_pipeline_layout);
 
         // HUD text pipeline: font sampler set + screen size push constant.
@@ -364,8 +367,22 @@ impl Renderer {
 
     /// Uploads a chunk's opaque + water meshes into per-chunk buffers. Empty meshes drop out.
     pub fn upload_chunk_mesh(&mut self, coord: IVec2, m: &ChunkMeshData) {
-        self.replace_mesh(coord, &m.opaque_verts, &m.opaque_indices, m.y_min, m.y_max, false);
-        self.replace_mesh(coord, &m.water_verts, &m.water_indices, m.y_min, m.y_max, true);
+        self.replace_mesh(
+            coord,
+            &m.opaque_verts,
+            &m.opaque_indices,
+            m.y_min,
+            m.y_max,
+            false,
+        );
+        self.replace_mesh(
+            coord,
+            &m.water_verts,
+            &m.water_indices,
+            m.y_min,
+            m.y_max,
+            true,
+        );
     }
 
     fn replace_mesh(
@@ -510,8 +527,11 @@ impl Renderer {
             let planes = frustum_planes(&Mat4::from_cols_array_2d(&pc.view_proj));
 
             // Opaque terrain.
-            self.device
-                .cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, self.opaque_pipeline);
+            self.device.cmd_bind_pipeline(
+                cb,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.opaque_pipeline,
+            );
             self.device.cmd_bind_descriptor_sets(
                 cb,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -561,7 +581,8 @@ impl Renderer {
                     0,
                     bytemuck::bytes_of(&screen),
                 );
-                self.device.cmd_bind_vertex_buffers(cb, 0, &[buf.buffer], &[0]);
+                self.device
+                    .cmd_bind_vertex_buffers(cb, 0, &[buf.buffer], &[0]);
                 self.device.cmd_draw(cb, *count, 1, 0, 0);
             }
 
@@ -605,7 +626,8 @@ impl Renderer {
                 .cmd_bind_vertex_buffers(cb, 0, &[mesh.vertex.buffer], &[0]);
             self.device
                 .cmd_bind_index_buffer(cb, mesh.index.buffer, 0, vk::IndexType::UINT32);
-            self.device.cmd_draw_indexed(cb, mesh.index_count, 1, 0, 0, 0);
+            self.device
+                .cmd_draw_indexed(cb, mesh.index_count, 1, 0, 0, 0);
         }
     }
 

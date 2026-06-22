@@ -161,7 +161,11 @@ fn clamp_pitch(relative: Vec3) -> Vec3 {
     let horiz_len = (dir.x * dir.x + dir.z * dir.z).sqrt();
 
     if horiz_len <= EPSILON {
-        let pitch = if dir.y > 0.0 { MAX_PITCH_RAD } else { -MAX_PITCH_RAD };
+        let pitch = if dir.y > 0.0 {
+            MAX_PITCH_RAD
+        } else {
+            -MAX_PITCH_RAD
+        };
         let new_y = pitch.sin();
         let new_h = pitch.cos();
         dir = Vec3::new(new_h, new_y, 0.0);

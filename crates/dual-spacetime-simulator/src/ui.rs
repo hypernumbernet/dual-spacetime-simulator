@@ -1,7 +1,5 @@
-use crate::object_input::{clamp_world_scale, ObjectInputType, ParticleBasicColor};
-use crate::particle_snapshot::{
-    ParticleSnapshot, SNAPSHOT_FILTER_EXT, SNAPSHOT_FILTER_NAME,
-};
+use crate::object_input::{ObjectInputType, ParticleBasicColor, clamp_world_scale};
+use crate::particle_snapshot::{ParticleSnapshot, SNAPSHOT_FILTER_EXT, SNAPSHOT_FILTER_NAME};
 use crate::settings::AppSettings;
 use crate::simulation::{AU, LY, MPC, PC, SimulationManager};
 use crate::ui_state::*;
@@ -111,8 +109,7 @@ pub fn draw_ui(
                 if uis.app_mode == AppMode::Simulation {
                     ui.menu_button("Simulation", |ui| {
                         ui.set_min_width(MENU_POPUP_WIDTH);
-                        let particle_count =
-                            simulation_manager.read().unwrap().particle_count();
+                        let particle_count = simulation_manager.read().unwrap().particle_count();
                         let can_start = UiState::can_start_simulation(particle_count);
                         ui.add_enabled_ui(can_start || uis.is_running, |ui| {
                             if ui
@@ -158,6 +155,7 @@ pub fn draw_ui(
             ))
             .default_width(uis.input_panel_width)
             .show(ctx, |ui| {
+                lock_panel_content_width(ui);
                 ui.horizontal(|ui| {
                     label_normal(ui, "FPS");
                     label_indicator(ui, &uis.fps.to_string());
@@ -315,9 +313,8 @@ pub fn draw_ui(
             .resizable(false)
             .collapsible(true)
             .default_width(uis.input_panel_width)
-            .max_width(uis.input_panel_width)
             .show(ctx, |ui| {
-                ui.set_width(uis.input_panel_width);
+                lock_panel_content_width(ui);
                 combobox_simulation_type(ui, &mut uis);
                 ui.separator();
                 combobox_computing_unit(ui, &mut uis);
@@ -333,11 +330,9 @@ pub fn draw_ui(
                 }
                 ui.separator();
                 combobox_object_input_type(ui, &mut uis);
-                ui.separator();
                 object_input_type_conditions(ui, &mut uis);
                 let current_count = simulation_manager.read().unwrap().particle_count();
                 if uis.object_input_type.uses_add_particle_count() {
-                    ui.separator();
                     slider_add_particle_count(ui, &mut uis, current_count);
                 }
                 ui.separator();
@@ -397,7 +392,6 @@ pub fn draw_ui(
     if uis.reset_log.is_open {
         solar_system_reset_log_window(ctx, &mut uis);
     }
-
 }
 
 const RESET_LOG_MONO_SIZE: f32 = 12.0;
@@ -752,20 +746,17 @@ fn add_center_axis_slider(value: &mut f64) -> Slider<'_> {
 
 /// Renders X/Y/Z sliders as base-scale multipliers, converted via Correct.m like other inputs.
 fn slider_add_center(ui: &mut egui::Ui, uis: &mut UiState) {
-    ui.style_mut().spacing.slider_width = 140.0;
     label_normal(ui, "Add Center");
+    let row_width = ui.available_width();
     let dbl_click = primary_double_click_pos(ui);
     for (label, component) in [
         ("X", &mut uis.add_center.x),
         ("Y", &mut uis.add_center.y),
         ("Z", &mut uis.add_center.z),
     ] {
-        ui.horizontal(|ui| {
-            label_normal(ui, label);
-            let response = ui.add(add_center_axis_slider(component));
-            apply_slider_double_click_reset_with_pos(&response, dbl_click, || {
-                *component = 0.0;
-            });
+        let response = slider_axis_row(ui, row_width, label, add_center_axis_slider(component));
+        apply_slider_double_click_reset_with_pos(&response, dbl_click, || {
+            *component = 0.0;
         });
     }
 }
@@ -799,28 +790,12 @@ fn slider_add_particle_count(ui: &mut egui::Ui, uis: &mut UiState, current_count
     let remaining = uis.remaining_particle_capacity(current_count);
     uis.clamp_add_particle_count_to_capacity(current_count);
     if let Some(range) = UiState::add_particle_count_range(remaining) {
-        let response = slider_labeled_u32(
-            ui,
-            "Add Particle Count",
-            &mut uis.add_particle_count,
-            range,
-        );
+        let response =
+            slider_labeled_u32(ui, "Add Particle Count", &mut uis.add_particle_count, range);
         apply_slider_double_click_reset(ui, &response, || {
             uis.reset_add_particle_count_to_default(current_count);
         });
     }
-}
-
-/// Renders a labeled u32 slider with the standard input-panel width.
-fn slider_labeled_u32(
-    ui: &mut egui::Ui,
-    label: &str,
-    value: &mut u32,
-    range: std::ops::RangeInclusive<u32>,
-) -> egui::Response {
-    ui.style_mut().spacing.slider_width = 150.0;
-    label_normal(ui, label);
-    ui.add(Slider::new(value, range))
 }
 
 /// Draws reset button and flags simulation reset when clicked.
@@ -919,7 +894,10 @@ fn load_particles(
     uis.frame = 1;
     uis.simulation_time = 0.0;
     uis.is_running = false;
-    simulation_manager.write().unwrap().load_from_snapshot(snapshot);
+    simulation_manager
+        .write()
+        .unwrap()
+        .load_from_snapshot(snapshot);
     uis.request_particle_buffer_reload();
     *need_redraw.write().unwrap() = true;
 }

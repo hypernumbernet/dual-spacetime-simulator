@@ -1,7 +1,7 @@
 //! Integration tests for G(3,1,1) PGA (`dst-math::pga`).
 
 use dst_math::pga::{
-    BASIS_LABELS, PGA, PGA_DIM, PGA_METRIC, Multivector, Pga, basis_mul, basis_mul_with_metric,
+    BASIS_LABELS, Multivector, PGA, PGA_DIM, PGA_METRIC, Pga, basis_mul, basis_mul_with_metric,
 };
 
 const EPS: f64 = 1e-9;

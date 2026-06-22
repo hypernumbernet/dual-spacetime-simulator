@@ -69,7 +69,10 @@ fn assert_stdout_trimmed(out: &CliOutput, expected: &str, context: &str) {
 }
 
 fn assert_pga_usage_text(text: &str, context: &str) {
-    assert!(text.contains(USAGE_PGA_TABLE), "{context}: missing pga-table");
+    assert!(
+        text.contains(USAGE_PGA_TABLE),
+        "{context}: missing pga-table"
+    );
     assert!(text.contains(USAGE_PGA_MUL), "{context}: missing pga-mul");
     assert!(
         text.contains(USAGE_PGA_SANDWICH),
@@ -135,10 +138,7 @@ fn pga_table_e4_squared_zero() {
         .lines()
         .find(|line| line.contains("**e4**"))
         .expect("row for basis e4");
-    assert!(
-        row.contains(" 0 |"),
-        "e4×e4 cell should be 0, row={row:?}"
-    );
+    assert!(row.contains(" 0 |"), "e4×e4 cell should be 0, row={row:?}");
 }
 
 #[test]
@@ -232,7 +232,8 @@ fn pga_sandwich_requires_three_indices() {
     let out = run(&["pga-sandwich", "1", "2"]);
     assert_usage_error(&out, "pga-sandwich two args");
     assert!(
-        out.stderr.contains("pga-sandwich requires exactly 3 basis indices"),
+        out.stderr
+            .contains("pga-sandwich requires exactly 3 basis indices"),
         "stderr={:?}",
         out.stderr
     );
@@ -294,11 +295,7 @@ fn pga_expr_coeff_sum() {
 fn pga_expr_parse_error() {
     let out = run(&["pga-expr", "(e0"]);
     assert_usage_error(&out, "pga-expr parse error");
-    assert!(
-        out.stderr.contains("at offset"),
-        "stderr={:?}",
-        out.stderr
-    );
+    assert!(out.stderr.contains("at offset"), "stderr={:?}", out.stderr);
 }
 
 #[test]

@@ -5,9 +5,9 @@ pub mod base;
 pub mod buffer;
 pub mod shader;
 
-pub use base::{VulkanBase, MAX_FRAMES_IN_FLIGHT};
+pub use base::{MAX_FRAMES_IN_FLIGHT, VulkanBase};
 pub use buffer::{
-    create_buffer_with_data, create_depth_image, select_depth_format, AllocatedBuffer,
-    AllocatedImage,
+    AllocatedBuffer, AllocatedImage, create_buffer_with_data, create_depth_image,
+    select_depth_format,
 };
 pub use shader::create_shader_module;

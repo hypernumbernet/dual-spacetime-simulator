@@ -89,7 +89,10 @@ fn add_center_marker_geometry_matches_world_position_and_half_extent() {
     let base_scale = 1e10;
     let (marker_center, half_extent) = ObjectInput::add_center_marker_geometry(center, base_scale);
     let world = ObjectInput::add_center_world_position(center, base_scale);
-    assert_eq!(marker_center, [world.x as f32, world.y as f32, world.z as f32]);
+    assert_eq!(
+        marker_center,
+        [world.x as f32, world.y as f32, world.z as f32]
+    );
     assert!((half_extent - ObjectInput::add_center_marker_half_extent(base_scale)).abs() < 1e-6);
 }
 

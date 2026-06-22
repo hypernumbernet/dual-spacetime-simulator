@@ -4,8 +4,8 @@
 pub mod camera;
 pub mod gpu_simulation;
 pub mod graph3d;
-pub mod object_input;
 pub mod integration;
+pub mod object_input;
 pub mod particle_snapshot;
 pub mod pipeline;
 pub mod settings;
@@ -15,19 +15,19 @@ pub mod ui;
 pub mod ui_state;
 pub mod ui_styles;
 
-use crate::object_input::{build_solar_system_particles, ObjectInput, SolarSystemBuildError};
 use crate::integration::Gui;
+use crate::object_input::{ObjectInput, SolarSystemBuildError, build_solar_system_particles};
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
 use crate::ui::{draw_ui, process_pending_snapshot_dialog};
 use crate::ui_state::{AppMode, DragOwner, PlacementMode, UiState};
 use ash::vk;
-use vulkanvil::VulkanBase;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use vulkanvil::VulkanBase;
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalPosition,

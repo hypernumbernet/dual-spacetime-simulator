@@ -1,7 +1,7 @@
 use crate::ui_state::trim_trailing_zeros;
-use egui::{Align, Color32, FontId, Frame, Layout, Margin, RichText, Stroke, TextStyle, Ui};
-use egui::{Button, vec2};
 use egui::Response;
+use egui::{Align, Color32, FontId, Frame, Layout, Margin, RichText, Stroke, TextStyle, Ui};
+use egui::{Button, Slider, vec2};
 
 #[derive(Default, Clone)]
 pub struct LabelStyle {
@@ -235,13 +235,85 @@ pub fn slider_pure(
 ) -> egui::Response {
     ui.add_space(4.0);
     ui.style_mut().spacing.slider_width = ui.available_width();
-    ui.add(egui::Slider::new(value, range).show_value(false))
+    ui.add(Slider::new(value, range).show_value(false))
+}
+
+const PANEL_SLIDER_MIN_TRACK_WIDTH: f32 = 40.0;
+const SLIDER_VALUE_CHAR_WIDTH: f32 = 8.0;
+const SLIDER_VALUE_PADDING: f32 = 12.0;
+const SLIDER_VALUE_MIN_RESERVE: f32 = 36.0;
+/// Width reserved for f64 panel sliders with two decimal places (e.g. "-10.00").
+const SLIDER_F64_VALUE_RESERVE_WIDTH: f32 = 48.0;
+
+/// Locks panel column width so later widgets cannot widen separators or buttons above.
+pub fn lock_panel_content_width(ui: &mut Ui) {
+    ui.set_max_width(ui.available_width());
+}
+
+fn panel_slider_track_width(row_width: f32, value_reserve: f32, spacing: f32) -> f32 {
+    (row_width - value_reserve - spacing).max(PANEL_SLIDER_MIN_TRACK_WIDTH)
+}
+
+fn set_panel_slider_track_width(ui: &mut Ui, row_width: f32, value_reserve: f32) {
+    let spacing = ui.spacing().item_spacing.x;
+    ui.style_mut().spacing.slider_width =
+        panel_slider_track_width(row_width, value_reserve, spacing);
+}
+
+fn slider_u32_value_reserve_width(max_value: u32) -> f32 {
+    let digits = max_value.to_string().len();
+    (digits as f32 * SLIDER_VALUE_CHAR_WIDTH + SLIDER_VALUE_PADDING).max(SLIDER_VALUE_MIN_RESERVE)
+}
+
+/// Renders a labeled u32 slider that fits within the panel column width.
+pub fn slider_labeled_u32(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut u32,
+    range: std::ops::RangeInclusive<u32>,
+) -> Response {
+    label_normal(ui, label);
+    let row_width = ui.available_width();
+    let value_reserve = slider_u32_value_reserve_width(*range.end());
+    ui.horizontal(|ui| {
+        ui.set_max_width(row_width);
+        ui.set_min_width(row_width);
+        set_panel_slider_track_width(ui, row_width, value_reserve);
+        ui.add(Slider::new(value, range))
+    })
+    .inner
+}
+
+/// Renders a short inline label plus slider row that fits within the panel column width.
+fn slider_inline_row(
+    ui: &mut Ui,
+    row_width: f32,
+    label: &str,
+    value_reserve: f32,
+    add_slider: impl FnOnce(&mut Ui) -> Response,
+) -> Response {
+    ui.horizontal(|ui| {
+        ui.set_max_width(row_width);
+        label_normal(ui, label);
+        set_panel_slider_track_width(ui, ui.available_width(), value_reserve);
+        add_slider(ui)
+    })
+    .inner
+}
+
+/// Renders an axis label (X/Y/Z) plus f64 slider row for the input panels.
+pub fn slider_axis_row(ui: &mut Ui, row_width: f32, label: &str, slider: Slider<'_>) -> Response {
+    slider_inline_row(ui, row_width, label, SLIDER_F64_VALUE_RESERVE_WIDTH, |ui| {
+        ui.add(slider)
+    })
 }
 
 /// Primary-button double-click position this frame, if any.
 pub fn primary_double_click_pos(ui: &Ui) -> Option<egui::Pos2> {
     ui.input(|i| {
-        if i.pointer.button_double_clicked(egui::PointerButton::Primary) {
+        if i.pointer
+            .button_double_clicked(egui::PointerButton::Primary)
+        {
             i.pointer.interact_pos()
         } else {
             None
@@ -347,4 +419,31 @@ pub fn button_row_close_abort(
         (close.inner, abort.inner)
     })
     .inner
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn u32_value_reserve_grows_with_digit_count() {
+        assert!(slider_u32_value_reserve_width(999) < slider_u32_value_reserve_width(10_000));
+    }
+
+    #[test]
+    fn track_width_clamps_to_minimum() {
+        assert_eq!(
+            panel_slider_track_width(10.0, 48.0, 4.0),
+            PANEL_SLIDER_MIN_TRACK_WIDTH,
+        );
+    }
+
+    #[test]
+    fn track_width_fits_panel_row_with_five_digit_value() {
+        let row_width = 184.0;
+        let value_reserve = slider_u32_value_reserve_width(19_999);
+        let spacing = 4.0;
+        let track = panel_slider_track_width(row_width, value_reserve, spacing);
+        assert!(track + value_reserve + spacing <= row_width);
+    }
 }

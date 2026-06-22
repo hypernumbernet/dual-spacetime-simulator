@@ -1,7 +1,7 @@
 //! Low-level Vulkan instance/device/swapchain/sync setup.
 
 use ash::khr::{surface, swapchain};
-use ash::{vk, Device, Entry, Instance};
+use ash::{Device, Entry, Instance, vk};
 use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::ffi::CStr;
@@ -201,7 +201,11 @@ impl VulkanBase {
     /// Waits for the current in-flight frame fence to signal completion.
     pub fn wait_for_fence(&self) {
         let fence = self.in_flight_fences[self.current_frame];
-        unsafe { self.device.wait_for_fences(&[fence], true, u64::MAX).unwrap() };
+        unsafe {
+            self.device
+                .wait_for_fences(&[fence], true, u64::MAX)
+                .unwrap()
+        };
     }
 
     /// Resets the current in-flight frame fence before command submission.
@@ -214,8 +218,12 @@ impl VulkanBase {
     pub fn acquire_next_image(&self) -> Result<(u32, bool), vk::Result> {
         let semaphore = self.image_available_semaphores[self.current_frame];
         unsafe {
-            self.swapchain_loader
-                .acquire_next_image(self.swapchain, u64::MAX, semaphore, vk::Fence::null())
+            self.swapchain_loader.acquire_next_image(
+                self.swapchain,
+                u64::MAX,
+                semaphore,
+                vk::Fence::null(),
+            )
         }
     }
 
@@ -251,7 +259,10 @@ impl VulkanBase {
             .swapchains(&swapchains)
             .image_indices(&image_indices);
 
-        unsafe { self.swapchain_loader.queue_present(self.graphics_queue, &present_info) }
+        unsafe {
+            self.swapchain_loader
+                .queue_present(self.graphics_queue, &present_info)
+        }
     }
 
     /// Advances frame index in the ring of in-flight frame resources.
@@ -284,7 +295,8 @@ impl Drop for VulkanBase {
             drop(self.allocator.take());
 
             self.cleanup_swapchain();
-            self.swapchain_loader.destroy_swapchain(self.swapchain, None);
+            self.swapchain_loader
+                .destroy_swapchain(self.swapchain, None);
             self.surface_loader.destroy_surface(self.surface, None);
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
@@ -300,8 +312,7 @@ fn pick_physical_device(
 ) -> (vk::PhysicalDevice, u32) {
     let devices = unsafe { instance.enumerate_physical_devices() }.unwrap();
     for pd in &devices {
-        let queue_families =
-            unsafe { instance.get_physical_device_queue_family_properties(*pd) };
+        let queue_families = unsafe { instance.get_physical_device_queue_family_properties(*pd) };
         for (i, qf) in queue_families.iter().enumerate() {
             let supports_graphics = qf.queue_flags.contains(vk::QueueFlags::GRAPHICS);
             let supports_surface = unsafe {
@@ -330,10 +341,9 @@ fn create_swapchain(
         surface_loader.get_physical_device_surface_capabilities(physical_device, surface)
     }
     .unwrap();
-    let formats = unsafe {
-        surface_loader.get_physical_device_surface_formats(physical_device, surface)
-    }
-    .unwrap();
+    let formats =
+        unsafe { surface_loader.get_physical_device_surface_formats(physical_device, surface) }
+            .unwrap();
     let present_modes = unsafe {
         surface_loader.get_physical_device_surface_present_modes(physical_device, surface)
     }
@@ -347,13 +357,12 @@ fn create_swapchain(
         })
         .unwrap_or(&formats[0]);
 
-    let present_mode = if mailbox_present_mode
-        && present_modes.contains(&vk::PresentModeKHR::MAILBOX)
-    {
-        vk::PresentModeKHR::MAILBOX
-    } else {
-        vk::PresentModeKHR::FIFO
-    };
+    let present_mode =
+        if mailbox_present_mode && present_modes.contains(&vk::PresentModeKHR::MAILBOX) {
+            vk::PresentModeKHR::MAILBOX
+        } else {
+            vk::PresentModeKHR::FIFO
+        };
 
     let window_size = window.inner_size();
     let extent = if caps.current_extent.width != u32::MAX {

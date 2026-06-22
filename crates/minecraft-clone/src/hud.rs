@@ -58,7 +58,13 @@ pub fn build_text_vertices(text: &str) -> Vec<TextVertex> {
     let shadow = [0.0, 0.0, 0.0, 0.85];
     let main = [1.0, 1.0, 1.0, 1.0];
     let off = TEXT_SCALE; // one glyph pixel
-    emit_pass(&mut verts, text, TEXT_MARGIN + off, TEXT_MARGIN + off, shadow);
+    emit_pass(
+        &mut verts,
+        text,
+        TEXT_MARGIN + off,
+        TEXT_MARGIN + off,
+        shadow,
+    );
     emit_pass(&mut verts, text, TEXT_MARGIN, TEXT_MARGIN, main);
     verts
 }
@@ -74,7 +80,11 @@ fn emit_pass(verts: &mut Vec<TextVertex>, text: &str, x0: f32, y0: f32, color: [
             continue;
         }
         let c = ch as u32;
-        let c = if (FIRST_CHAR..LAST_CHAR).contains(&c) { c } else { '?' as u32 };
+        let c = if (FIRST_CHAR..LAST_CHAR).contains(&c) {
+            c
+        } else {
+            '?' as u32
+        };
         if c != ' ' as u32 {
             emit_glyph(verts, x, y, c - FIRST_CHAR, color);
         }

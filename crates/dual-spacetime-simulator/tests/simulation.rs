@@ -1,5 +1,5 @@
 use dual_spacetime_simulator::object_input::ObjectInput;
-use dual_spacetime_simulator::simulation::{Particle, SimulationManager, G};
+use dual_spacetime_simulator::simulation::{G, Particle, SimulationManager};
 use dual_spacetime_simulator::ui_state::SimulationType as UiSimType;
 use glam::DVec3;
 

@@ -5,8 +5,8 @@ use std::sync::{Arc, RwLock};
 
 use crate::object_input::ObjectInput;
 use crate::particle_snapshot::ParticleSnapshot;
-use dst_math::spacetime::{Spacetime, rapidity_from_momentum};
 use crate::ui_state::SimulationType;
+use dst_math::spacetime::{Spacetime, rapidity_from_momentum};
 
 pub const LIGHT_SPEED: f64 = 299_792_458.0; // Speed of light in meters per second
 pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
@@ -269,10 +269,7 @@ impl SimulationManager {
         match simulation_type {
             SimulationType::Normal => SimulationState::Normal(SimulationNormal { particles }),
             SimulationType::SpeedOfLightLimit => {
-                SimulationState::SpeedOfLightLimit(SimulationSpeedOfLightLimit {
-                    particles,
-                    scale,
-                })
+                SimulationState::SpeedOfLightLimit(SimulationSpeedOfLightLimit { particles, scale })
             }
             SimulationType::LorentzTransformation => {
                 SimulationState::LorentzTransformation(SimulationLorentzTransformation {

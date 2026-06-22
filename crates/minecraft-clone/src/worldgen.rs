@@ -7,7 +7,7 @@
 //! overlaps it — no cross-chunk communication, no generation-order dependence.
 
 use crate::block::Block;
-use crate::chunk::{ChunkBlocks, CX, CY, CZ, WORLD_SCALE};
+use crate::chunk::{CX, CY, CZ, ChunkBlocks, WORLD_SCALE};
 use glam::IVec2;
 
 /// Shorthand: scales horizontal wavelengths and vertical relief together.
@@ -109,7 +109,12 @@ fn terrain_height_f(wx: i32, wz: i32) -> f32 {
     // Domain warp to break up the grid-aligned look of the lattice noise.
     let warp = 18.0 * S;
     let qx = fbm(fx / (80.0 * S), fz / (80.0 * S), WARP_SEED, 3);
-    let qz = fbm((fx + 131.0) / (80.0 * S), (fz - 71.0) / (80.0 * S), WARP_SEED, 3);
+    let qz = fbm(
+        (fx + 131.0) / (80.0 * S),
+        (fz - 71.0) / (80.0 * S),
+        WARP_SEED,
+        3,
+    );
     let wxw = fx + warp * qx;
     let wzw = fz + warp * qz;
 
@@ -209,7 +214,11 @@ fn tree_at(wx: i32, wz: i32) -> Option<(i32, TreeKind)> {
     }
     // Pines prefer higher elevation; broadleaf the lowlands.
     let high = h > SEA_LEVEL + (28.0 * S) as i32;
-    let kind = if high { TreeKind::Pine } else { TreeKind::Broadleaf };
+    let kind = if high {
+        TreeKind::Pine
+    } else {
+        TreeKind::Broadleaf
+    };
     let prob = if high { 0.05 } else { 0.045 } / density;
     if r < prob {
         let extra = (hash2(wx, wz, TRUNK_SEED) % 4) as i32;

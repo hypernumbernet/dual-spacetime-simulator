@@ -1,8 +1,8 @@
 //! Procedural 64x64 RGBA texture atlas (8 tiles of 16px) and its Vulkan upload.
 
 use ash::vk;
-use gpu_allocator::vulkan::Allocator;
 use gpu_allocator::MemoryLocation;
+use gpu_allocator::vulkan::Allocator;
 use std::sync::Mutex;
 use vulkanvil::{AllocatedBuffer, AllocatedImage, VulkanBase};
 
@@ -125,7 +125,14 @@ fn add(c: [f32; 3], d: f32) -> [f32; 3] {
 
 /// Generates the atlas and uploads it into a sampled GPU image (NEAREST sampler).
 pub fn create_atlas_texture(vb: &VulkanBase, allocator: &Mutex<Allocator>) -> Texture {
-    create_texture_rgba(vb, allocator, &generate_atlas_pixels(), ATLAS_PX, ATLAS_PX, "atlas")
+    create_texture_rgba(
+        vb,
+        allocator,
+        &generate_atlas_pixels(),
+        ATLAS_PX,
+        ATLAS_PX,
+        "atlas",
+    )
 }
 
 /// Uploads RGBA8 pixels into a sampled GPU image via a one-time transfer (NEAREST sampler).
@@ -178,8 +185,8 @@ pub fn create_texture_rgba(
         .command_buffer_count(1);
     let cb = unsafe { device.allocate_command_buffers(&alloc_ci) }.unwrap()[0];
 
-    let begin = vk::CommandBufferBeginInfo::default()
-        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    let begin =
+        vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
     unsafe { device.begin_command_buffer(cb, &begin) }.unwrap();
 
     let full_range = vk::ImageSubresourceRange {
@@ -266,7 +273,9 @@ pub fn create_texture_rgba(
     let cbs = [cb];
     let submit = vk::SubmitInfo::default().command_buffers(&cbs);
     unsafe {
-        device.queue_submit(vb.graphics_queue, &[submit], fence).unwrap();
+        device
+            .queue_submit(vb.graphics_queue, &[submit], fence)
+            .unwrap();
         device.wait_for_fences(&[fence], true, u64::MAX).unwrap();
         device.destroy_fence(fence, None);
         device.free_command_buffers(vb.command_pool, &cbs);

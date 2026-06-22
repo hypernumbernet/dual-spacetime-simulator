@@ -1,6 +1,6 @@
 //! Headless Vulkan helpers for integration tests (no window / surface).
 
-use ash::{vk, Device, Entry, Instance};
+use ash::{Device, Entry, Instance, vk};
 use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
 use std::sync::{Arc, Mutex};
 

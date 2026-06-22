@@ -6,8 +6,8 @@
 //! quantized ×512. All vertex coordinates are integers — the water surface inset and
 //! waves are applied in the water vertex shader.
 
-use crate::block::{tile_for, Block, Face};
-use crate::chunk::{ChunkBlocks, CX, CY, CZ};
+use crate::block::{Block, Face, tile_for};
+use crate::chunk::{CX, CY, CZ, ChunkBlocks};
 use glam::{IVec3, Vec3};
 
 /// Quantization factor for UVs (shader divides by this). Atlas UVs are multiples of
@@ -108,7 +108,11 @@ impl ChunkNeighborhood<'_> {
         }
         let y = ly as usize;
         if lx < 0 {
-            return self.neg_x.get((CX as i32 - 1) as usize, y, lz.clamp(0, CZ as i32 - 1) as usize);
+            return self.neg_x.get(
+                (CX as i32 - 1) as usize,
+                y,
+                lz.clamp(0, CZ as i32 - 1) as usize,
+            );
         }
         if lx >= CX as i32 {
             return self.pos_x.get(0, y, lz.clamp(0, CZ as i32 - 1) as usize);
@@ -218,7 +222,14 @@ pub fn mesh_chunk(n: &ChunkNeighborhood) -> ChunkMeshData {
                             uv,
                         });
                     }
-                    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+                    indices.extend_from_slice(&[
+                        base,
+                        base + 1,
+                        base + 2,
+                        base,
+                        base + 2,
+                        base + 3,
+                    ]);
                 }
             }
         }

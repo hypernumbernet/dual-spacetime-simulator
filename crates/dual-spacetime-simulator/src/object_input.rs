@@ -443,9 +443,9 @@ impl ObjectInput {
             ObjectInput::RandomCube { cube_size, .. } => cube_size * 0.5 * correct.m,
             ObjectInput::SpiralDisk { disk_radius, .. } => disk_radius * correct.m,
             ObjectInput::SolarSystem { .. } => crate::simulation::AU * correct.m,
-            ObjectInput::SatelliteOrbit { orbit_altitude_max, .. } => {
-                (EARTH_RADIUS + orbit_altitude_max) * correct.m
-            }
+            ObjectInput::SatelliteOrbit {
+                orbit_altitude_max, ..
+            } => (EARTH_RADIUS + orbit_altitude_max) * correct.m,
             ObjectInput::EllipticalOrbit {
                 planetary_distance, ..
             } => planetary_distance * correct.m,
@@ -634,9 +634,7 @@ impl ObjectInput {
                     &|line| println!("{}", line),
                     &NO_ABORT,
                 )
-                .unwrap_or_else(|_| {
-                    get_solar_system_fallback_particles(&Correct::new(*scale))
-                });
+                .unwrap_or_else(|_| get_solar_system_fallback_particles(&Correct::new(*scale)));
                 SimulationNormal { particles }
             }
             ObjectInput::SatelliteOrbit {

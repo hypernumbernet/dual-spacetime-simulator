@@ -1,6 +1,6 @@
 use crate::object_input::{
-    clamp_world_scale, ObjectInput, ObjectInputType, ParticleBasicColor, MIN_WORLD_SCALE,
-    SATELLITE_ORBIT_SCALE, SOLAR_SYSTEM_SCALE,
+    MIN_WORLD_SCALE, ObjectInput, ObjectInputType, ParticleBasicColor, SATELLITE_ORBIT_SCALE,
+    SOLAR_SYSTEM_SCALE, clamp_world_scale,
 };
 use crate::settings::AppSettings;
 use crate::simulation::{AU, LY, MPC, PC};
@@ -762,9 +762,7 @@ impl UiState {
 
     /// Returns whether a Solar System reset abort was requested.
     pub fn reset_abort_requested(&self) -> bool {
-        self.reset_log
-            .abort_requested
-            .load(Ordering::Acquire)
+        self.reset_log.abort_requested.load(Ordering::Acquire)
     }
 
     /// Flags a simulation reset and re-enables particle append.

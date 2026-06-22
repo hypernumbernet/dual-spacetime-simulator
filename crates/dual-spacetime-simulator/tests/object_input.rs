@@ -1,6 +1,6 @@
 use dual_spacetime_simulator::object_input::{
-    clamp_world_scale, ObjectInput, ObjectInputType, ParticleBasicColor, MIN_WORLD_SCALE,
-    SATELLITE_ORBIT_SCALE, SOLAR_SYSTEM_SCALE,
+    MIN_WORLD_SCALE, ObjectInput, ObjectInputType, ParticleBasicColor, SATELLITE_ORBIT_SCALE,
+    SOLAR_SYSTEM_SCALE, clamp_world_scale,
 };
 
 #[test]
@@ -30,7 +30,10 @@ fn default_base_scale_matches_type_presets() {
     assert_eq!(ObjectInputType::RandomSphere.default_base_scale(), 1e10);
     assert_eq!(ObjectInputType::RandomCube.default_base_scale(), 1e10);
     assert_eq!(ObjectInputType::SpiralDisk.default_base_scale(), 1e7);
-    assert_eq!(ObjectInputType::EllipticalOrbit.default_base_scale(), 1.5e11);
+    assert_eq!(
+        ObjectInputType::EllipticalOrbit.default_base_scale(),
+        1.5e11
+    );
     assert_eq!(ObjectInputType::SingleParticle.default_base_scale(), 1e10);
 }
 

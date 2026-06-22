@@ -57,8 +57,7 @@ fn rapidity_field_lines_increase_with_sample_count() {
 
 #[test]
 fn rapidity_field_biquaternion_lines_have_expected_vertex_count() {
-    let lines =
-        build_graph_line_vertices(GraphType::RapidityFieldBiquaternion, 100, 1.0, 1.0);
+    let lines = build_graph_line_vertices(GraphType::RapidityFieldBiquaternion, 100, 1.0, 1.0);
     let grid_size = 6;
     let axis_count = (grid_size + 1) as usize;
     let expected_vertices =

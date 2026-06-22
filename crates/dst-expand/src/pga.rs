@@ -217,11 +217,7 @@ pub fn mul_table_markdown() -> String {
             let cell = if sign == 0 {
                 "0".to_string()
             } else if out == 0 {
-                if sign > 0 {
-                    "+1".into()
-                } else {
-                    "-1".into()
-                }
+                if sign > 0 { "+1".into() } else { "-1".into() }
             } else {
                 let mut c = String::new();
                 if sign < 0 {

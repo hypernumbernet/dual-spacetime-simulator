@@ -83,4 +83,3 @@ pub fn chunk_of_pos(p: Vec3) -> IVec2 {
         (p.z.floor() as i32).div_euclid(CZ_I),
     )
 }
-

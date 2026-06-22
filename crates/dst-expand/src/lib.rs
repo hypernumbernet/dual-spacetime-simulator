@@ -22,7 +22,8 @@ pub use expr::{ParseError, expand_expr, parse_expr};
 
 pub use pga::{
     BasisMonomial as PgaBasisMonomial, ExpandedProduct as PgaExpandedProduct,
-    combine_like_terms as combine_pga_like_terms, expand_basis_monomial as expand_pga_basis_monomial,
+    combine_like_terms as combine_pga_like_terms,
+    expand_basis_monomial as expand_pga_basis_monomial,
     expand_basis_product as expand_pga_basis_product, expand_generator_monomial,
     expand_sandwich as expand_pga_sandwich, mul_table_markdown as pga_mul_table_markdown,
 };

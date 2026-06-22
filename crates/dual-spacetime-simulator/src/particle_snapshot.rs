@@ -59,8 +59,8 @@ impl ParticleSnapshot {
         }
         let file = File::create(path)?;
         let mut zip = ZipWriter::new(file);
-        let options = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         zip.start_file(SNAPSHOT_ENTRY_NAME, options)?;
         serde_json::to_writer(&mut zip, self)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;

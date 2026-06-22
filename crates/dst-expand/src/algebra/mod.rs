@@ -52,11 +52,7 @@ pub enum Algebra {
     Pga,
 
     /// General geometric algebra G(p, q, r) = Cl(p, q, r) (non-PGA).
-    G {
-        p: usize,
-        q: usize,
-        r: usize,
-    },
+    G { p: usize, q: usize, r: usize },
 
     /// Algebra via Cayley-Dickson construction (2, 4, 8, 16, ...).
     /// `dimension` is 2^n.

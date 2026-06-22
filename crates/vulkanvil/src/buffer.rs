@@ -1,8 +1,8 @@
 //! GPU buffer/image allocation helpers built on `gpu-allocator`.
 
 use ash::vk;
-use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, Allocator};
 use gpu_allocator::MemoryLocation;
+use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, Allocator};
 use std::sync::Mutex;
 
 pub struct AllocatedBuffer {
@@ -68,7 +68,14 @@ pub fn create_buffer_with_data<T: bytemuck::Pod>(
     name: &str,
 ) -> (AllocatedBuffer, u32) {
     let byte_size = (std::mem::size_of::<T>() * data.len().max(1)) as u64;
-    let buf = AllocatedBuffer::new(device, allocator, byte_size, usage, MemoryLocation::CpuToGpu, name);
+    let buf = AllocatedBuffer::new(
+        device,
+        allocator,
+        byte_size,
+        usage,
+        MemoryLocation::CpuToGpu,
+        name,
+    );
 
     if !data.is_empty()
         && let Some(ref alloc) = buf.allocation

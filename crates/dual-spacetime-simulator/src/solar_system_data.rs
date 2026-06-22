@@ -56,11 +56,7 @@ fn has_jplephem_data(downloaddir: &Path) -> bool {
         return false;
     };
     entries.flatten().any(|entry| {
-        entry.path().is_file()
-            && entry
-                .file_name()
-                .to_str()
-                .is_some_and(is_jplephem_filename)
+        entry.path().is_file() && entry.file_name().to_str().is_some_and(is_jplephem_filename)
     })
 }
 
@@ -207,8 +203,8 @@ fn download_file(
     log(&format!("Downloading {fname}"));
     let mut body = http_get(url, abort)?;
     check_abort(abort)?;
-    let mut dest = std::fs::File::create(&fullpath)
-        .map_err(|err| UpdateDataError::Other(err.to_string()))?;
+    let mut dest =
+        std::fs::File::create(&fullpath).map_err(|err| UpdateDataError::Other(err.to_string()))?;
     if let Err(err) = copy_with_abort(&mut body.as_reader(), &mut dest, abort) {
         drop(dest);
         let _ = std::fs::remove_file(fullpath);
@@ -244,7 +240,14 @@ fn download_from_json(
         Value::Array(entries) => {
             for child in entries {
                 check_abort(abort)?;
-                download_from_json(child, basedir.clone(), baseurl.clone(), overwrite, log, abort)?;
+                download_from_json(
+                    child,
+                    basedir.clone(),
+                    baseurl.clone(),
+                    overwrite,
+                    log,
+                    abort,
+                )?;
             }
             Ok(())
         }
@@ -300,9 +303,7 @@ fn download_from_url_json(
             if let Value::String(url) = entry {
                 download_file(&url, basedir, overwrite_if_exists, log, abort)?;
             } else {
-                return Err(UpdateDataError::Other(
-                    "invalid refresh json entry".into(),
-                ));
+                return Err(UpdateDataError::Other("invalid refresh json entry".into()));
             }
         }
     }
@@ -345,13 +346,7 @@ pub fn update_datafiles_with_log(
         "Downloading data files to {}",
         downloaddir.to_str().unwrap_or("<unknown>")
     ));
-    download_datadir(
-        downloaddir.clone(),
-        BASE_URL.to_string(),
-        false,
-        log,
-        abort,
-    )?;
+    download_datadir(downloaddir.clone(), BASE_URL.to_string(), false, log, abort)?;
 
     log("Now downloading files that are regularly updated:");
     log("  Space Weather & Earth Orientation Parameters");

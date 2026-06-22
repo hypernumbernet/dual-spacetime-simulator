@@ -3,7 +3,7 @@
 use crate::chunk::WORLD_SCALE;
 use crate::input::InputState;
 use crate::world::World;
-use crate::worldgen::{surface_height, SEA_LEVEL};
+use crate::worldgen::{SEA_LEVEL, surface_height};
 use glam::{IVec3, Mat4, Vec3};
 use winit::keyboard::KeyCode;
 

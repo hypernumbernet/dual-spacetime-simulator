@@ -326,11 +326,7 @@ fn format_canonical_body(c: &CanonicalProduct) -> String {
     for (name, exp) in &c.factors {
         s.push_str(&format_factor_power(name, *exp));
     }
-    if s.is_empty() {
-        "1".to_string()
-    } else {
-        s
-    }
+    if s.is_empty() { "1".to_string() } else { s }
 }
 
 fn format_factor_power(name: &str, exp: u32) -> String {

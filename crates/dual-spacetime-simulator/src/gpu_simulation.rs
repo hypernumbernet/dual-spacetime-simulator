@@ -1,10 +1,10 @@
-use crate::simulation::{Particle, G, EPSILON, LIGHT_SPEED};
+use crate::simulation::{EPSILON, G, LIGHT_SPEED, Particle};
 use crate::ui_state::SimulationType;
 use ash::vk;
 use glam::DVec3;
 use gpu_allocator::vulkan::Allocator;
 use std::sync::{Arc, Mutex};
-use vulkanvil::{create_shader_module, AllocatedBuffer};
+use vulkanvil::{AllocatedBuffer, create_shader_module};
 
 const WORKGROUP_SIZE: u32 = 64;
 const EPSILON_F32: f32 = EPSILON as f32;
@@ -101,8 +101,7 @@ impl GpuParticleSimulation {
         descriptor_set_layout: vk::DescriptorSetLayout,
         particles: &[Particle],
     ) -> Self {
-        let compute_layout =
-            create_compute_pipeline_layout(&device, descriptor_set_layout);
+        let compute_layout = create_compute_pipeline_layout(&device, descriptor_set_layout);
         let compute_pipeline = create_compute_pipeline(&device, compute_layout);
         let descriptor_pool = create_descriptor_pool(&device);
         let particle_count = particles.len() as u32;
@@ -158,11 +157,7 @@ impl GpuParticleSimulation {
     }
 
     /// Uploads display-only point data (Graph3D and similar viewers).
-    pub fn upload_display_points(
-        &mut self,
-        positions: &[[f32; 3]],
-        colors: &[[f32; 4]],
-    ) {
+    pub fn upload_display_points(&mut self, positions: &[[f32; 3]], colors: &[[f32; 4]]) {
         self.particle_count = positions.len() as u32;
         if positions.is_empty() {
             return;
@@ -303,8 +298,7 @@ impl GpuParticleSimulation {
                 0,
                 bytemuck::bytes_of(&push),
             );
-            self.device
-                .cmd_dispatch(command_buffer, workgroups, 1, 1);
+            self.device.cmd_dispatch(command_buffer, workgroups, 1, 1);
         }
     }
 }
@@ -350,18 +344,13 @@ fn create_particle_storage_buffer(
     )
 }
 
-fn mapped_particle_slice_mut(
-    buffer: &AllocatedBuffer,
-    count: usize,
-) -> Option<&mut [GpuParticle]> {
+fn mapped_particle_slice_mut(buffer: &AllocatedBuffer, count: usize) -> Option<&mut [GpuParticle]> {
     if count == 0 {
         return Some(&mut []);
     }
     let alloc = buffer.allocation.as_ref()?;
     let mapped = alloc.mapped_ptr()?;
-    Some(unsafe {
-        std::slice::from_raw_parts_mut(mapped.as_ptr() as *mut GpuParticle, count)
-    })
+    Some(unsafe { std::slice::from_raw_parts_mut(mapped.as_ptr() as *mut GpuParticle, count) })
 }
 
 fn read_mapped_particles(buffer: &AllocatedBuffer, count: usize) -> Vec<Particle> {
@@ -376,7 +365,11 @@ fn read_mapped_particles(buffer: &AllocatedBuffer, count: usize) -> Vec<Particle
     };
     let gpu_particles: &[GpuParticle] =
         unsafe { std::slice::from_raw_parts(mapped.as_ptr() as *const GpuParticle, count) };
-    gpu_particles.iter().copied().map(GpuParticle::to_cpu).collect()
+    gpu_particles
+        .iter()
+        .copied()
+        .map(GpuParticle::to_cpu)
+        .collect()
 }
 
 unsafe fn shader_rw_barrier(
@@ -430,10 +423,7 @@ fn create_compute_pipeline_layout(
     unsafe { device.create_pipeline_layout(&ci, None) }.unwrap()
 }
 
-fn create_compute_pipeline(
-    device: &ash::Device,
-    layout: vk::PipelineLayout,
-) -> vk::Pipeline {
+fn create_compute_pipeline(device: &ash::Device, layout: vk::PipelineLayout) -> vk::Pipeline {
     let spv = include_bytes!(concat!(
         env!("OUT_DIR"),
         "/shaders/particles_compute.comp.spv"
@@ -448,8 +438,7 @@ fn create_compute_pipeline(
         .stage(stage)
         .layout(layout);
     let pipelines =
-        unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[ci], None) }
-            .unwrap();
+        unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[ci], None) }.unwrap();
     unsafe {
         device.destroy_shader_module(module, None);
     }

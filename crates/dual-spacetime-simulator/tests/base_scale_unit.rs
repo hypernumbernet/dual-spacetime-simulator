@@ -1,5 +1,5 @@
 use dual_spacetime_simulator::object_input::{
-    clamp_world_scale, ObjectInputType, SATELLITE_ORBIT_SCALE, SOLAR_SYSTEM_SCALE,
+    ObjectInputType, SATELLITE_ORBIT_SCALE, SOLAR_SYSTEM_SCALE, clamp_world_scale,
 };
 use dual_spacetime_simulator::ui_state::{BaseScaleUnit, PlacementMode, UiState};
 
@@ -53,7 +53,10 @@ fn apply_base_scale_edit_resets_to_one_on_unit_change() {
     let mut ui = UiState::default();
     ui.base_scale = 1e10;
     ui.apply_base_scale_edit(1000.0, true);
-    assert_eq!(ui.base_scale, clamp_world_scale(BaseScaleUnit::Km.to_meters(1.0)));
+    assert_eq!(
+        ui.base_scale,
+        clamp_world_scale(BaseScaleUnit::Km.to_meters(1.0))
+    );
 }
 
 #[test]
@@ -134,7 +137,10 @@ fn base_scale_edit_syncs_scaled_parameters_for_active_type() {
     assert!((ui.random_sphere.radius - initial_radius * 0.1).abs() < 1e-3);
     let expected_mass_min = 1e29 * 0.001;
     let mass_error = (ui.random_sphere.mass_range.0 - expected_mass_min).abs();
-    assert!(mass_error / expected_mass_min < 1e-9, "mass_error={mass_error}");
+    assert!(
+        mass_error / expected_mass_min < 1e-9,
+        "mass_error={mass_error}"
+    );
 }
 
 #[test]

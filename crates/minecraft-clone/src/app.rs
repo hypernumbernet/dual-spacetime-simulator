@@ -172,7 +172,13 @@ impl App {
         if self.hud_visible && (fps_due || self.hud_dirty) {
             let ws = self.world.stats();
             let rs = renderer.stats();
-            let report = vb.allocator.as_ref().unwrap().lock().unwrap().generate_report();
+            let report = vb
+                .allocator
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .generate_report();
             let pos = self.player.pos;
             let text = format!(
                 "fps {:.1} ({:.2} ms)\n\
@@ -184,7 +190,11 @@ impl App {
                  gpu chunk meshes: {} ({})\n\
                  gpu allocator: {} used / {} reserved",
                 self.fps,
-                if self.fps > 0.0 { 1000.0 / self.fps } else { 0.0 },
+                if self.fps > 0.0 {
+                    1000.0 / self.fps
+                } else {
+                    0.0
+                },
                 pos.x,
                 pos.y,
                 pos.z,
@@ -262,7 +272,12 @@ impl App {
             cam_up: [up.x, up.y, up.z, 0.0],
             cam_fwd: [fwd.x, fwd.y, fwd.z, 0.0],
             sun_dir: [sun.x, sun.y, sun.z, 0.0],
-            params: [tan_half_fov, aspect, if underwater { 1.0 } else { 0.0 }, 0.0],
+            params: [
+                tan_half_fov,
+                aspect,
+                if underwater { 1.0 } else { 0.0 },
+                0.0,
+            ],
         };
 
         renderer.record(cb, image_index as usize, vb.swapchain_extent, &pc, &sky);
@@ -345,12 +360,7 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn device_event(
-        &mut self,
-        _event_loop: &ActiveEventLoop,
-        _id: DeviceId,
-        event: DeviceEvent,
-    ) {
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
         if let DeviceEvent::MouseMotion { delta } = event {
             if self.cursor_grabbed {
                 self.input.mouse_delta.0 += delta.0;

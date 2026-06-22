@@ -7,8 +7,8 @@
 //! meshing frontier instead of the whole loaded area.
 
 use crate::block::Block;
-use crate::chunk::{world_to_chunk, ChunkBlocks, CY};
-use crate::mesher::{mesh_chunk, ChunkNeighborhood};
+use crate::chunk::{CY, ChunkBlocks, world_to_chunk};
+use crate::mesher::{ChunkNeighborhood, mesh_chunk};
 use crate::renderer::Renderer;
 use crate::worldgen::generate_chunk;
 use glam::{IVec2, IVec3};
@@ -293,16 +293,13 @@ impl World {
         for dx in -BLOCKS_KEEP_DISTANCE..=BLOCKS_KEEP_DISTANCE {
             for dz in -BLOCKS_KEEP_DISTANCE..=BLOCKS_KEEP_DISTANCE {
                 let coord = player_chunk + IVec2::new(dx, dz);
-                if self
-                    .chunks
-                    .get(&coord)
-                    .is_some_and(|c| c.blocks.is_none())
-                {
+                if self.chunks.get(&coord).is_some_and(|c| c.blocks.is_none()) {
                     self.pending_blocks.push(coord);
                 }
             }
         }
-        self.pending_blocks.sort_by_key(|c| -dist2(*c, player_chunk));
+        self.pending_blocks
+            .sort_by_key(|c| -dist2(*c, player_chunk));
     }
 
     /// Removes chunks (and their GPU meshes) beyond the unload radius.
@@ -329,9 +326,7 @@ impl World {
             .chunks
             .iter()
             .filter(|(c, ch)| {
-                ch.blocks.is_some()
-                    && ch.meshed
-                    && cheb(**c, player_chunk) > BLOCKS_KEEP_DISTANCE
+                ch.blocks.is_some() && ch.meshed && cheb(**c, player_chunk) > BLOCKS_KEEP_DISTANCE
             })
             .map(|(c, _)| *c)
             .collect();

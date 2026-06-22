@@ -1,20 +1,15 @@
 //! Parser for coefficient-bearing G(3,1,1) PGA expressions (generators e0..e4).
 
 use crate::biquaternion::Coefficient;
+use crate::biquaternion::multiply_coeff_text;
 use crate::expr::ParseError;
 use crate::pga::{
     BasisMonomial, ExpandedProduct, ExpandedTerm, combine_like_terms, expand_generator_monomial,
 };
-use crate::biquaternion::multiply_coeff_text;
 
 /// PGA generator label and index (0..5), sorted by label length descending.
-const GENERATOR_TOKENS: [(&str, usize); 5] = [
-    ("e0", 0),
-    ("e1", 1),
-    ("e2", 2),
-    ("e3", 3),
-    ("e4", 4),
-];
+const GENERATOR_TOKENS: [(&str, usize); 5] =
+    [("e0", 0), ("e1", 1), ("e2", 2), ("e3", 3), ("e4", 4)];
 
 /// Parses a PGA expression into an expanded product (without combining like terms).
 pub fn parse_pga_expr(input: &str) -> Result<ExpandedProduct, ParseError> {
@@ -358,7 +353,10 @@ mod tests {
         assert_eq!(exp.terms.len(), table.terms.len());
         if !exp.terms.is_empty() {
             assert_eq!(exp.terms[0].coeff.0, table.terms[0].coeff.0);
-            assert_eq!(exp.terms[0].monomial.factors, table.terms[0].monomial.factors);
+            assert_eq!(
+                exp.terms[0].monomial.factors,
+                table.terms[0].monomial.factors
+            );
         }
     }
 

@@ -4,8 +4,8 @@ mod common;
 
 use ash::vk;
 use ash::vk::Handle;
-use gpu_allocator::vulkan::{AllocationCreateDesc, AllocationScheme};
 use gpu_allocator::MemoryLocation;
+use gpu_allocator::vulkan::{AllocationCreateDesc, AllocationScheme};
 use std::ptr;
 
 #[test]

@@ -95,11 +95,7 @@ pub fn format_pga_expanded(exp: &PgaExpandedProduct) -> String {
     if exp.terms.is_empty() {
         return "0".to_string();
     }
-    let parts: Vec<String> = exp
-        .terms
-        .iter()
-        .map(format_pga_term)
-        .collect();
+    let parts: Vec<String> = exp.terms.iter().map(format_pga_term).collect();
     let mut out = parts[0].clone();
     for part in parts.iter().skip(1) {
         if part.starts_with('-') && !part.starts_with("(-") {
