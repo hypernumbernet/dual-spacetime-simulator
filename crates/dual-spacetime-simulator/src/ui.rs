@@ -199,6 +199,7 @@ pub fn draw_ui(
                 ui.separator();
                 dragvalue_normal(ui, &mut uis.time_per_frame, 1.0, "Time(sec)/Frame");
                 ui.separator();
+                let dbl_click = primary_double_click_pos(ui);
                 ui.horizontal(|ui| {
                     label_normal(ui, "Scale");
                     label_indicator(ui, format_scale(uis.scale_gauge, uis.scale).as_str());
@@ -208,9 +209,9 @@ pub fn draw_ui(
                     &mut uis.scale_gauge,
                     DEFAULT_SCALE_UI * 0.2..=DEFAULT_SCALE_UI * 3.0,
                 );
-                if response_double_clicked(ui, &scale_slider) {
+                apply_slider_double_click_reset_with_pos(&scale_slider, dbl_click, || {
                     uis.reset_scale_to_base();
-                }
+                });
                 ui.separator();
                 ui.style_mut().spacing.slider_width = 160.0;
                 ui.horizontal(|ui| {
@@ -221,15 +222,15 @@ pub fn draw_ui(
                     !uis.max_fps_unlimited,
                     Slider::new(&mut uis.max_fps, 1..=1000),
                 );
-                if response_double_clicked(ui, &max_fps_slider) {
+                apply_slider_double_click_reset_with_pos(&max_fps_slider, dbl_click, || {
                     uis.reset_max_fps_to_default();
-                }
+                });
                 ui.separator();
                 label_normal(ui, "Skip drawing frames");
                 let skip_slider = ui.add(Slider::new(&mut uis.skip, 0..=1000));
-                if response_double_clicked(ui, &skip_slider) {
+                apply_slider_double_click_reset_with_pos(&skip_slider, dbl_click, || {
                     uis.reset_skip_to_default();
-                }
+                });
                 ui.separator();
                 ui.horizontal(|ui| {
                     let mut v = uis.show_grid;
@@ -671,15 +672,15 @@ fn condition_satellite_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
         "Orbit Max (m)",
     );
     if let Some(range) = uis.satellite_count_slider() {
-        let count_slider = slider_labeled_u32(
+        let response = slider_labeled_u32(
             ui,
             "Satellite Count",
             &mut uis.satellite_orbit.satellite_count,
             range,
         );
-        if response_double_clicked(ui, &count_slider) {
+        apply_slider_double_click_reset(ui, &response, || {
             uis.reset_satellite_count_to_default();
-        }
+        });
     }
 }
 
@@ -753,27 +754,20 @@ fn add_center_axis_slider(value: &mut f64) -> Slider<'_> {
 fn slider_add_center(ui: &mut egui::Ui, uis: &mut UiState) {
     ui.style_mut().spacing.slider_width = 140.0;
     label_normal(ui, "Add Center");
-    ui.horizontal(|ui| {
-        label_normal(ui, "X");
-        let x_slider = ui.add(add_center_axis_slider(&mut uis.add_center.x));
-        if response_double_clicked(ui, &x_slider) {
-            uis.add_center.x = 0.0;
-        }
-    });
-    ui.horizontal(|ui| {
-        label_normal(ui, "Y");
-        let y_slider = ui.add(add_center_axis_slider(&mut uis.add_center.y));
-        if response_double_clicked(ui, &y_slider) {
-            uis.add_center.y = 0.0;
-        }
-    });
-    ui.horizontal(|ui| {
-        label_normal(ui, "Z");
-        let z_slider = ui.add(add_center_axis_slider(&mut uis.add_center.z));
-        if response_double_clicked(ui, &z_slider) {
-            uis.add_center.z = 0.0;
-        }
-    });
+    let dbl_click = primary_double_click_pos(ui);
+    for (label, component) in [
+        ("X", &mut uis.add_center.x),
+        ("Y", &mut uis.add_center.y),
+        ("Z", &mut uis.add_center.z),
+    ] {
+        ui.horizontal(|ui| {
+            label_normal(ui, label);
+            let response = ui.add(add_center_axis_slider(component));
+            apply_slider_double_click_reset_with_pos(&response, dbl_click, || {
+                *component = 0.0;
+            });
+        });
+    }
 }
 
 /// Draws add button and flags particle append when clicked.
@@ -805,11 +799,15 @@ fn slider_add_particle_count(ui: &mut egui::Ui, uis: &mut UiState, current_count
     let remaining = uis.remaining_particle_capacity(current_count);
     uis.clamp_add_particle_count_to_capacity(current_count);
     if let Some(range) = UiState::add_particle_count_range(remaining) {
-        let count_slider =
-            slider_labeled_u32(ui, "Add Particle Count", &mut uis.add_particle_count, range);
-        if response_double_clicked(ui, &count_slider) {
+        let response = slider_labeled_u32(
+            ui,
+            "Add Particle Count",
+            &mut uis.add_particle_count,
+            range,
+        );
+        apply_slider_double_click_reset(ui, &response, || {
             uis.reset_add_particle_count_to_default(current_count);
-        }
+        });
     }
 }
 

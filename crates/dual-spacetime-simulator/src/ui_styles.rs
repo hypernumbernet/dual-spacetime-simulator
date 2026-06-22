@@ -238,16 +238,45 @@ pub fn slider_pure(
     ui.add(egui::Slider::new(value, range).show_value(false))
 }
 
+/// Primary-button double-click position this frame, if any.
+pub fn primary_double_click_pos(ui: &Ui) -> Option<egui::Pos2> {
+    ui.input(|i| {
+        if i.pointer.button_double_clicked(egui::PointerButton::Primary) {
+            i.pointer.interact_pos()
+        } else {
+            None
+        }
+    })
+}
+
+/// Returns true when `pos` lies inside `response`'s rect.
+pub fn response_contains_double_click(response: &Response, pos: Option<egui::Pos2>) -> bool {
+    pos.is_some_and(|p| response.rect.contains(p))
+}
+
 /// Returns true when a primary double-click occurred over `response`'s rect.
 ///
 /// egui sliders use drag sense only, so [`egui::Response::double_clicked`] never fires on them.
 pub fn response_double_clicked(ui: &Ui, response: &Response) -> bool {
-    ui.input(|i| {
-        i.pointer.button_double_clicked(egui::PointerButton::Primary)
-            && i.pointer
-                .interact_pos()
-                .is_some_and(|pos| response.rect.contains(pos))
-    })
+    response_contains_double_click(response, primary_double_click_pos(ui))
+}
+
+/// Invokes `reset` when `response` received a primary double-click.
+pub fn apply_slider_double_click_reset(ui: &Ui, response: &Response, reset: impl FnOnce()) {
+    if response_double_clicked(ui, response) {
+        reset();
+    }
+}
+
+/// Invokes `reset` when `response` contains the cached primary double-click position.
+pub fn apply_slider_double_click_reset_with_pos(
+    response: &Response,
+    pos: Option<egui::Pos2>,
+    reset: impl FnOnce(),
+) {
+    if response_contains_double_click(response, pos) {
+        reset();
+    }
 }
 
 /// Binds a selectable UI item by display string to a typed selected value.

@@ -683,6 +683,8 @@ impl UiState {
         self.set_base_scale(scale);
     }
 
+    /// Resets panel-slider values to their defaults (double-click targets).
+
     /// Resets simulation scale and gauge to the current base scale.
     pub fn reset_scale_to_base(&mut self) {
         self.scale = self.base_scale;

@@ -1,8 +1,9 @@
 use dual_spacetime_simulator::object_input::ObjectInputType;
 use dual_spacetime_simulator::settings::AppSettings;
 use dual_spacetime_simulator::ui_state::{
-    AppMode, ComputingUnit, DEFAULT_SCALE_UI, ParticleDisplayMode, PlacementMode, SimulationType,
-    UiState,
+    AppMode, ComputingUnit, DEFAULT_ADD_PARTICLE_COUNT, DEFAULT_MAX_FPS, DEFAULT_SATELLITE_COUNT,
+    DEFAULT_SCALE_UI, DEFAULT_SKIP_DRAWING_FRAMES, ParticleDisplayMode, PlacementMode,
+    SimulationType, UiState,
 };
 
 #[test]
@@ -286,14 +287,26 @@ fn close_reset_log_panel_requires_idle_state() {
 }
 
 #[test]
-fn reset_scale_to_base_restores_gauge_and_scale() {
+fn panel_slider_double_click_resets_to_defaults() {
     let mut ui = UiState::default();
     ui.base_scale = 42.0;
     ui.scale = 99.0;
     ui.scale_gauge = DEFAULT_SCALE_UI * 2.0;
+    ui.max_fps = 999;
+    ui.skip = 50;
+    ui.add_particle_count = 1;
+    ui.satellite_orbit.satellite_count = 1;
 
     ui.reset_scale_to_base();
+    ui.reset_max_fps_to_default();
+    ui.reset_skip_to_default();
+    ui.reset_add_particle_count_to_default(0);
+    ui.reset_satellite_count_to_default();
 
     assert_eq!(ui.scale, 42.0);
     assert_eq!(ui.scale_gauge, DEFAULT_SCALE_UI);
+    assert_eq!(ui.max_fps, DEFAULT_MAX_FPS);
+    assert_eq!(ui.skip, DEFAULT_SKIP_DRAWING_FRAMES);
+    assert_eq!(ui.add_particle_count, DEFAULT_ADD_PARTICLE_COUNT);
+    assert_eq!(ui.satellite_orbit.satellite_count, DEFAULT_SATELLITE_COUNT);
 }
