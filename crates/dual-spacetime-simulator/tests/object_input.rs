@@ -35,6 +35,19 @@ fn default_base_scale_matches_type_presets() {
 }
 
 #[test]
+fn uses_add_particle_count_matches_generation_behavior() {
+    for ty in [
+        ObjectInputType::RandomSphere,
+        ObjectInputType::RandomCube,
+        ObjectInputType::SpiralDisk,
+    ] {
+        assert!(ty.uses_add_particle_count(), "{ty}");
+    }
+    assert!(!ObjectInputType::EllipticalOrbit.uses_add_particle_count());
+    assert!(!ObjectInputType::SingleParticle.uses_add_particle_count());
+}
+
+#[test]
 fn generate_particle_count_matches_for_simple_types() {
     let n = 64u32;
     for ty in [

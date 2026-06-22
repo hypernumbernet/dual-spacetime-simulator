@@ -325,9 +325,11 @@ pub fn draw_ui(
                 combobox_object_input_type(ui, &mut uis);
                 ui.separator();
                 object_input_type_conditions(ui, &mut uis);
-                ui.separator();
                 let current_count = simulation_manager.read().unwrap().particle_count();
-                slider_add_particle_count(ui, &mut uis, current_count);
+                if uis.object_input_type.uses_add_particle_count() {
+                    ui.separator();
+                    slider_add_particle_count(ui, &mut uis, current_count);
+                }
                 ui.separator();
                 slider_add_center(ui, &mut uis);
                 ui.horizontal(|ui| {

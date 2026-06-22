@@ -181,6 +181,14 @@ impl ObjectInputType {
         Self::SingleParticle,
     ];
 
+    /// Returns whether the add-particle-count slider applies to this type.
+    pub fn uses_add_particle_count(self) -> bool {
+        matches!(
+            self,
+            Self::RandomSphere | Self::RandomCube | Self::SpiralDisk
+        )
+    }
+
     /// Returns the recommended world scale for this object-input type.
     pub fn default_base_scale(self) -> f64 {
         match self {
