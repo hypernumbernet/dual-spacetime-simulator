@@ -52,7 +52,7 @@ fn astronomical_units_ordered_largest_first() {
 fn apply_base_scale_edit_resets_to_one_on_unit_change() {
     let mut ui = UiState::default();
     ui.base_scale = 1e10;
-    ui.apply_base_scale_edit(999.0, true);
+    ui.apply_base_scale_edit(1000.0, true);
     assert_eq!(ui.base_scale, clamp_world_scale(BaseScaleUnit::Km.to_meters(1.0)));
 }
 

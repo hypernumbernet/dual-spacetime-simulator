@@ -203,24 +203,33 @@ pub fn draw_ui(
                     label_normal(ui, "Scale");
                     label_indicator(ui, format_scale(uis.scale_gauge, uis.scale).as_str());
                 });
-                slider_pure(
+                let scale_slider = slider_pure(
                     ui,
                     &mut uis.scale_gauge,
                     DEFAULT_SCALE_UI * 0.2..=DEFAULT_SCALE_UI * 3.0,
                 );
+                if response_double_clicked(ui, &scale_slider) {
+                    uis.reset_scale_to_base();
+                }
                 ui.separator();
                 ui.style_mut().spacing.slider_width = 160.0;
                 ui.horizontal(|ui| {
                     label_normal(ui, "Max FPS");
                     ui.checkbox(&mut uis.max_fps_unlimited, "Unlimited");
                 });
-                ui.add_enabled(
+                let max_fps_slider = ui.add_enabled(
                     !uis.max_fps_unlimited,
                     Slider::new(&mut uis.max_fps, 1..=1000),
                 );
+                if response_double_clicked(ui, &max_fps_slider) {
+                    uis.reset_max_fps_to_default();
+                }
                 ui.separator();
                 label_normal(ui, "Skip drawing frames");
-                ui.add(Slider::new(&mut uis.skip, 0..=1000));
+                let skip_slider = ui.add(Slider::new(&mut uis.skip, 0..=1000));
+                if response_double_clicked(ui, &skip_slider) {
+                    uis.reset_skip_to_default();
+                }
                 ui.separator();
                 ui.horizontal(|ui| {
                     let mut v = uis.show_grid;
@@ -349,9 +358,8 @@ pub fn draw_ui(
         uis.is_resetting = false;
         uis.base_scale = clamp_world_scale(uis.base_scale);
         uis.object_input = uis.build_reset_object_input();
-        uis.scale = uis.base_scale;
+        uis.reset_scale_to_base();
         uis.apply_reset_timing_defaults();
-        uis.scale_gauge = DEFAULT_SCALE_UI;
     }
 
     if uis.app_mode == AppMode::Graph3D && uis.is_graph3d_panel_open {
@@ -663,7 +671,15 @@ fn condition_satellite_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
         "Orbit Max (m)",
     );
     if let Some(range) = uis.satellite_count_slider() {
-        slider_labeled_u32(ui, "Satellite Count", &mut uis.satellite_orbit.satellite_count, range);
+        let count_slider = slider_labeled_u32(
+            ui,
+            "Satellite Count",
+            &mut uis.satellite_orbit.satellite_count,
+            range,
+        );
+        if response_double_clicked(ui, &count_slider) {
+            uis.reset_satellite_count_to_default();
+        }
     }
 }
 
@@ -739,15 +755,24 @@ fn slider_add_center(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Add Center");
     ui.horizontal(|ui| {
         label_normal(ui, "X");
-        ui.add(add_center_axis_slider(&mut uis.add_center.x));
+        let x_slider = ui.add(add_center_axis_slider(&mut uis.add_center.x));
+        if response_double_clicked(ui, &x_slider) {
+            uis.add_center.x = 0.0;
+        }
     });
     ui.horizontal(|ui| {
         label_normal(ui, "Y");
-        ui.add(add_center_axis_slider(&mut uis.add_center.y));
+        let y_slider = ui.add(add_center_axis_slider(&mut uis.add_center.y));
+        if response_double_clicked(ui, &y_slider) {
+            uis.add_center.y = 0.0;
+        }
     });
     ui.horizontal(|ui| {
         label_normal(ui, "Z");
-        ui.add(add_center_axis_slider(&mut uis.add_center.z));
+        let z_slider = ui.add(add_center_axis_slider(&mut uis.add_center.z));
+        if response_double_clicked(ui, &z_slider) {
+            uis.add_center.z = 0.0;
+        }
     });
 }
 
@@ -780,7 +805,11 @@ fn slider_add_particle_count(ui: &mut egui::Ui, uis: &mut UiState, current_count
     let remaining = uis.remaining_particle_capacity(current_count);
     uis.clamp_add_particle_count_to_capacity(current_count);
     if let Some(range) = UiState::add_particle_count_range(remaining) {
-        slider_labeled_u32(ui, "Add Particle Count", &mut uis.add_particle_count, range);
+        let count_slider =
+            slider_labeled_u32(ui, "Add Particle Count", &mut uis.add_particle_count, range);
+        if response_double_clicked(ui, &count_slider) {
+            uis.reset_add_particle_count_to_default(current_count);
+        }
     }
 }
 
@@ -790,10 +819,10 @@ fn slider_labeled_u32(
     label: &str,
     value: &mut u32,
     range: std::ops::RangeInclusive<u32>,
-) {
+) -> egui::Response {
     ui.style_mut().spacing.slider_width = 150.0;
     label_normal(ui, label);
-    ui.add(Slider::new(value, range));
+    ui.add(Slider::new(value, range))
 }
 
 /// Draws reset button and flags simulation reset when clicked.

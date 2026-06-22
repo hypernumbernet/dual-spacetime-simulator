@@ -9,9 +9,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
+pub const DEFAULT_MAX_FPS: u32 = 60;
+pub const DEFAULT_SKIP_DRAWING_FRAMES: u32 = 0;
+pub const DEFAULT_ADD_PARTICLE_COUNT: u32 = 1000;
 pub const BASE_SCALE_DRAG_SPEED: f64 = 0.01;
 /// Default satellite count for Satellite Orbit reset (Earth is added separately).
-pub const DEFAULT_SATELLITE_COUNT: u32 = 999;
+pub const DEFAULT_SATELLITE_COUNT: u32 = 1000;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum BaseScaleUnit {
@@ -449,7 +452,7 @@ impl Default for UiState {
             input_panel_width: 200.0,
             min_window_width: 400.0,
             min_window_height: 300.0,
-            add_particle_count: 1000,
+            add_particle_count: DEFAULT_ADD_PARTICLE_COUNT,
             max_particle_count: 20000,
             fps: 0,
             frame: 1,
@@ -458,7 +461,7 @@ impl Default for UiState {
             scale: 1e10,
             scale_gauge: DEFAULT_SCALE_UI,
             is_running: false,
-            max_fps: 60,
+            max_fps: DEFAULT_MAX_FPS,
             max_fps_unlimited: false,
             is_reset_requested: false,
             is_resetting: false,
@@ -466,7 +469,7 @@ impl Default for UiState {
             show_add_center_preview: true,
             is_add_particles_requested: false,
             is_add_particles_enabled: true,
-            skip: 0,
+            skip: DEFAULT_SKIP_DRAWING_FRAMES,
             app_mode: AppMode::default(),
             last_app_mode_for_panel_sync: AppMode::default(),
             object_input_type: ObjectInputType::default(),
@@ -680,6 +683,34 @@ impl UiState {
         self.set_base_scale(scale);
     }
 
+    /// Resets simulation scale and gauge to the current base scale.
+    pub fn reset_scale_to_base(&mut self) {
+        self.scale = self.base_scale;
+        self.scale_gauge = DEFAULT_SCALE_UI;
+    }
+
+    /// Resets Max FPS to the default capped value.
+    pub fn reset_max_fps_to_default(&mut self) {
+        self.max_fps = DEFAULT_MAX_FPS;
+    }
+
+    /// Resets skip-drawing-frames to the default value.
+    pub fn reset_skip_to_default(&mut self) {
+        self.skip = DEFAULT_SKIP_DRAWING_FRAMES;
+    }
+
+    /// Resets add-particle count to the default, clamped to remaining capacity.
+    pub fn reset_add_particle_count_to_default(&mut self, current_count: u32) {
+        self.add_particle_count = DEFAULT_ADD_PARTICLE_COUNT;
+        self.clamp_add_particle_count_to_capacity(current_count);
+    }
+
+    /// Resets satellite count to the default, clamped to the particle limit.
+    pub fn reset_satellite_count_to_default(&mut self) {
+        self.satellite_orbit.satellite_count = DEFAULT_SATELLITE_COUNT;
+        self.clamp_satellite_count();
+    }
+
     /// Schedules a GPU particle-buffer reload after CPU-side particles were replaced.
     pub fn request_particle_buffer_reload(&mut self) {
         self.particle_buffer_reload_requested = true;
@@ -888,8 +919,8 @@ impl UiState {
             self.skip = 0;
         } else {
             self.time_per_frame = 10.0;
-            self.max_fps = 60;
-            self.skip = 0;
+            self.max_fps = DEFAULT_MAX_FPS;
+            self.skip = DEFAULT_SKIP_DRAWING_FRAMES;
         }
     }
 }

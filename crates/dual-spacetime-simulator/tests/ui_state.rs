@@ -1,7 +1,8 @@
 use dual_spacetime_simulator::object_input::ObjectInputType;
 use dual_spacetime_simulator::settings::AppSettings;
 use dual_spacetime_simulator::ui_state::{
-    AppMode, ComputingUnit, ParticleDisplayMode, PlacementMode, SimulationType, UiState,
+    AppMode, ComputingUnit, DEFAULT_SCALE_UI, ParticleDisplayMode, PlacementMode, SimulationType,
+    UiState,
 };
 
 #[test]
@@ -282,4 +283,17 @@ fn close_reset_log_panel_requires_idle_state() {
     ui.finish_reset_log();
     ui.close_reset_log_panel();
     assert!(!ui.reset_log.is_open);
+}
+
+#[test]
+fn reset_scale_to_base_restores_gauge_and_scale() {
+    let mut ui = UiState::default();
+    ui.base_scale = 42.0;
+    ui.scale = 99.0;
+    ui.scale_gauge = DEFAULT_SCALE_UI * 2.0;
+
+    ui.reset_scale_to_base();
+
+    assert_eq!(ui.scale, 42.0);
+    assert_eq!(ui.scale_gauge, DEFAULT_SCALE_UI);
 }

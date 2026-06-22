@@ -228,10 +228,26 @@ pub fn label_normal(ui: &mut Ui, text: &str) {
 }
 
 /// Draws a full-width slider without rendering its numeric value text.
-pub fn slider_pure(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64>) {
+pub fn slider_pure(
+    ui: &mut Ui,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+) -> egui::Response {
     ui.add_space(4.0);
     ui.style_mut().spacing.slider_width = ui.available_width();
-    ui.add(egui::Slider::new(value, range).show_value(false));
+    ui.add(egui::Slider::new(value, range).show_value(false))
+}
+
+/// Returns true when a primary double-click occurred over `response`'s rect.
+///
+/// egui sliders use drag sense only, so [`egui::Response::double_clicked`] never fires on them.
+pub fn response_double_clicked(ui: &Ui, response: &Response) -> bool {
+    ui.input(|i| {
+        i.pointer.button_double_clicked(egui::PointerButton::Primary)
+            && i.pointer
+                .interact_pos()
+                .is_some_and(|pos| response.rect.contains(pos))
+    })
 }
 
 /// Binds a selectable UI item by display string to a typed selected value.
