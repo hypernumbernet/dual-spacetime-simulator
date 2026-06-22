@@ -24,6 +24,52 @@ pub const EARTH_RADIUS: f64 = 6.371e6;
 /// Minimum allowed world scale in meters (0.01 fm; values at or below this are clamped).
 pub const MIN_WORLD_SCALE: f64 = 1e-17;
 
+/// Default particle colors used by random batch generators (Red, Blue, Yellow, Purple, Cyan).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ParticleBasicColor {
+    #[default]
+    Red,
+    Blue,
+    Yellow,
+    Purple,
+    Cyan,
+}
+
+impl ParticleBasicColor {
+    /// All basic colors in UI display order.
+    pub const ALL: [Self; 5] = [
+        Self::Red,
+        Self::Blue,
+        Self::Yellow,
+        Self::Purple,
+        Self::Cyan,
+    ];
+
+    /// Returns RGBA components for rendering.
+    pub fn rgba(self) -> [f32; 4] {
+        match self {
+            Self::Red => [1.0, 0.3, 0.2, 1.0],
+            Self::Blue => [0.2, 0.5, 1.0, 1.0],
+            Self::Yellow => [1.0, 0.8, 0.2, 1.0],
+            Self::Purple => [0.9, 0.4, 1.0, 1.0],
+            Self::Cyan => [0.6, 1.0, 0.8, 1.0],
+        }
+    }
+}
+
+impl std::fmt::Display for ParticleBasicColor {
+    /// Formats basic particle color names for UI selection controls.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Red => write!(f, "Red"),
+            Self::Blue => write!(f, "Blue"),
+            Self::Yellow => write!(f, "Yellow"),
+            Self::Purple => write!(f, "Purple"),
+            Self::Cyan => write!(f, "Cyan"),
+        }
+    }
+}
+
 /// Clamps a world-scale value to a finite positive minimum.
 pub fn clamp_world_scale(scale: f64) -> f64 {
     if scale.is_finite() && scale > MIN_WORLD_SCALE {
@@ -74,6 +120,13 @@ pub enum ObjectInput {
         planetary_speed: f64,
         planetary_distance: f64,
     },
+    SingleParticle {
+        scale: f64,
+        mass: f64,
+        position: DVec3,
+        velocity: DVec3,
+        color: ParticleBasicColor,
+    },
 }
 
 impl std::fmt::Display for ObjectInput {
@@ -86,6 +139,7 @@ impl std::fmt::Display for ObjectInput {
             ObjectInput::SolarSystem { .. } => write!(f, "Solar System"),
             ObjectInput::SatelliteOrbit { .. } => write!(f, "Satellite Orbit"),
             ObjectInput::EllipticalOrbit { .. } => write!(f, "Elliptical Orbit"),
+            ObjectInput::SingleParticle { .. } => write!(f, "Single Particle"),
         }
     }
 }
@@ -96,6 +150,7 @@ pub enum ObjectInputType {
     RandomCube,
     SpiralDisk,
     EllipticalOrbit,
+    SingleParticle,
 }
 
 impl Default for ObjectInputType {
@@ -113,17 +168,19 @@ impl std::fmt::Display for ObjectInputType {
             ObjectInputType::RandomCube => write!(f, "Random Cube"),
             ObjectInputType::SpiralDisk => write!(f, "Spiral Disk"),
             ObjectInputType::EllipticalOrbit => write!(f, "Elliptical Orbit"),
+            ObjectInputType::SingleParticle => write!(f, "Single Particle"),
         }
     }
 }
 
 impl ObjectInputType {
     /// All add-type variants in UI display order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::RandomSphere,
         Self::RandomCube,
         Self::SpiralDisk,
         Self::EllipticalOrbit,
+        Self::SingleParticle,
     ];
 
     /// Returns the recommended world scale for this object-input type.
@@ -133,6 +190,7 @@ impl ObjectInputType {
             ObjectInputType::RandomCube => 1e10,
             ObjectInputType::SpiralDisk => 1e7,
             ObjectInputType::EllipticalOrbit => 1.5e11,
+            ObjectInputType::SingleParticle => 1e10,
         }
     }
 
@@ -166,6 +224,13 @@ impl ObjectInputType {
                 planetary_mass: 5.972e24 * factor_cubed,
                 planetary_speed: 2.0e5 * factor,
                 planetary_distance: 2.0e11 * factor,
+            },
+            ObjectInputType::SingleParticle => ObjectInput::SingleParticle {
+                scale,
+                mass: 5.972e24 * factor_cubed,
+                position: DVec3::new(1e10 * factor, 0.0, 0.0),
+                velocity: DVec3::new(0.0, 0.0, 1e6 * factor),
+                color: ParticleBasicColor::default(),
             },
         }
     }
@@ -359,6 +424,7 @@ impl ObjectInput {
             ObjectInput::SolarSystem { scale, .. } => *scale,
             ObjectInput::SatelliteOrbit { scale, .. } => *scale,
             ObjectInput::EllipticalOrbit { scale, .. } => *scale,
+            ObjectInput::SingleParticle { scale, .. } => *scale,
         })
     }
 
@@ -377,6 +443,7 @@ impl ObjectInput {
             ObjectInput::EllipticalOrbit {
                 planetary_distance, ..
             } => planetary_distance * correct.m,
+            ObjectInput::SingleParticle { position, .. } => position.length() * correct.m,
         }
     }
 
@@ -455,14 +522,7 @@ impl ObjectInput {
                             z: rng.random_range(-speed_max..speed_max),
                         };
                         let mass = rng.random_range(mass_lower..mass_upper);
-                        let color = match i % 5 {
-                            0 => [1.0, 0.3, 0.2, 1.0], // Red
-                            1 => [0.2, 0.5, 1.0, 1.0], // Blue
-                            2 => [1.0, 0.8, 0.2, 1.0], // Yellow
-                            3 => [0.9, 0.4, 1.0, 1.0], // Purple
-                            4 => [0.6, 1.0, 0.8, 1.0], // Cyan
-                            _ => unreachable!(),
-                        };
+                        let color = Self::basic_particle_color(i);
                         Particle {
                             position: pos,
                             velocity: vel,
@@ -501,14 +561,7 @@ impl ObjectInput {
                             z: rng.random_range(-speed_max..speed_max),
                         };
                         let mass = rng.random_range(mass_lower..mass_upper);
-                        let color = match i % 5 {
-                            0 => [1.0, 0.3, 0.2, 1.0], // Red
-                            1 => [0.2, 0.5, 1.0, 1.0], // Blue
-                            2 => [1.0, 0.8, 0.2, 1.0], // Yellow
-                            3 => [0.9, 0.4, 1.0, 1.0], // Purple
-                            4 => [0.6, 1.0, 0.8, 1.0], // Cyan
-                            _ => unreachable!(),
-                        };
+                        let color = Self::basic_particle_color(i);
                         Particle {
                             position: pos,
                             velocity: vel,
@@ -547,14 +600,7 @@ impl ObjectInput {
                             y: 0.0,
                             z: theta.cos() * speed_rate,
                         };
-                        let color = match i % 5 {
-                            0 => [1.0, 0.3, 0.2, 1.0], // Reddish color
-                            1 => [0.2, 0.5, 1.0, 1.0], // Bluish color
-                            2 => [1.0, 0.8, 0.2, 1.0], // Yellowish color
-                            3 => [0.9, 0.4, 1.0, 1.0], // Purplish color
-                            4 => [0.6, 1.0, 0.8, 1.0], // Cyanish color
-                            _ => unreachable!(),
-                        };
+                        let color = Self::basic_particle_color(i);
                         Particle {
                             position: pos,
                             velocity: vel,
@@ -693,8 +739,29 @@ impl ObjectInput {
                 ];
                 SimulationNormal { particles }
             }
+            ObjectInput::SingleParticle {
+                scale,
+                mass,
+                position,
+                velocity,
+                color,
+            } => {
+                let correct = Correct::new(*scale);
+                let particles = vec![Particle {
+                    position: *position * correct.m,
+                    velocity: *velocity * correct.m,
+                    mass: *mass * correct.kg,
+                    color: color.rgba(),
+                }];
+                SimulationNormal { particles }
+            }
         };
         sim
+    }
+
+    /// Returns one of the basic particle colors by index.
+    fn basic_particle_color(index: u32) -> [f32; 4] {
+        ParticleBasicColor::ALL[(index as usize) % ParticleBasicColor::ALL.len()].rgba()
     }
 
     /// Samples a uniformly distributed position inside a sphere around the given center.

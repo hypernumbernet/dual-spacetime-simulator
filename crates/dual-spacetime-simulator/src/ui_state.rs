@@ -1,6 +1,6 @@
 use crate::object_input::{
-    clamp_world_scale, ObjectInput, ObjectInputType, MIN_WORLD_SCALE, SATELLITE_ORBIT_SCALE,
-    SOLAR_SYSTEM_SCALE,
+    clamp_world_scale, ObjectInput, ObjectInputType, ParticleBasicColor, MIN_WORLD_SCALE,
+    SATELLITE_ORBIT_SCALE, SOLAR_SYSTEM_SCALE,
 };
 use crate::settings::AppSettings;
 use crate::simulation::{AU, LY, MPC, PC};
@@ -418,6 +418,7 @@ pub struct UiState {
     pub solar_system: SolarSystemParameters,
     pub satellite_orbit: SatelliteOrbitParameters,
     pub elliptical_orbit: EllipticalOrbitParameters,
+    pub single_particle: SingleParticleParameters,
     pub is_simulation_panel_open: bool,
     pub is_object_input_panel_open: bool,
     pub is_settings_panel_open: bool,
@@ -480,6 +481,7 @@ impl Default for UiState {
             solar_system: SolarSystemParameters::default(),
             satellite_orbit: SatelliteOrbitParameters::default(),
             elliptical_orbit: EllipticalOrbitParameters::default(),
+            single_particle: SingleParticleParameters::default(),
             is_simulation_panel_open: true,
             is_object_input_panel_open: false,
             is_settings_panel_open: false,
@@ -803,6 +805,20 @@ impl UiState {
                     planetary_distance,
                 };
             }
+            ObjectInput::SingleParticle {
+                mass,
+                position,
+                velocity,
+                color,
+                ..
+            } => {
+                self.single_particle = SingleParticleParameters {
+                    mass,
+                    position,
+                    velocity,
+                    color,
+                };
+            }
             ObjectInput::SolarSystem { .. } | ObjectInput::SatelliteOrbit { .. } => unreachable!(),
         }
     }
@@ -815,6 +831,7 @@ impl UiState {
             ObjectInputType::RandomCube => self.random_cube.to_object_input(scale),
             ObjectInputType::SpiralDisk => self.spiral_disk.to_object_input(scale),
             ObjectInputType::EllipticalOrbit => self.elliptical_orbit.to_object_input(scale),
+            ObjectInputType::SingleParticle => self.single_particle.to_object_input(scale),
         }
     }
 
@@ -1069,6 +1086,49 @@ impl Default for EllipticalOrbitParameters {
                 planetary_mass,
                 planetary_speed,
                 planetary_distance,
+            }
+        } else {
+            panic!();
+        }
+    }
+}
+
+pub struct SingleParticleParameters {
+    pub mass: f64,
+    pub position: DVec3,
+    pub velocity: DVec3,
+    pub color: ParticleBasicColor,
+}
+
+impl SingleParticleParameters {
+    /// Builds a single-particle object input from panel parameters.
+    pub fn to_object_input(&self, scale: f64) -> ObjectInput {
+        ObjectInput::SingleParticle {
+            scale,
+            mass: self.mass,
+            position: self.position,
+            velocity: self.velocity,
+            color: self.color,
+        }
+    }
+}
+
+impl Default for SingleParticleParameters {
+    /// Loads default single-particle parameter values from object-input presets.
+    fn default() -> Self {
+        if let ObjectInput::SingleParticle {
+            mass,
+            position,
+            velocity,
+            color,
+            ..
+        } = ObjectInputType::SingleParticle.to_object_input(1e10)
+        {
+            Self {
+                mass,
+                position,
+                velocity,
+                color,
             }
         } else {
             panic!();

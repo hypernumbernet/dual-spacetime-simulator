@@ -1,6 +1,6 @@
 use dual_spacetime_simulator::object_input::{
-    clamp_world_scale, ObjectInput, ObjectInputType, MIN_WORLD_SCALE, SATELLITE_ORBIT_SCALE,
-    SOLAR_SYSTEM_SCALE,
+    clamp_world_scale, ObjectInput, ObjectInputType, ParticleBasicColor, MIN_WORLD_SCALE,
+    SATELLITE_ORBIT_SCALE, SOLAR_SYSTEM_SCALE,
 };
 
 #[test]
@@ -31,6 +31,7 @@ fn default_base_scale_matches_type_presets() {
     assert_eq!(ObjectInputType::RandomCube.default_base_scale(), 1e10);
     assert_eq!(ObjectInputType::SpiralDisk.default_base_scale(), 1e7);
     assert_eq!(ObjectInputType::EllipticalOrbit.default_base_scale(), 1.5e11);
+    assert_eq!(ObjectInputType::SingleParticle.default_base_scale(), 1e10);
 }
 
 #[test]
@@ -53,6 +54,13 @@ fn elliptical_orbit_always_two_bodies() {
     let ic = ObjectInputType::EllipticalOrbit.to_object_input(1.5e11);
     let sim = ic.generate_particles(999);
     assert_eq!(sim.particles.len(), 2);
+}
+
+#[test]
+fn single_particle_always_one_body() {
+    let ic = ObjectInputType::SingleParticle.to_object_input(1e10);
+    let sim = ic.generate_particles(999);
+    assert_eq!(sim.particles.len(), 1);
 }
 
 #[test]
@@ -173,6 +181,59 @@ fn to_object_input_scales_elliptical_orbit_parameters_with_base_scale() {
     } else {
         panic!("expected EllipticalOrbit");
     }
+}
+
+#[test]
+fn to_object_input_scales_single_particle_parameters_with_base_scale() {
+    let scale = 42.0;
+    let reference = ObjectInputType::SingleParticle.default_base_scale();
+    let factor = scale / reference;
+    let factor_cubed = factor * factor * factor;
+    let input = ObjectInputType::SingleParticle.to_object_input(scale);
+    if let ObjectInput::SingleParticle {
+        mass,
+        position,
+        velocity,
+        ..
+    } = input
+    {
+        assert!((mass - 5.972e24 * factor_cubed).abs() < 1e-6);
+        assert!((position.x - 1e10 * factor).abs() < 1e-6);
+        assert_eq!(position.y, 0.0);
+        assert_eq!(position.z, 0.0);
+        assert_eq!(velocity.x, 0.0);
+        assert_eq!(velocity.y, 0.0);
+        assert!((velocity.z - 1e6 * factor).abs() < 1e-6);
+        assert!((input.preview_group_extent() - 1.0).abs() < 1e-6);
+    } else {
+        panic!("expected SingleParticle");
+    }
+}
+
+#[test]
+fn generate_particles_uses_specified_single_particle_state() {
+    let scale = 1e10;
+    let mass = 1e24;
+    let position = glam::DVec3::new(2e10, 3e10, 4e10);
+    let velocity = glam::DVec3::new(1e5, 2e5, 3e5);
+    let input = ObjectInput::SingleParticle {
+        scale,
+        mass,
+        position,
+        velocity,
+        color: ParticleBasicColor::Blue,
+    };
+    let sim = input.generate_particles(1);
+    assert_eq!(sim.particles.len(), 1);
+    let p = &sim.particles[0];
+    assert!((p.mass - mass / (scale * scale * scale)).abs() < 1e-6);
+    assert!((p.position.x - position.x / scale).abs() < 1e-6);
+    assert!((p.position.y - position.y / scale).abs() < 1e-6);
+    assert!((p.position.z - position.z / scale).abs() < 1e-6);
+    assert!((p.velocity.x - velocity.x / scale).abs() < 1e-6);
+    assert!((p.velocity.y - velocity.y / scale).abs() < 1e-6);
+    assert!((p.velocity.z - velocity.z / scale).abs() < 1e-6);
+    assert_eq!(p.color, [0.2, 0.5, 1.0, 1.0]);
 }
 
 #[test]

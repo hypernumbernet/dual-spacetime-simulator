@@ -1,4 +1,4 @@
-use crate::object_input::{clamp_world_scale, ObjectInputType};
+use crate::object_input::{clamp_world_scale, ObjectInputType, ParticleBasicColor};
 use crate::particle_snapshot::{
     ParticleSnapshot, SNAPSHOT_FILTER_EXT, SNAPSHOT_FILTER_NAME,
 };
@@ -592,6 +592,7 @@ fn object_input_type_conditions(ui: &mut egui::Ui, uis: &mut UiState) {
         ObjectInputType::RandomCube => condition_random_cube(ui, uis),
         ObjectInputType::SpiralDisk => condition_spiral_disk(ui, uis),
         ObjectInputType::EllipticalOrbit => condition_elliptical_orbit(ui, uis),
+        ObjectInputType::SingleParticle => condition_single_particle(ui, uis),
     }
 }
 
@@ -708,6 +709,33 @@ fn condition_elliptical_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
         1e7,
         "Initial Distance (m)",
     );
+}
+
+/// Renders parameter controls for the single-particle object input.
+fn condition_single_particle(ui: &mut egui::Ui, uis: &mut UiState) {
+    dragvalue_normal(ui, &mut uis.single_particle.mass, 1e20, "Mass (kg)");
+    label_normal(ui, "Position (m)");
+    dragvalue_normal(ui, &mut uis.single_particle.position.x, 1e9, "X");
+    dragvalue_normal(ui, &mut uis.single_particle.position.y, 1e9, "Y");
+    dragvalue_normal(ui, &mut uis.single_particle.position.z, 1e9, "Z");
+    label_normal(ui, "Velocity (m/s)");
+    dragvalue_normal(ui, &mut uis.single_particle.velocity.x, 1e3, "X");
+    dragvalue_normal(ui, &mut uis.single_particle.velocity.y, 1e3, "Y");
+    dragvalue_normal(ui, &mut uis.single_particle.velocity.z, 1e3, "Z");
+    ui.horizontal(|ui| {
+        label_normal(ui, "Color");
+        let id = ui.make_persistent_id("single_particle_color_combobox");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ComboBox::from_id_salt(id)
+                .selected_text(format!("{}", uis.single_particle.color))
+                .width(90.0)
+                .show_ui(ui, |ui| {
+                    for color in ParticleBasicColor::ALL {
+                        selectable_value(ui, &mut uis.single_particle.color, color);
+                    }
+                });
+        });
+    });
 }
 
 const ADD_CENTER_SLIDER_RANGE: std::ops::RangeInclusive<f64> = -10.0..=10.0;
