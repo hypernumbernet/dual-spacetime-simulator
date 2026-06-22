@@ -660,14 +660,8 @@ fn condition_satellite_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
         1e3,
         "Orbit Max (m)",
     );
-    ui.style_mut().spacing.slider_width = 150.0;
-    label_normal(ui, "Satellite Count");
-    uis.clamp_satellite_count();
-    if let Some(range) = UiState::satellite_count_range(uis.max_particle_count) {
-        ui.add(Slider::new(
-            &mut uis.satellite_orbit.satellite_count,
-            range,
-        ));
+    if let Some(range) = uis.satellite_count_slider() {
+        slider_labeled_u32(ui, "Satellite Count", &mut uis.satellite_orbit.satellite_count, range);
     }
 }
 
@@ -781,13 +775,23 @@ fn button_add_particles(ui: &mut egui::Ui, uis: &mut UiState, current_count: u32
 
 /// Renders add-particle-count slider capped by remaining particle capacity.
 fn slider_add_particle_count(ui: &mut egui::Ui, uis: &mut UiState, current_count: u32) {
-    ui.style_mut().spacing.slider_width = 150.0;
-    label_normal(ui, "Add Particle Count");
     let remaining = uis.remaining_particle_capacity(current_count);
     uis.clamp_add_particle_count_to_capacity(current_count);
     if let Some(range) = UiState::add_particle_count_range(remaining) {
-        ui.add(Slider::new(&mut uis.add_particle_count, range));
+        slider_labeled_u32(ui, "Add Particle Count", &mut uis.add_particle_count, range);
     }
+}
+
+/// Renders a labeled u32 slider with the standard input-panel width.
+fn slider_labeled_u32(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut u32,
+    range: std::ops::RangeInclusive<u32>,
+) {
+    ui.style_mut().spacing.slider_width = 150.0;
+    label_normal(ui, label);
+    ui.add(Slider::new(value, range));
 }
 
 /// Draws reset button and flags simulation reset when clicked.

@@ -638,27 +638,24 @@ impl ObjectInput {
                 satellite_count,
             } => {
                 let correct = Correct::new(*scale);
-                let mut particles = vec![
-                    // Earth
-                    Particle {
-                        position: DVec3 {
-                            x: 0.0,
-                            y: 0.0,
-                            z: 0.0,
-                        },
-                        velocity: DVec3 {
-                            x: 0.0,
-                            y: 0.0,
-                            z: 0.0,
-                        },
-                        mass: MASS_EARTH * correct.kg,
-                        color: [0.2, 0.5, 1.0, 1.0], // Blue
-                    },
-                ];
+                let earth_mass = MASS_EARTH * correct.kg;
+                let gm_earth = crate::simulation::G * earth_mass;
+                let radius_scale = correct.m;
+                let alt_min = *orbit_altitude_min;
+                let alt_max = *orbit_altitude_max;
+                let mass_min = 500.0 * correct.kg;
+                let mass_max = 1000.0 * correct.kg;
+
+                let mut particles = Vec::with_capacity(1 + *satellite_count as usize);
+                particles.push(Particle {
+                    position: DVec3::ZERO,
+                    velocity: DVec3::ZERO,
+                    mass: earth_mass,
+                    color: [0.2, 0.5, 1.0, 1.0], // Blue
+                });
                 for _ in 0..*satellite_count {
-                    let orbit_radius = (EARTH_RADIUS
-                        + rng.random_range(*orbit_altitude_min..*orbit_altitude_max))
-                        * correct.m;
+                    let orbit_radius =
+                        (EARTH_RADIUS + rng.random_range(alt_min..alt_max)) * radius_scale;
                     let cos_theta = rng.random::<f64>() * 2.0 - 1.0;
                     let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
                     let phi = rng.random::<f64>() * TAU;
@@ -667,17 +664,11 @@ impl ObjectInput {
                         y: orbit_radius * sin_theta * phi.sin(),
                         z: orbit_radius * cos_theta,
                     };
-                    let vel_speed =
-                        (crate::simulation::G * MASS_EARTH * correct.kg / orbit_radius).sqrt();
-                    let vel = Self::random_perpendicular_unit_vector(pos, &mut rng);
-                    let vel = vel * vel_speed;
-                    let mass = rng.random_range(500.0 * correct.kg..1000.0 * correct.kg);
-                    let position = pos;
-                    let velocity = vel;
+                    let vel_speed = (gm_earth / orbit_radius).sqrt();
                     particles.push(Particle {
-                        position,
-                        velocity,
-                        mass,
+                        position: pos,
+                        velocity: Self::random_perpendicular_unit_vector(pos, &mut rng) * vel_speed,
+                        mass: rng.random_range(mass_min..mass_max),
                         color: [1.0, 1.0, 1.0, 1.0],
                     });
                 }

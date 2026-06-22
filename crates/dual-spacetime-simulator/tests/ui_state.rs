@@ -242,7 +242,7 @@ fn preset_placement_reset_repopulates_particles() {
     );
     assert_eq!(
         mgr.particle_count(),
-        1 + ui.satellite_orbit.satellite_count
+        ui.satellite_orbit.total_particle_count()
     );
 }
 

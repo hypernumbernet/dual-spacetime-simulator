@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 pub const BASE_SCALE_DRAG_SPEED: f64 = 0.01;
+/// Default satellite count for Satellite Orbit reset (Earth is added separately).
+pub const DEFAULT_SATELLITE_COUNT: u32 = 999;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum BaseScaleUnit {
@@ -537,21 +539,23 @@ impl UiState {
 
     /// Returns the valid satellite-count range for satellite-orbit reset.
     pub fn satellite_count_range(max_particle_count: u32) -> Option<std::ops::RangeInclusive<u32>> {
-        if max_particle_count <= 1 {
-            None
-        } else {
-            Some(1..=max_particle_count - 1)
-        }
+        (max_particle_count > 1).then(|| 1..=max_particle_count - 1)
     }
 
     /// Clamps satellite-orbit count so Earth plus satellites fits within the particle limit.
     pub fn clamp_satellite_count(&mut self) {
-        if let Some(range) = Self::satellite_count_range(self.max_particle_count) {
+        if let Some(max) = Self::satellite_count_range(self.max_particle_count) {
             self.satellite_orbit.satellite_count = self
                 .satellite_orbit
                 .satellite_count
-                .clamp(*range.start(), *range.end());
+                .clamp(*max.start(), *max.end());
         }
+    }
+
+    /// Clamps satellite count and returns the slider range when the preset can fit Earth plus satellites.
+    pub fn satellite_count_slider(&mut self) -> Option<std::ops::RangeInclusive<u32>> {
+        self.clamp_satellite_count();
+        Self::satellite_count_range(self.max_particle_count)
     }
 
     /// Applies persisted app settings and clamps runtime values to new limits.
@@ -1042,6 +1046,11 @@ pub struct SatelliteOrbitParameters {
 }
 
 impl SatelliteOrbitParameters {
+    /// Returns Earth plus the configured satellite count.
+    pub fn total_particle_count(&self) -> u32 {
+        1 + self.satellite_count
+    }
+
     /// Builds a satellite-orbit object input from panel parameters.
     pub fn to_object_input(&self, scale: f64) -> ObjectInput {
         ObjectInput::SatelliteOrbit {
@@ -1059,7 +1068,7 @@ impl Default for SatelliteOrbitParameters {
         Self {
             orbit_altitude_min: 300e3,
             orbit_altitude_max: 800e3,
-            satellite_count: 999,
+            satellite_count: DEFAULT_SATELLITE_COUNT,
         }
     }
 }
