@@ -535,6 +535,25 @@ impl UiState {
         }
     }
 
+    /// Returns the valid satellite-count range for satellite-orbit reset.
+    pub fn satellite_count_range(max_particle_count: u32) -> Option<std::ops::RangeInclusive<u32>> {
+        if max_particle_count <= 1 {
+            None
+        } else {
+            Some(1..=max_particle_count - 1)
+        }
+    }
+
+    /// Clamps satellite-orbit count so Earth plus satellites fits within the particle limit.
+    pub fn clamp_satellite_count(&mut self) {
+        if let Some(range) = Self::satellite_count_range(self.max_particle_count) {
+            self.satellite_orbit.satellite_count = self
+                .satellite_orbit
+                .satellite_count
+                .clamp(*range.start(), *range.end());
+        }
+    }
+
     /// Applies persisted app settings and clamps runtime values to new limits.
     pub fn apply_settings(&mut self, settings: &AppSettings) {
         self.max_particle_count = settings.max_particle_count;
@@ -548,6 +567,7 @@ impl UiState {
         if self.add_particle_count > self.max_particle_count {
             self.add_particle_count = self.max_particle_count;
         }
+        self.clamp_satellite_count();
     }
 
     /// Resets all 3D graph parameters back to their default values.
@@ -1018,9 +1038,7 @@ impl Default for SolarSystemParameters {
 pub struct SatelliteOrbitParameters {
     pub orbit_altitude_min: f64,
     pub orbit_altitude_max: f64,
-    pub asteroid_mass: f64,
-    pub asteroid_distance: f64,
-    pub asteroid_speed: f64,
+    pub satellite_count: u32,
 }
 
 impl SatelliteOrbitParameters {
@@ -1030,9 +1048,7 @@ impl SatelliteOrbitParameters {
             scale,
             orbit_altitude_min: self.orbit_altitude_min,
             orbit_altitude_max: self.orbit_altitude_max,
-            asteroid_mass: self.asteroid_mass,
-            asteroid_distance: self.asteroid_distance,
-            asteroid_speed: self.asteroid_speed,
+            satellite_count: self.satellite_count,
         }
     }
 }
@@ -1043,9 +1059,7 @@ impl Default for SatelliteOrbitParameters {
         Self {
             orbit_altitude_min: 300e3,
             orbit_altitude_max: 800e3,
-            asteroid_mass: 1e24,
-            asteroid_distance: 2e7,
-            asteroid_speed: 3e3,
+            satellite_count: 999,
         }
     }
 }

@@ -28,6 +28,16 @@ fn apply_settings_clamps_add_particle_count() {
     ui.apply_settings(&s);
     assert_eq!(ui.max_particle_count, 100);
     assert_eq!(ui.add_particle_count, 100);
+    assert_eq!(ui.satellite_orbit.satellite_count, 99);
+}
+
+#[test]
+fn clamp_satellite_count_respects_max_particle_count() {
+    let mut ui = UiState::default();
+    ui.max_particle_count = 50;
+    ui.satellite_orbit.satellite_count = 999;
+    ui.clamp_satellite_count();
+    assert_eq!(ui.satellite_orbit.satellite_count, 49);
 }
 
 #[test]
@@ -230,7 +240,10 @@ fn preset_placement_reset_repopulates_particles() {
         ui.add_particle_count,
         ui.base_scale,
     );
-    assert_eq!(mgr.particle_count(), ui.add_particle_count + 1);
+    assert_eq!(
+        mgr.particle_count(),
+        1 + ui.satellite_orbit.satellite_count
+    );
 }
 
 #[test]

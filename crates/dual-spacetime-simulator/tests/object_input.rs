@@ -64,18 +64,16 @@ fn single_particle_always_one_body() {
 }
 
 #[test]
-fn satellite_orbit_adds_satellites_beyond_two_bodies() {
+fn satellite_orbit_particle_count_includes_earth() {
     let ic = ObjectInput::SatelliteOrbit {
         scale: SATELLITE_ORBIT_SCALE,
         orbit_altitude_min: 300e3,
         orbit_altitude_max: 800e3,
-        asteroid_mass: 1e24,
-        asteroid_distance: 2e7,
-        asteroid_speed: 3e3,
+        satellite_count: 9,
     };
-    let sim = ic.generate_particles(10);
-    // Earth + asteroid + (n-1) satellites
-    assert_eq!(sim.particles.len(), 11);
+    let sim = ic.generate_particles(999);
+    // Earth + satellite_count satellites; external count is ignored
+    assert_eq!(sim.particles.len(), 10);
 }
 
 #[test]

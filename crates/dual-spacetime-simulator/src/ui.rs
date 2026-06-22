@@ -660,25 +660,15 @@ fn condition_satellite_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
         1e3,
         "Orbit Max (m)",
     );
-    label_normal(ui, "Asteroid");
-    dragvalue_normal(
-        ui,
-        &mut uis.satellite_orbit.asteroid_mass,
-        1e10,
-        "Mass (kg)",
-    );
-    dragvalue_normal(
-        ui,
-        &mut uis.satellite_orbit.asteroid_distance,
-        1e3,
-        "Distance (m)",
-    );
-    dragvalue_normal(
-        ui,
-        &mut uis.satellite_orbit.asteroid_speed,
-        1e3,
-        "Speed (m/s)",
-    );
+    ui.style_mut().spacing.slider_width = 150.0;
+    label_normal(ui, "Satellite Count");
+    uis.clamp_satellite_count();
+    if let Some(range) = UiState::satellite_count_range(uis.max_particle_count) {
+        ui.add(Slider::new(
+            &mut uis.satellite_orbit.satellite_count,
+            range,
+        ));
+    }
 }
 
 /// Renders parameter controls for the elliptical-orbit object input.

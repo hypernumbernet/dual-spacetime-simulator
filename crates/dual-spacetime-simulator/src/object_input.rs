@@ -109,9 +109,7 @@ pub enum ObjectInput {
         scale: f64,
         orbit_altitude_min: f64,
         orbit_altitude_max: f64,
-        asteroid_mass: f64,
-        asteroid_distance: f64,
-        asteroid_speed: f64,
+        satellite_count: u32,
     },
     EllipticalOrbit {
         scale: f64,
@@ -637,9 +635,7 @@ impl ObjectInput {
                 scale,
                 orbit_altitude_min,
                 orbit_altitude_max,
-                asteroid_mass,
-                asteroid_distance,
-                asteroid_speed,
+                satellite_count,
             } => {
                 let correct = Correct::new(*scale);
                 let mut particles = vec![
@@ -658,22 +654,8 @@ impl ObjectInput {
                         mass: MASS_EARTH * correct.kg,
                         color: [0.2, 0.5, 1.0, 1.0], // Blue
                     },
-                    Particle {
-                        position: DVec3 {
-                            x: *asteroid_distance * correct.m,
-                            y: 0.0,
-                            z: 0.0,
-                        },
-                        velocity: DVec3 {
-                            x: 0.0,
-                            y: 0.0,
-                            z: *asteroid_speed * correct.m,
-                        },
-                        mass: *asteroid_mass * correct.kg,
-                        color: [1.0, 0.0, 0.3, 1.0], // Red
-                    },
                 ];
-                for _ in 1..particle_count {
+                for _ in 0..*satellite_count {
                     let orbit_radius = (EARTH_RADIUS
                         + rng.random_range(*orbit_altitude_min..*orbit_altitude_max))
                         * correct.m;
