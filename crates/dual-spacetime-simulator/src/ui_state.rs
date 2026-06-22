@@ -126,7 +126,7 @@ impl BaseScaleUnit {
     }
 }
 
-fn trim_trailing_zeros(formatted: &str) -> String {
+pub(crate) fn trim_trailing_zeros(formatted: &str) -> String {
     if !formatted.contains('.') {
         return formatted.to_string();
     }

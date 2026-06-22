@@ -1,3 +1,4 @@
+use crate::ui_state::trim_trailing_zeros;
 use egui::{Align, Color32, FontId, Frame, Layout, Margin, RichText, Stroke, TextStyle, Ui};
 use egui::{Button, vec2};
 use egui::Response;
@@ -84,12 +85,27 @@ fn apply_positive_dragvalue_style(ui: &mut Ui) {
     ui.spacing_mut().button_padding = egui::vec2(6.0, 4.0);
 }
 
-fn format_positive_drag_value(value: f64) -> String {
-    if value.abs() >= 1e6 || value.abs() <= 1e-4 && value != 0.0 {
-        format!("{:.3e}", value)
-    } else {
-        format!("{:}", value)
+/// Formats a drag-value number with up to 6 significant figures, falling back to
+/// scientific notation for very large or very small magnitudes so the rendered
+/// text stays narrow enough to never overflow the input field and hide its label.
+pub fn format_drag_value(value: f64) -> String {
+    if !value.is_finite() {
+        return format!("{value}");
     }
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let abs = value.abs();
+    if abs >= 1e6 || abs <= 1e-4 {
+        return format!("{:.3e}", value);
+    }
+    let exponent = abs.log10().floor() as i32;
+    let decimals = (5 - exponent).clamp(0, 12) as usize;
+    trim_trailing_zeros(&format!("{:.*}", decimals, value))
+}
+
+fn format_positive_drag_value(value: f64) -> String {
+    format_drag_value(value)
 }
 
 fn positive_drag_value(
@@ -175,13 +191,7 @@ pub fn dragvalue_normal<T: egui::emath::Numeric>(
                     egui::DragValue::new(value)
                         .speed(speed)
                         .custom_parser(|s| s.trim().parse::<f64>().ok())
-                        .custom_formatter(|value, _range| {
-                            if value.abs() >= 1e6 || value.abs() <= 1e-4 && value != 0.0 {
-                                format!("{:.3e}", value)
-                            } else {
-                                format!("{:}", value)
-                            }
-                        }),
+                        .custom_formatter(|value, _range| format_drag_value(value)),
                 );
             });
         });
