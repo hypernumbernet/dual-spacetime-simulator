@@ -56,10 +56,13 @@ pub fn draw_ui(
         .height();
 
     if uis.is_settings_panel_open {
+        let mut panel_open = uis.is_settings_panel_open;
+        let input_panel_width = uis.input_panel_width;
         egui::Window::new("Settings")
+            .open(&mut panel_open)
             .resizable(false)
             .collapsible(true)
-            .default_width(uis.input_panel_width)
+            .default_width(input_panel_width)
             .show(ctx, |ui| {
                 dragvalue_normal(ui, &mut uis.min_window_width, 1.0, "Min Window Width");
                 dragvalue_normal(ui, &mut uis.min_window_height, 1.0, "Min Window Height");
@@ -81,17 +84,21 @@ pub fn draw_ui(
                     }
                 }
             });
+        uis.is_settings_panel_open = panel_open;
     }
 
     if uis.is_graph3d_panel_open {
+        let mut panel_open = uis.is_graph3d_panel_open;
+        let input_panel_width = uis.input_panel_width;
         egui::Window::new("3D Graph")
+            .open(&mut panel_open)
             .resizable(false)
             .collapsible(true)
             .default_pos(egui::pos2(
                 PANEL_DEFAULT_X,
                 menu_bar_height + PANEL_MENU_OFFSET_Y,
             ))
-            .default_width(uis.input_panel_width)
+            .default_width(input_panel_width)
             .show(ctx, |ui| {
                 combobox_graph_type(ui, &mut uis);
                 ui.separator();
@@ -112,6 +119,7 @@ pub fn draw_ui(
                 label_normal(ui, "Sample Count");
                 ui.add(Slider::new(&mut uis.graph_sample_count, 1..=5000).drag_value_speed(1.0));
             });
+        uis.is_graph3d_panel_open = panel_open;
     }
 }
 

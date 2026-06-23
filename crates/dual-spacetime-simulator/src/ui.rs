@@ -81,14 +81,17 @@ pub fn draw_ui(
         .height();
 
     if uis.is_simulation_panel_open {
+        let mut panel_open = uis.is_simulation_panel_open;
+        let input_panel_width = uis.input_panel_width;
         egui::Window::new("Simulation")
+            .open(&mut panel_open)
             .resizable(false)
             .collapsible(true)
             .default_pos(egui::pos2(
                 PANEL_DEFAULT_X,
                 menu_bar_height + PANEL_MENU_OFFSET_Y,
             ))
-            .default_width(uis.input_panel_width)
+            .default_width(input_panel_width)
             .show(ctx, |ui| {
                 lock_panel_content_width(ui);
                 let particle_count = simulation_manager.read().unwrap().particle_count();
@@ -179,13 +182,17 @@ pub fn draw_ui(
                     uis.pending_snapshot_dialog = Some(PendingSnapshotDialog::Load);
                 }
             });
+        uis.is_simulation_panel_open = panel_open;
     }
 
     if uis.is_settings_panel_open {
+        let mut panel_open = uis.is_settings_panel_open;
+        let input_panel_width = uis.input_panel_width;
         egui::Window::new("Settings")
+            .open(&mut panel_open)
             .resizable(false)
             .collapsible(true)
-            .default_width(uis.input_panel_width)
+            .default_width(input_panel_width)
             .show(ctx, |ui| {
                 dragvalue_normal(ui, &mut uis.min_window_width, 1.0, "Min Window Width");
                 dragvalue_normal(ui, &mut uis.min_window_height, 1.0, "Min Window Height");
@@ -240,13 +247,17 @@ pub fn draw_ui(
                     }
                 }
             });
+        uis.is_settings_panel_open = panel_open;
     }
 
     if uis.is_object_input_panel_open {
+        let mut panel_open = uis.is_object_input_panel_open;
+        let input_panel_width = uis.input_panel_width;
         egui::Window::new("Object Input")
+            .open(&mut panel_open)
             .resizable(false)
             .collapsible(true)
-            .default_width(uis.input_panel_width)
+            .default_width(input_panel_width)
             .show(ctx, |ui| {
                 lock_panel_content_width(ui);
                 combobox_simulation_type(ui, &mut uis);
@@ -282,6 +293,7 @@ pub fn draw_ui(
                 });
                 button_add_particles(ui, &mut uis, current_count);
             });
+        uis.is_object_input_panel_open = panel_open;
     }
 
     if uis.is_resetting && uis.is_reset_requested {
@@ -302,7 +314,9 @@ const RESET_LOG_ROW_HEIGHT: f32 = 14.0;
 
 fn solar_system_reset_log_window(ctx: &egui::Context, uis: &mut UiState) {
     let in_progress = uis.reset_log.in_progress;
+    let mut panel_open = uis.reset_log.is_open;
     egui::Window::new("Solar System Reset")
+        .open(&mut panel_open)
         .resizable(true)
         .collapsible(true)
         .default_size([480.0, 320.0])
@@ -338,6 +352,11 @@ fn solar_system_reset_log_window(ctx: &egui::Context, uis: &mut UiState) {
                 }
             }
         });
+    if in_progress {
+        uis.reset_log.is_open = true;
+    } else {
+        uis.reset_log.is_open = panel_open;
+    }
 }
 
 /// Formats simulation time into a compact signed human-readable duration string.
