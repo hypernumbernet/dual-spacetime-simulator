@@ -2,7 +2,7 @@ use crate::graph3d::GraphType;
 use crate::settings::AppSettings;
 use crate::ui_state::*;
 use crate::ui_styles::*;
-use egui::{Checkbox, ComboBox, Slider};
+use egui::{ComboBox, Slider};
 use std::sync::{Arc, RwLock};
 
 const MENU_POPUP_WIDTH: f32 = 180.0;
@@ -29,22 +29,17 @@ pub fn draw_ui(
 
                 ui.menu_button("Panel", |ui| {
                     ui.set_min_width(MENU_POPUP_WIDTH);
-                    let available = uis.get_available_panels();
-                    if available.contains(&PanelKind::Graph3D) {
-                        if ui
-                            .checkbox(&mut uis.is_graph3d_panel_open, PanelKind::Graph3D.label())
-                            .clicked()
-                        {
-                            ui.close_menu();
-                        }
+                    if ui
+                        .checkbox(&mut uis.is_graph3d_panel_open, PanelKind::Graph3D.label())
+                        .clicked()
+                    {
+                        ui.close_menu();
                     }
-                    if available.contains(&PanelKind::Settings) {
-                        if ui
-                            .checkbox(&mut uis.is_settings_panel_open, PanelKind::Settings.label())
-                            .clicked()
-                        {
-                            ui.close_menu();
-                        }
+                    if ui
+                        .checkbox(&mut uis.is_settings_panel_open, PanelKind::Settings.label())
+                        .clicked()
+                    {
+                        ui.close_menu();
                     }
                 });
 
@@ -70,39 +65,13 @@ pub fn draw_ui(
                 dragvalue_normal(ui, &mut uis.min_window_height, 1.0, "Min Window Height");
                 combobox_particle_display_mode(ui, &mut uis);
                 ui.separator();
-                ui.horizontal(|ui| {
-                    let mut v = uis.start_maximized;
-                    if ui.add(Checkbox::new(&mut v, "Start Maximized")).changed() {
-                        uis.start_maximized = v;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let mut v = uis.link_point_size_to_scale;
-                    if ui
-                        .add(Checkbox::new(&mut v, "Link Point Size to Scale"))
-                        .changed()
-                    {
-                        uis.link_point_size_to_scale = v;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let mut v = uis.lock_camera_up;
-                    if ui
-                        .add(Checkbox::new(&mut v, "Lock Camera Up/Down"))
-                        .changed()
-                    {
-                        uis.lock_camera_up = v;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let mut v = uis.mailbox_present_mode;
-                    if ui
-                        .add(Checkbox::new(&mut v, "Mailbox Present Mode"))
-                        .changed()
-                    {
-                        uis.mailbox_present_mode = v;
-                    }
-                });
+                ui.checkbox(&mut uis.start_maximized, "Start Maximized");
+                ui.checkbox(
+                    &mut uis.link_point_size_to_scale,
+                    "Link Point Size to Scale",
+                );
+                ui.checkbox(&mut uis.lock_camera_up, "Lock Camera Up/Down");
+                ui.checkbox(&mut uis.mailbox_present_mode, "Mailbox Present Mode");
                 ui.separator();
                 if button_normal(ui, "Save Settings", false).clicked() {
                     settings.window_min_width = uis.min_window_width;
@@ -157,7 +126,7 @@ fn combobox_particle_display_mode(ui: &mut egui::Ui, uis: &mut UiState) {
         let id = ui.make_persistent_id("particle_display_mode_combobox");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ComboBox::from_id_salt(id)
-                .selected_text(format!("{}", uis.particle_display_mode))
+                .selected_text(uis.particle_display_mode.to_string())
                 .width(90.0)
                 .show_ui(ui, |ui| {
                     for mode in ParticleDisplayMode::ALL {
@@ -172,7 +141,7 @@ fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Graph Type");
     let id = ui.make_persistent_id("graph_type_combobox");
     ComboBox::from_id_salt(id)
-        .selected_text(format!("{}", uis.graph_type))
+        .selected_text(uis.graph_type.to_string())
         .width(ui.available_width())
         .show_ui(ui, |ui| {
             selectable_value(

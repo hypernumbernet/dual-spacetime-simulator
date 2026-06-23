@@ -11,6 +11,7 @@ pub mod ui;
 pub mod ui_state;
 pub mod ui_styles;
 
+use crate::graph3d::GraphType;
 use crate::integration::Gui;
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
@@ -27,7 +28,6 @@ use winit::{
     error::EventLoopError,
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
 
@@ -35,6 +35,8 @@ const DOUBLE_CLICK_MILLIS: u64 = 400;
 const DOUBLE_CLICK_DIST: f64 = 25.0;
 const DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
+
+type GraphParams = (GraphType, u32, f64, f64);
 
 struct Graph3dBuildResult {
     fp: u64,
@@ -64,9 +66,6 @@ pub struct App {
     vulkan_base: Option<VulkanBase>,
     window: Option<Arc<Window>>,
     ui_state: Arc<RwLock<UiState>>,
-    mouse_left_down: bool,
-    mouse_right_down: bool,
-    mouse_middle_down: bool,
     last_cursor_position: Option<(f64, f64)>,
     last_left_click_time: Option<Instant>,
     last_left_click_pos: Option<(f64, f64)>,
@@ -74,6 +73,8 @@ pub struct App {
     last_right_click_pos: Option<(f64, f64)>,
     settings: AppSettings,
     last_graph3d_fingerprint: u64,
+    cached_graph_params: GraphParams,
+    cached_graph_fingerprint: u64,
     graph3d_pending_rx: Option<Receiver<Graph3dBuildResult>>,
     drag_owner: DragOwner,
 }
@@ -111,9 +112,6 @@ impl Default for App {
             render_pipeline: None,
             gui: None,
             ui_state: Arc::new(RwLock::new(ui_state)),
-            mouse_left_down: false,
-            mouse_right_down: false,
-            mouse_middle_down: false,
             last_cursor_position: None,
             last_left_click_time: None,
             last_left_click_pos: None,
@@ -121,6 +119,13 @@ impl Default for App {
             last_right_click_pos: None,
             settings,
             last_graph3d_fingerprint: u64::MAX,
+            cached_graph_params: (
+                GraphType::SphericalFibonacciLattice,
+                0,
+                f64::NAN,
+                f64::NAN,
+            ),
+            cached_graph_fingerprint: 0,
             graph3d_pending_rx: None,
             drag_owner: DragOwner::None,
         }
@@ -130,7 +135,7 @@ impl Default for App {
 impl ApplicationHandler for App {
     /// Creates window and graphics resources when the app is resumed by the event loop.
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let ui_state = self.ui_state.write().unwrap();
+        let ui_state = self.ui_state.read().unwrap();
 
         let window_attrs = Window::default_attributes()
             .with_title(generate_window_title())
@@ -172,7 +177,6 @@ impl ApplicationHandler for App {
         self.render_pipeline = Some(render_pipeline);
         self.vulkan_base = Some(vulkan_base);
         self.gui = Some(gui);
-        drop(ui_state);
     }
 
     /// Handles window, input, rendering, and camera events for each platform event.
@@ -202,24 +206,19 @@ impl ApplicationHandler for App {
             }
         }
 
-        let lock_camera_up = {
+        let render_settings = {
             let ui_state = self.ui_state.read().unwrap();
-            ui_state.lock_camera_up
+            (
+                ui_state.lock_camera_up,
+                ui_state.mailbox_present_mode,
+                ui_state.link_point_size_to_scale,
+                ui_state.show_grid,
+                ui_state.particle_display_mode,
+            )
         };
-        pipeline.set_lock_camera_up(lock_camera_up);
+        pipeline.set_lock_camera_up(render_settings.0);
 
         match &event {
-            WindowEvent::KeyboardInput { event, .. } => {
-                // Exit shortcut for parity with the simulator's pause-style keybinds.
-                if event.state == ElementState::Pressed
-                    && matches!(
-                        event.physical_key,
-                        PhysicalKey::Code(KeyCode::Escape) | PhysicalKey::Code(KeyCode::Pause)
-                    )
-                {
-                    // No simulation to pause; do nothing.
-                }
-            }
             WindowEvent::Resized(size) => {
                 if size.width > 0 && size.height > 0 {
                     vb.recreate_swapchain(window);
@@ -238,12 +237,9 @@ impl ApplicationHandler for App {
                     let ctx = gui.context();
                     draw_ui(&self.ui_state, &mut self.settings, &ctx);
                 });
-                let desired_mailbox_present_mode = {
-                    let ui_state = self.ui_state.read().unwrap();
-                    ui_state.mailbox_present_mode
-                };
-                if vb.mailbox_present_mode != desired_mailbox_present_mode {
-                    vb.mailbox_present_mode = desired_mailbox_present_mode;
+
+                if vb.mailbox_present_mode != render_settings.1 {
+                    vb.mailbox_present_mode = render_settings.1;
                     vb.recreate_swapchain(window);
                     pipeline.recreate_framebuffers(vb);
                 }
@@ -273,20 +269,14 @@ impl ApplicationHandler for App {
                     vb.device.begin_command_buffer(cb, &begin_ci).unwrap();
                 }
 
-                let ui_state = self.ui_state.read().unwrap();
-                let link_point_size_to_scale = ui_state.link_point_size_to_scale;
-                let show_grid = ui_state.show_grid;
-                let particle_display_mode = ui_state.particle_display_mode;
-                drop(ui_state);
-
                 pipeline.render(
                     cb,
                     image_index as usize,
                     vb.swapchain_extent,
                     gui,
-                    link_point_size_to_scale,
-                    show_grid,
-                    particle_display_mode,
+                    render_settings.2,
+                    render_settings.3,
+                    render_settings.4,
                 );
 
                 unsafe {
@@ -315,32 +305,31 @@ impl ApplicationHandler for App {
         match &event {
             WindowEvent::MouseInput { state, button, .. } => {
                 let pressed = *state == ElementState::Pressed;
-                if pressed {
-                    if ui_wants_pointer || ui_consumed {
+                if ui_wants_pointer || ui_consumed {
+                    if pressed {
                         self.drag_owner = DragOwner::Ui;
-                        self.clear_mouse_drag_flags();
                     } else {
-                        match button {
-                            MouseButton::Left => {
-                                self.drag_owner = DragOwner::PendingSceneLeft;
-                                self.left_button(state);
-                            }
-                            MouseButton::Right => {
-                                self.drag_owner = DragOwner::PendingSceneRight;
-                                self.right_button(state);
-                            }
-                            MouseButton::Middle => {
-                                self.drag_owner = DragOwner::PendingSceneMiddle;
-                                self.middle_button(state);
-                            }
-                            _ => {}
+                        self.drag_owner = DragOwner::None;
+                    }
+                } else if pressed {
+                    match button {
+                        MouseButton::Left => {
+                            self.drag_owner = DragOwner::PendingSceneLeft;
+                            self.left_button(state);
                         }
+                        MouseButton::Right => {
+                            self.drag_owner = DragOwner::PendingSceneRight;
+                            self.right_button(state);
+                        }
+                        MouseButton::Middle => {
+                            self.drag_owner = DragOwner::PendingSceneMiddle;
+                        }
+                        _ => {}
                     }
                 } else {
                     match button {
                         MouseButton::Left => self.left_button(state),
                         MouseButton::Right => self.right_button(state),
-                        MouseButton::Middle => self.middle_button(state),
                         _ => {}
                     }
                     self.drag_owner = DragOwner::None;
@@ -350,17 +339,16 @@ impl ApplicationHandler for App {
                 let (x, y) = (position.x, position.y);
                 let ui_blocks = ui_wants_pointer || ui_consumed;
                 if let Some(new_owner) = self.drag_owner.promote_from_pending(ui_blocks) {
-                    if new_owner == DragOwner::Ui {
-                        self.mouse_left_down = false;
-                        self.mouse_right_down = false;
-                        self.mouse_middle_down = false;
-                    }
                     self.drag_owner = new_owner;
                 }
                 if let Some((lx, ly)) = self.last_cursor_position {
                     match self.drag_owner {
-                        DragOwner::SceneLeft => pipeline.revolve_camera(x - lx, y - ly),
-                        DragOwner::SceneRight => pipeline.look_around(x - lx, y - ly),
+                        DragOwner::SceneLeft => {
+                            pipeline.revolve_camera(x - lx, y - ly);
+                        }
+                        DragOwner::SceneRight => {
+                            pipeline.look_around(x - lx, y - ly);
+                        }
                         DragOwner::SceneMiddle => {
                             let window_size = window.inner_size();
                             let center_x = window_size.width as f64 / 2.0;
@@ -380,12 +368,10 @@ impl ApplicationHandler for App {
                 if !ui_wants_pointer && !ui_consumed {
                     match delta {
                         MouseScrollDelta::LineDelta(_, y) => {
-                            let zoom_factor = y * 0.1;
-                            pipeline.zoom_camera(zoom_factor);
+                            pipeline.zoom_camera(y * 0.1);
                         }
                         MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                            let zoom_factor = y * 0.1;
-                            pipeline.zoom_camera(zoom_factor as f32);
+                            pipeline.zoom_camera(*y as f32 * 0.1);
                         }
                     }
                 }
@@ -396,27 +382,31 @@ impl ApplicationHandler for App {
 
     /// Performs per-frame updates before the event loop waits for new events.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(window) = self.window.as_ref() {
-            window.request_redraw();
-        }
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
         }
 
         let uis = self.ui_state.read().unwrap();
-        let fp = crate::graph3d::graph_params_fingerprint(
-            uis.graph_type,
-            uis.graph_sample_count,
-            uis.graph_radius,
-            uis.graph_velocity_scale,
-        );
-        let (gt, n, t, vs) = (
+        let params = (
             uis.graph_type,
             uis.graph_sample_count,
             uis.graph_radius,
             uis.graph_velocity_scale,
         );
         drop(uis);
+
+        let fp = if params != self.cached_graph_params {
+            self.cached_graph_params = params;
+            self.cached_graph_fingerprint = crate::graph3d::graph_params_fingerprint(
+                params.0,
+                params.1,
+                params.2,
+                params.3,
+            );
+            self.cached_graph_fingerprint
+        } else {
+            self.cached_graph_fingerprint
+        };
 
         if let Some(rx) = self.graph3d_pending_rx.as_ref() {
             match rx.try_recv() {
@@ -439,29 +429,26 @@ impl ApplicationHandler for App {
 
         if fp != self.last_graph3d_fingerprint && self.graph3d_pending_rx.is_none() {
             let (tx, rx) = mpsc::channel::<Graph3dBuildResult>();
+            let (gt, n, t, vs) = params;
             std::thread::spawn(move || {
-                let (positions, colors) = crate::graph3d::build_points(gt, n, t, vs);
-                let line_vertices = crate::graph3d::build_graph_line_vertices(gt, n, t, vs);
+                let geometry = crate::graph3d::build_graph_geometry(gt, n, t, vs);
                 let _ = tx.send(Graph3dBuildResult {
                     fp,
-                    positions,
-                    colors,
-                    line_vertices,
+                    positions: geometry.positions,
+                    colors: geometry.colors,
+                    line_vertices: geometry.line_vertices,
                 });
             });
             self.graph3d_pending_rx = Some(rx);
+        }
+
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
         }
     }
 }
 
 impl App {
-    /// Clears all internal mouse drag button state flags.
-    fn clear_mouse_drag_flags(&mut self) {
-        self.mouse_left_down = false;
-        self.mouse_right_down = false;
-        self.mouse_middle_down = false;
-    }
-
     /// Returns `true` when a double-click was recognized (click history is cleared).
     fn try_consume_double_click(
         click_pos: (f64, f64),
@@ -501,49 +488,41 @@ impl App {
 
     /// Handles left-button press/release and double-click camera-up reset behavior.
     fn left_button(&mut self, state: &ElementState) {
-        let pressed = *state == ElementState::Pressed;
-        self.mouse_left_down = pressed;
-        if pressed {
-            let now = Instant::now();
-            let Some(click_pos) = self.last_cursor_position else {
-                return;
-            };
-            if Self::try_consume_double_click(
-                click_pos,
-                now,
-                &mut self.last_left_click_time,
-                &mut self.last_left_click_pos,
-            ) && let Some(pipeline) = self.render_pipeline.as_mut()
-            {
-                pipeline.y_top();
-            }
+        if *state != ElementState::Pressed {
+            return;
+        }
+        let now = Instant::now();
+        let Some(click_pos) = self.last_cursor_position else {
+            return;
+        };
+        if Self::try_consume_double_click(
+            click_pos,
+            now,
+            &mut self.last_left_click_time,
+            &mut self.last_left_click_pos,
+        ) && let Some(pipeline) = self.render_pipeline.as_mut()
+        {
+            pipeline.y_top();
         }
     }
 
     /// Handles right-button press/release and double-click target-centering behavior.
     fn right_button(&mut self, state: &ElementState) {
-        let pressed = *state == ElementState::Pressed;
-        self.mouse_right_down = pressed;
-        if pressed {
-            let now = Instant::now();
-            let Some(click_pos) = self.last_cursor_position else {
-                return;
-            };
-            if Self::try_consume_double_click(
-                click_pos,
-                now,
-                &mut self.last_right_click_time,
-                &mut self.last_right_click_pos,
-            ) && let Some(pipeline) = self.render_pipeline.as_mut()
-            {
-                pipeline.center_target_on_origin();
-            }
+        if *state != ElementState::Pressed {
+            return;
         }
-    }
-
-    /// Handles middle-button press/release state tracking for camera roll gestures.
-    fn middle_button(&mut self, state: &ElementState) {
-        let pressed = *state == ElementState::Pressed;
-        self.mouse_middle_down = pressed;
+        let now = Instant::now();
+        let Some(click_pos) = self.last_cursor_position else {
+            return;
+        };
+        if Self::try_consume_double_click(
+            click_pos,
+            now,
+            &mut self.last_right_click_time,
+            &mut self.last_right_click_pos,
+        ) && let Some(pipeline) = self.render_pipeline.as_mut()
+        {
+            pipeline.center_target_on_origin();
+        }
     }
 }

@@ -69,38 +69,88 @@ pub fn graph_params_fingerprint(
     h.finish()
 }
 
+/// Point positions, colors, and optional line vertices for one graph parameter set.
+pub struct GraphGeometry {
+    pub positions: Vec<[f32; 3]>,
+    pub colors: Vec<[f32; 4]>,
+    pub line_vertices: Vec<([f32; 3], [f32; 4])>,
+}
+
+/// Builds all GPU geometry for the selected graph type in a single pass where possible.
+pub fn build_graph_geometry(
+    graph_type: GraphType,
+    graph_sample_count: u32,
+    graph_t_slice: f64,
+    graph_velocity_scale: f64,
+) -> GraphGeometry {
+    match graph_type {
+        GraphType::SphericalFibonacciLattice => build_spherical_fibonacci_geometry(
+            graph_sample_count,
+            graph_t_slice,
+        ),
+        GraphType::RapidityFieldMatrix | GraphType::RapidityFieldBiquaternion => GraphGeometry {
+            positions: Vec::new(),
+            colors: Vec::new(),
+            line_vertices: build_graph_line_vertices(
+                graph_type,
+                graph_sample_count,
+                graph_t_slice,
+                graph_velocity_scale,
+            ),
+        },
+    }
+}
+
 /// Builds point positions and colors for the selected 3D graph visualization mode.
 pub fn build_points(
     graph_type: GraphType,
     graph_sample_count: u32,
     graph_t_slice: f64,
-    _graph_velocity_scale: f64,
+    graph_velocity_scale: f64,
 ) -> (Vec<[f32; 3]>, Vec<[f32; 4]>) {
-    let n = clamp_samples(graph_sample_count);
-    let mut positions = Vec::with_capacity(n);
-    let mut colors = Vec::with_capacity(n);
-
     match graph_type {
         GraphType::SphericalFibonacciLattice => {
-            let t = graph_t_slice;
-            let r = t.abs();
-            for i in 0..n {
-                let d = fibonacci_unit_direction(i, n);
-                let px = (d[0] * r) as f32;
-                let py = (d[1] * r) as f32;
-                let pz = (d[2] * r) as f32;
-                positions.push([px, py, pz]);
-                let cr = (0.5 + 0.5 * d[0]) as f32;
-                let cg = (0.5 + 0.5 * d[1]) as f32;
-                let cb = (0.5 + 0.5 * d[2]) as f32;
-                colors.push([cr, cg, cb, 1.0]);
-            }
+            let geometry =
+                build_spherical_fibonacci_geometry(graph_sample_count, graph_t_slice);
+            (geometry.positions, geometry.colors)
         }
-        GraphType::RapidityFieldMatrix => {}
-        GraphType::RapidityFieldBiquaternion => {}
+        GraphType::RapidityFieldMatrix | GraphType::RapidityFieldBiquaternion => {
+            let _ = graph_velocity_scale;
+            (Vec::new(), Vec::new())
+        }
     }
+}
 
-    (positions, colors)
+/// Builds spherical Fibonacci lattice points and light-cone lines in one sampling pass.
+fn build_spherical_fibonacci_geometry(
+    graph_sample_count: u32,
+    graph_t_slice: f64,
+) -> GraphGeometry {
+    let n = clamp_samples(graph_sample_count);
+    let r = graph_t_slice.abs();
+    let origin = [0.0_f32, 0.0, 0.0];
+    let mut positions = Vec::with_capacity(n);
+    let mut colors = Vec::with_capacity(n);
+    let mut line_vertices = Vec::with_capacity(n * 2);
+    for i in 0..n {
+        let d = fibonacci_unit_direction(i, n);
+        let end = [(d[0] * r) as f32, (d[1] * r) as f32, (d[2] * r) as f32];
+        positions.push(end);
+        let color = [
+            (0.5 + 0.5 * d[0]) as f32,
+            (0.5 + 0.5 * d[1]) as f32,
+            (0.5 + 0.5 * d[2]) as f32,
+            1.0,
+        ];
+        colors.push(color);
+        line_vertices.push((origin, color));
+        line_vertices.push((end, color));
+    }
+    GraphGeometry {
+        positions,
+        colors,
+        line_vertices,
+    }
 }
 
 /// Builds line-list vertices and colors for graph types that render line segments.
@@ -111,9 +161,11 @@ pub fn build_graph_line_vertices(
     graph_velocity_scale: f64,
 ) -> Vec<([f32; 3], [f32; 4])> {
     match graph_type {
-        GraphType::SphericalFibonacciLattice => {
-            build_light_cone_line_vertices(graph_sample_count, graph_t_slice)
-        }
+        GraphType::SphericalFibonacciLattice => build_spherical_fibonacci_geometry(
+            graph_sample_count,
+            graph_t_slice,
+        )
+        .line_vertices,
         GraphType::RapidityFieldMatrix => build_rapidity_field_line_vertices_with(
             graph_sample_count,
             graph_velocity_scale,
@@ -125,28 +177,6 @@ pub fn build_graph_line_vertices(
             rapidity_point_biquaternion,
         ),
     }
-}
-
-/// Creates radial light-cone line segments from the origin to sampled sphere directions.
-fn build_light_cone_line_vertices(
-    graph_sample_count: u32,
-    graph_t_slice: f64,
-) -> Vec<([f32; 3], [f32; 4])> {
-    let n = clamp_samples(graph_sample_count);
-    let r = graph_t_slice.abs();
-    let origin = [0.0_f32, 0.0, 0.0];
-    let mut out = Vec::with_capacity(n * 2);
-    for i in 0..n {
-        let d = fibonacci_unit_direction(i, n);
-        let end = [(d[0] * r) as f32, (d[1] * r) as f32, (d[2] * r) as f32];
-        let cr = (0.5 + 0.5 * d[0]) as f32;
-        let cg = (0.5 + 0.5 * d[1]) as f32;
-        let cb = (0.5 + 0.5 * d[2]) as f32;
-        let c = [cr, cg, cb, 1.0];
-        out.push((origin, c));
-        out.push((end, c));
-    }
-    out
 }
 
 /// Builds Lorentz-transformed line mesh on xz grid and y-direction pillars.

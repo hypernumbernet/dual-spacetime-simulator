@@ -1,8 +1,6 @@
 use crate::graph3d::GraphType;
 use crate::settings::AppSettings;
 
-pub const DEFAULT_SCALE_UI: f64 = 5000.0;
-
 pub(crate) fn trim_trailing_zeros(formatted: &str) -> String {
     if !formatted.contains('.') {
         return formatted.to_string();
@@ -70,8 +68,6 @@ impl DragOwner {
         })
     }
 }
-
-const PANELS_AVAILABLE: &[PanelKind] = &[PanelKind::Graph3D, PanelKind::Settings];
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -163,18 +159,5 @@ impl UiState {
         self.lock_camera_up = settings.lock_camera_up;
         self.mailbox_present_mode = settings.mailbox_present_mode;
         self.particle_display_mode = settings.particle_display_mode;
-    }
-
-    /// Returns the panel set available in the graph viewer.
-    pub fn get_available_panels(&self) -> &'static [PanelKind] {
-        PANELS_AVAILABLE
-    }
-
-    /// Resets all 3D graph parameters back to their default values.
-    pub fn reset_graph_params(&mut self) {
-        self.graph_type = GraphType::SphericalFibonacciLattice;
-        self.graph_sample_count = 1000;
-        self.graph_radius = 1.0;
-        self.graph_velocity_scale = 1.0;
     }
 }

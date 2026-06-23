@@ -20,7 +20,7 @@ dst-math.workspace = true
 egui = "0.31.1"
 egui-ash-renderer = { version = "0.8", default-features = false }
 egui-winit = { version = "0.31.1", default-features = false }
-glam = { workspace = true, features = ["serde"] }
+glam = { workspace = true }
 gpu-allocator.workspace = true
 raw-window-handle.workspace = true
 serde = { version = "1.0", features = ["derive"] }

@@ -162,7 +162,7 @@ fn create_particle_storage_buffer(
         device,
         allocator,
         particle_buffer_size(capacity),
-        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
         gpu_allocator::MemoryLocation::CpuToGpu,
         name,
     )

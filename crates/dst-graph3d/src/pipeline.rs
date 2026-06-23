@@ -60,6 +60,7 @@ pub struct ParticleRenderPipeline {
     particle_descriptor_set_layout: vk::DescriptorSetLayout,
     display_buffer: DisplayParticleBuffer,
     retired_buffers: Vec<AllocatedBuffer>,
+    particles_gpu_dirty: bool,
 
     camera: OrbitCamera,
 }
@@ -119,6 +120,7 @@ impl ParticleRenderPipeline {
             particle_descriptor_set_layout,
             display_buffer,
             retired_buffers: Vec::new(),
+            particles_gpu_dirty: false,
             camera,
         }
     }
@@ -162,7 +164,7 @@ impl ParticleRenderPipeline {
         framebuffer_index: usize,
         extent: vk::Extent2D,
         gui: &mut Gui,
-        link_point_size_to_scale: bool,
+        _link_point_size_to_scale: bool,
         show_grid: bool,
         particle_display_mode: ParticleDisplayMode,
     ) {
@@ -218,29 +220,18 @@ impl ParticleRenderPipeline {
         }
 
         let aspect_ratio = extent.width as f32 / extent.height as f32;
+        let view_proj = self.compute_view_proj(aspect_ratio);
+        let view_proj_cols = view_proj.to_cols_array_2d();
 
         if show_grid {
-            let view_proj = self.compute_mvp_axes(aspect_ratio);
             let pc = AxesPushConstants {
-                view_proj: view_proj.to_cols_array_2d(),
+                view_proj: view_proj_cols,
             };
             self.draw_axes(command_buffer, &pc);
         }
 
-        // Graph viewer uses fixed unit scale: model = identity, point size unscaled.
-        let scale_factor: f32 = 1.0;
-        let view_proj = self.compute_mvp_particle(aspect_ratio, scale_factor);
-        let point_scale_factor = if link_point_size_to_scale {
-            scale_factor
-        } else {
-            1.0
-        };
-        let view_proj_cols = view_proj.to_cols_array_2d();
-        let size_scale = compute_particle_size_scale(
-            extent.height as f32,
-            point_scale_factor,
-            particle_display_mode,
-        );
+        let size_scale =
+            compute_particle_size_scale(extent.height as f32, particle_display_mode);
         let pc = PushConstants {
             view_proj: view_proj_cols,
             size_scale,
@@ -271,11 +262,11 @@ impl ParticleRenderPipeline {
     /// Uploads display-only particle points into the shared GPU storage buffer.
     pub fn set_particles(&mut self, positions: &[[f32; 3]], colors: &[[f32; 4]]) {
         self.display_buffer.upload_display_points(positions, colors);
+        self.particles_gpu_dirty = true;
     }
 
     /// Uploads graph line vertices and rebuilds the line vertex buffer.
     pub fn set_graph_lines(&mut self, vertices: &[([f32; 3], [f32; 4])]) {
-        let verts = axes_vertices_from_tuples(vertices);
         let allocator = Arc::clone(&self.allocator);
         upload_axes_line_buffer(
             &self.device,
@@ -283,7 +274,7 @@ impl ParticleRenderPipeline {
             &mut self.retired_buffers,
             &mut self.graph_lines_buffer,
             &mut self.graph_lines_vertex_count,
-            &verts,
+            vertices,
             "graph_lines",
         );
     }
@@ -342,6 +333,11 @@ impl ParticleRenderPipeline {
         self.camera.update_animation();
     }
 
+    /// Returns whether the camera is still running an alignment animation.
+    pub fn is_animating(&self) -> bool {
+        self.camera.is_animating()
+    }
+
     /// Enables or disables camera up-lock behavior.
     pub fn set_lock_camera_up(&mut self, lock: bool) {
         self.camera.set_lock_up(lock);
@@ -381,7 +377,7 @@ impl ParticleRenderPipeline {
 
     /// Records draw commands for particle point geometry.
     fn draw_particles(
-        &self,
+        &mut self,
         cb: vk::CommandBuffer,
         pc: &PushConstants,
         particle_display_mode: ParticleDisplayMode,
@@ -392,20 +388,21 @@ impl ParticleRenderPipeline {
         }
         let pipeline = self.particle_pipelines[particle_display_mode.pipeline_index()];
         unsafe {
-            // The display SSBO is always written from the host, so flush host writes
-            // before the vertex stage reads them.
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::HOST_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ);
-            self.device.cmd_pipeline_barrier(
-                cb,
-                vk::PipelineStageFlags::HOST,
-                vk::PipelineStageFlags::VERTEX_SHADER,
-                vk::DependencyFlags::empty(),
-                &[barrier],
-                &[],
-                &[],
-            );
+            if self.particles_gpu_dirty {
+                let barrier = vk::MemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::HOST_WRITE)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ);
+                self.device.cmd_pipeline_barrier(
+                    cb,
+                    vk::PipelineStageFlags::HOST,
+                    vk::PipelineStageFlags::VERTEX_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[barrier],
+                    &[],
+                    &[],
+                );
+                self.particles_gpu_dirty = false;
+            }
             self.device
                 .cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, pipeline);
             self.device.cmd_bind_descriptor_sets(
@@ -427,19 +424,11 @@ impl ParticleRenderPipeline {
         }
     }
 
-    /// Computes model-view-projection transform for axes and helper geometry.
-    fn compute_mvp_axes(&self, aspect_ratio: f32) -> Mat4 {
+    /// Computes view-projection transform for scene rendering.
+    fn compute_view_proj(&self, aspect_ratio: f32) -> Mat4 {
         let view = Mat4::look_at_rh(self.camera.position, self.camera.target, self.camera.up);
         let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect_ratio, 0.1, 100.0);
         proj * view
-    }
-
-    /// Computes model-view-projection transform for particle-space rendering.
-    fn compute_mvp_particle(&self, aspect_ratio: f32, scale_factor: f32) -> Mat4 {
-        let view = Mat4::look_at_rh(self.camera.position, self.camera.target, self.camera.up);
-        let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect_ratio, 0.1, 100.0);
-        let model = Mat4::from_scale(Vec3::splat(scale_factor));
-        proj * view * model
     }
 
     /// Releases deferred buffers after `wait_for_fence` has completed for the frame.
@@ -496,7 +485,7 @@ fn upload_axes_line_buffer(
     retired_buffers: &mut Vec<AllocatedBuffer>,
     buffer: &mut Option<AllocatedBuffer>,
     vertex_count: &mut u32,
-    vertices: &[AxesVertex],
+    vertices: &[([f32; 3], [f32; 4])],
     label: &str,
 ) {
     if vertices.is_empty() {
@@ -508,7 +497,7 @@ fn upload_axes_line_buffer(
     }
 
     if let Some(buf) = buffer.as_ref() {
-        if write_mapped_axes_vertices(buf, vertices) {
+        if write_mapped_axes_tuples(buf, vertices) {
             *vertex_count = vertices.len() as u32;
             return;
         }
@@ -517,10 +506,17 @@ fn upload_axes_line_buffer(
         }
     }
 
+    let verts: Vec<AxesVertex> = vertices
+        .iter()
+        .map(|(position, color)| AxesVertex {
+            position: *position,
+            color: *color,
+        })
+        .collect();
     let (buf, count) = create_buffer_with_data(
         device,
         allocator,
-        vertices,
+        &verts,
         vk::BufferUsageFlags::VERTEX_BUFFER,
         label,
     );
@@ -528,18 +524,11 @@ fn upload_axes_line_buffer(
     *vertex_count = count;
 }
 
-fn axes_vertices_from_tuples(vertices: &[([f32; 3], [f32; 4])]) -> Vec<AxesVertex> {
-    vertices
-        .iter()
-        .map(|(position, color)| AxesVertex {
-            position: *position,
-            color: *color,
-        })
-        .collect()
-}
-
-fn write_mapped_axes_vertices(buffer: &AllocatedBuffer, vertices: &[AxesVertex]) -> bool {
-    let required_bytes = std::mem::size_of_val(vertices) as u64;
+fn write_mapped_axes_tuples(
+    buffer: &AllocatedBuffer,
+    vertices: &[([f32; 3], [f32; 4])],
+) -> bool {
+    let required_bytes = (std::mem::size_of::<AxesVertex>() * vertices.len()) as u64;
     let Some(alloc) = buffer.allocation.as_ref() else {
         return false;
     };
@@ -549,9 +538,14 @@ fn write_mapped_axes_vertices(buffer: &AllocatedBuffer, vertices: &[AxesVertex])
     let Some(mapped) = alloc.mapped_ptr() else {
         return false;
     };
-    let bytes = bytemuck::cast_slice(vertices);
+    let dst = mapped.as_ptr() as *mut AxesVertex;
     unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapped.as_ptr() as *mut u8, bytes.len());
+        for (i, (position, color)) in vertices.iter().enumerate() {
+            dst.add(i).write(AxesVertex {
+                position: *position,
+                color: *color,
+            });
+        }
     }
     true
 }
@@ -559,12 +553,8 @@ fn write_mapped_axes_vertices(buffer: &AllocatedBuffer, vertices: &[AxesVertex])
 // --- Pipeline creation helpers ---
 
 /// Computes perspective-correct point sprite size for the active display mode.
-fn compute_particle_size_scale(
-    framebuffer_height: f32,
-    point_scale_factor: f32,
-    mode: ParticleDisplayMode,
-) -> f32 {
-    framebuffer_height * SIZE_RATIO * point_scale_factor * mode.size_scale_factor()
+fn compute_particle_size_scale(framebuffer_height: f32, mode: ParticleDisplayMode) -> f32 {
+    framebuffer_height * SIZE_RATIO * mode.size_scale_factor()
 }
 
 /// Creates a render pass compatible with swapchain color and depth attachments.

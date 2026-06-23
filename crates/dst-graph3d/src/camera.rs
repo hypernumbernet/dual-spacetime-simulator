@@ -111,8 +111,17 @@ impl OrbitCamera {
         self.start_time = Some(Instant::now());
     }
 
+    /// Returns whether a camera alignment or recentering animation is still running.
+    pub fn is_animating(&self) -> bool {
+        self.animating_y_top > 0 || self.animating_to_origin > 0
+    }
+
     /// Advances camera alignment and recentering animations based on elapsed time.
     pub fn update_animation(&mut self) {
+        if !self.is_animating() {
+            self.start_time = None;
+            return;
+        }
         if let Some(start) = self.start_time {
             let dt = start.elapsed().as_secs_f32();
             if dt >= ANIMATION_DURATION {

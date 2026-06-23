@@ -105,6 +105,11 @@ impl Gui {
         self.egui_ctx.clone()
     }
 
+    /// Reports whether egui requested another repaint after the last pass.
+    pub fn wants_repaint(&self) -> bool {
+        self.egui_ctx.has_requested_repaint()
+    }
+
     /// Finalizes the current UI pass and prepares tessellated meshes and textures.
     pub fn prepare_frame(&mut self, window: &Window) {
         self.end_frame(window);
@@ -115,9 +120,11 @@ impl Gui {
         self.prepared_meshes = self.egui_ctx.tessellate(shapes, self.pixels_per_point);
         self.prepared_textures_free = textures_delta.free.clone();
 
-        self.renderer
-            .set_textures(self.queue, self.command_pool, &textures_delta.set)
-            .expect("Failed to set egui textures");
+        if !textures_delta.set.is_empty() {
+            self.renderer
+                .set_textures(self.queue, self.command_pool, &textures_delta.set)
+                .expect("Failed to set egui textures");
+        }
     }
 
     /// Records draw commands for prepared egui meshes into the command buffer.
