@@ -315,6 +315,8 @@ pub fn draw_ui(
     if uis.reset_log.is_open {
         solar_system_reset_log_window(ctx, &mut uis);
     }
+
+    particle_info_window(ctx, &mut uis);
 }
 
 const RESET_LOG_MONO_SIZE: f32 = 12.0;
@@ -366,6 +368,119 @@ fn solar_system_reset_log_window(ctx: &egui::Context, uis: &mut UiState) {
             }
         },
     );
+}
+
+/// Renders the picked particle's info as a closable, draggable window.
+///
+/// Reads the current `selected_particle` snapshot and lays it out using the
+/// existing panel styling helpers. Closing the window clears the selection so
+/// later picks always start from a clean state.
+fn particle_info_window(ctx: &egui::Context, uis: &mut UiState) {
+    let Some(info) = uis.selected_particle else {
+        return;
+    };
+    if !uis.is_particle_info_panel_open {
+        return;
+    }
+
+    let simulation_type = uis.simulation_type;
+    let velocity_section_label = match simulation_type {
+        SimulationType::LorentzTransformation => "Rapidity",
+        _ => "Velocity (m/s)",
+    };
+    let magnitude_label = match simulation_type {
+        SimulationType::LorentzTransformation => "|η|",
+        _ => "Speed |v|",
+    };
+
+    let position = info.particle.position;
+    let velocity = info.particle.velocity;
+    let speed = velocity.length();
+    let distance = position.length();
+    let color_rgba = info.particle.color;
+
+    uis.is_particle_info_panel_open = show_closable_window(
+        ctx,
+        "Particle Info",
+        uis.is_particle_info_panel_open,
+        true,
+        |window| {
+            window
+                .resizable(false)
+                .collapsible(true)
+                .default_width(220.0)
+        },
+        |ui| {
+            lock_panel_content_width(ui);
+            ui.horizontal(|ui| {
+                label_normal(ui, "Index");
+                label_indicator(ui, &info.index.to_string());
+            });
+            ui.horizontal(|ui| {
+                label_normal(ui, "Mass (kg)");
+                label_indicator(ui, &format_drag_value(info.particle.mass));
+            });
+            ui.separator();
+            label_normal(ui, "Position (m)");
+            ui.horizontal(|ui| {
+                label_normal(ui, "X");
+                label_indicator(ui, &format_drag_value(position.x));
+            });
+            ui.horizontal(|ui| {
+                label_normal(ui, "Y");
+                label_indicator(ui, &format_drag_value(position.y));
+            });
+            ui.horizontal(|ui| {
+                label_normal(ui, "Z");
+                label_indicator(ui, &format_drag_value(position.z));
+            });
+            ui.horizontal(|ui| {
+                label_normal(ui, "Distance |r|");
+                label_indicator(ui, &format_drag_value(distance));
+            });
+            ui.separator();
+            label_normal(ui, velocity_section_label);
+            ui.horizontal(|ui| {
+                label_normal(ui, "X");
+                label_indicator(ui, &format_drag_value(velocity.x));
+            });
+            ui.horizontal(|ui| {
+                label_normal(ui, "Y");
+                label_indicator(ui, &format_drag_value(velocity.y));
+            });
+            ui.horizontal(|ui| {
+                label_normal(ui, "Z");
+                label_indicator(ui, &format_drag_value(velocity.z));
+            });
+            ui.horizontal(|ui| {
+                label_normal(ui, magnitude_label);
+                label_indicator(ui, &format_drag_value(speed));
+            });
+            ui.separator();
+            draw_particle_color_swatch(ui, color_rgba);
+        },
+    );
+
+    if !uis.is_particle_info_panel_open {
+        uis.selected_particle = None;
+    }
+}
+
+/// Draws a labeled color swatch matching the `label_indicator` row layout.
+fn draw_particle_color_swatch(ui: &mut egui::Ui, color: [f32; 4]) {
+    let color32 = egui::Color32::from_rgba_unmultiplied(
+        (color[0].clamp(0.0, 1.0) * 255.0) as u8,
+        (color[1].clamp(0.0, 1.0) * 255.0) as u8,
+        (color[2].clamp(0.0, 1.0) * 255.0) as u8,
+        (color[3].clamp(0.0, 1.0) * 255.0) as u8,
+    );
+    ui.horizontal(|ui| {
+        label_normal(ui, "Color");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(120.0, 16.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 2.0, color32);
+        });
+    });
 }
 
 /// Formats simulation time into a compact signed human-readable duration string.

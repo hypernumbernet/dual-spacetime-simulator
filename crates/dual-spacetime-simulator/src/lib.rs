@@ -656,7 +656,14 @@ impl ApplicationHandler for App {
                     }
                 } else {
                     match button {
-                        MouseButton::Left => self.left_button(state),
+                        MouseButton::Left => {
+                            let is_scene_click =
+                                matches!(self.drag_owner, DragOwner::PendingSceneLeft);
+                            self.left_button(state);
+                            if is_scene_click {
+                                self.try_pick_particle();
+                            }
+                        }
                         MouseButton::Right => self.right_button(state),
                         MouseButton::Middle => self.middle_button(state),
                         _ => {}
@@ -880,5 +887,53 @@ impl App {
     fn middle_button(&mut self, state: &ElementState) {
         let pressed = *state == ElementState::Pressed;
         self.mouse_middle_down = pressed;
+    }
+
+    /// Picks the particle closest to the last cursor position and stores it in UI state.
+    ///
+    /// Called on a left-button release that did not promote into a drag.
+    /// Reads the most recent particle data from whichever simulation source
+    /// (CPU manager or GPU buffer) the app is currently driving.
+    fn try_pick_particle(&mut self) {
+        let Some(click_pos) = self.last_cursor_position else {
+            return;
+        };
+        let Some(vb) = self.vulkan_base.as_ref() else {
+            return;
+        };
+        let Some(pipeline) = self.render_pipeline.as_ref() else {
+            return;
+        };
+        let extent = vb.swapchain_extent;
+        if extent.width == 0 || extent.height == 0 {
+            return;
+        }
+
+        let (uses_gpu, scale_gauge) = {
+            let uis = self.ui_state.read().unwrap();
+            (uis.uses_gpu_simulation(), uis.scale_gauge)
+        };
+
+        let particles = if uses_gpu {
+            pipeline.readback_particles()
+        } else {
+            self.simulation_manager.read().unwrap().particles()
+        };
+
+        if particles.is_empty() {
+            return;
+        }
+
+        let click_x = click_pos.0 as f32;
+        let click_y = click_pos.1 as f32;
+        if let Some(idx) =
+            pipeline.pick_nearest_particle(&particles, click_x, click_y, extent, scale_gauge)
+        {
+            let particle = particles[idx];
+            let mut uis = self.ui_state.write().unwrap();
+            uis.select_particle(idx, particle);
+            drop(uis);
+            self.need_redraw.write().unwrap().clone_from(&true);
+        }
     }
 }

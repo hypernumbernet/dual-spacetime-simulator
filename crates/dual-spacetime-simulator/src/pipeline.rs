@@ -4,7 +4,7 @@ use crate::integration::Gui;
 use crate::simulation::Particle;
 use crate::ui_state::*;
 use ash::vk;
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec3, Vec4};
 use gpu_allocator::vulkan::Allocator;
 use std::sync::{Arc, Mutex};
 use vulkanvil::{
@@ -456,6 +456,69 @@ impl ParticleRenderPipeline {
     /// Enables or disables camera up-lock behavior.
     pub fn set_lock_camera_up(&mut self, lock: bool) {
         self.camera.set_lock_up(lock);
+    }
+
+    /// Finds the particle whose screen-projected position is closest to the click.
+    ///
+    /// Reuses the exact MVP transform used by the particle pass so the picked
+    /// particle matches what the user actually sees. Particles whose clip-space
+    /// position is behind the camera or outside the view frustum are skipped.
+    ///
+    /// Returns the index into `particles` of the nearest visible particle, or
+    /// `None` if no particle is currently visible.
+    pub fn pick_nearest_particle(
+        &self,
+        particles: &[Particle],
+        click_x: f32,
+        click_y: f32,
+        extent: vk::Extent2D,
+        scale_gauge: f64,
+    ) -> Option<usize> {
+        if particles.is_empty() || extent.width == 0 || extent.height == 0 {
+            return None;
+        }
+        let aspect_ratio = extent.width as f32 / extent.height as f32;
+        let scale_factor = (scale_gauge / DEFAULT_SCALE_UI).powi(4) as f32;
+        let mvp = self.compute_mvp_particle(aspect_ratio, scale_factor);
+        let width = extent.width as f32;
+        let height = extent.height as f32;
+
+        let mut best: Option<(usize, f32)> = None;
+        for (i, p) in particles.iter().enumerate() {
+            let pos = Vec4::new(
+                p.position.x as f32,
+                p.position.y as f32,
+                p.position.z as f32,
+                1.0,
+            );
+            let clip = mvp * pos;
+            if !clip.x.is_finite() || !clip.y.is_finite() || !clip.w.is_finite() {
+                continue;
+            }
+            if clip.w <= 0.0 {
+                continue;
+            }
+            let ndc_x = clip.x / clip.w;
+            let ndc_y = clip.y / clip.w;
+            let ndc_z = clip.z / clip.w;
+            // Skip particles outside Vulkan's view volume (clip-space x,y in
+            // [-1, 1] and z in [0, 1]).
+            if !(-1.0..=1.0).contains(&ndc_x)
+                || !(-1.0..=1.0).contains(&ndc_y)
+                || !(0.0..=1.0).contains(&ndc_z)
+            {
+                continue;
+            }
+            let screen_x = (ndc_x + 1.0) * 0.5 * width;
+            let screen_y = (ndc_y + 1.0) * 0.5 * height;
+            let dx = screen_x - click_x;
+            let dy = screen_y - click_y;
+            let dist_sq = dx * dx + dy * dy;
+            if best.is_none_or(|(_, d)| dist_sq < d) {
+                best = Some((i, dist_sq));
+            }
+        }
+        best.map(|(i, _)| i)
     }
 
     // --- Draw helpers ---

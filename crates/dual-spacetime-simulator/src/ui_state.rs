@@ -3,7 +3,7 @@ use crate::object_input::{
     SOLAR_SYSTEM_SCALE, clamp_world_scale,
 };
 use crate::settings::AppSettings;
-use crate::simulation::{AU, LY, MPC, PC};
+use crate::simulation::{AU, LY, MPC, PC, Particle};
 use glam::DVec3;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -349,6 +349,16 @@ impl std::fmt::Display for ParticleDisplayMode {
     }
 }
 
+/// Snapshot of a particle captured at the moment of selection.
+///
+/// The particle state is copied so the info panel can keep displaying it even
+/// while the simulation continues advancing.
+#[derive(Clone, Copy, Debug)]
+pub struct SelectedParticleInfo {
+    pub index: usize,
+    pub particle: Particle,
+}
+
 pub struct UiState {
     pub input_panel_width: f32,
     pub min_window_width: f32,
@@ -389,6 +399,8 @@ pub struct UiState {
     pub is_simulation_panel_open: bool,
     pub is_object_input_panel_open: bool,
     pub is_settings_panel_open: bool,
+    pub is_particle_info_panel_open: bool,
+    pub selected_particle: Option<SelectedParticleInfo>,
     pub start_maximized: bool,
     pub link_point_size_to_scale: bool,
     pub lock_camera_up: bool,
@@ -445,6 +457,8 @@ impl Default for UiState {
             is_simulation_panel_open: true,
             is_object_input_panel_open: false,
             is_settings_panel_open: false,
+            is_particle_info_panel_open: false,
+            selected_particle: None,
             start_maximized: false,
             link_point_size_to_scale: true,
             lock_camera_up: true,
@@ -635,6 +649,18 @@ impl UiState {
     pub fn reset_satellite_count_to_default(&mut self) {
         self.satellite_orbit.satellite_count = DEFAULT_SATELLITE_COUNT;
         self.clamp_satellite_count();
+    }
+
+    /// Stores a newly picked particle and opens the info panel.
+    pub fn select_particle(&mut self, index: usize, particle: Particle) {
+        self.selected_particle = Some(SelectedParticleInfo { index, particle });
+        self.is_particle_info_panel_open = true;
+    }
+
+    /// Clears any previously picked particle and closes the info panel.
+    pub fn clear_selected_particle(&mut self) {
+        self.selected_particle = None;
+        self.is_particle_info_panel_open = false;
     }
 
     /// Schedules a GPU particle-buffer reload after CPU-side particles were replaced.
