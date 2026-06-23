@@ -156,3 +156,24 @@ pub fn button_normal(ui: &mut Ui, text: &str, inverted: bool) -> Response {
     };
     ui.add_sized(button_size, button)
 }
+
+/// Shows a closable window when `is_open` is true and returns the updated open state.
+pub fn show_closable_window(
+    ctx: &egui::Context,
+    title: &'static str,
+    is_open: bool,
+    sync_close: bool,
+    configure: impl FnOnce(egui::Window) -> egui::Window,
+    add_contents: impl FnOnce(&mut Ui),
+) -> bool {
+    if !is_open {
+        return is_open;
+    }
+    let mut panel_open = is_open;
+    configure(egui::Window::new(title).open(&mut panel_open)).show(ctx, add_contents);
+    if sync_close {
+        panel_open
+    } else {
+        is_open
+    }
+}

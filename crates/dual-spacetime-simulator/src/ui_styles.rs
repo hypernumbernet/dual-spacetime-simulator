@@ -250,6 +250,27 @@ pub fn lock_panel_content_width(ui: &mut Ui) {
     ui.set_max_width(ui.available_width());
 }
 
+/// Shows a closable window when `is_open` is true and returns the updated open state.
+pub fn show_closable_window(
+    ctx: &egui::Context,
+    title: &'static str,
+    is_open: bool,
+    sync_close: bool,
+    configure: impl FnOnce(egui::Window) -> egui::Window,
+    add_contents: impl FnOnce(&mut Ui),
+) -> bool {
+    if !is_open {
+        return is_open;
+    }
+    let mut panel_open = is_open;
+    configure(egui::Window::new(title).open(&mut panel_open)).show(ctx, add_contents);
+    if sync_close {
+        panel_open
+    } else {
+        is_open
+    }
+}
+
 fn panel_slider_track_width(row_width: f32, value_reserve: f32, spacing: f32) -> f32 {
     (row_width - value_reserve - spacing).max(PANEL_SLIDER_MIN_TRACK_WIDTH)
 }

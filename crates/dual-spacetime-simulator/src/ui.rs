@@ -80,221 +80,229 @@ pub fn draw_ui(
         .rect
         .height();
 
-    if uis.is_simulation_panel_open {
-        let mut panel_open = uis.is_simulation_panel_open;
-        let input_panel_width = uis.input_panel_width;
-        egui::Window::new("Simulation")
-            .open(&mut panel_open)
-            .resizable(false)
-            .collapsible(true)
-            .default_pos(egui::pos2(
-                PANEL_DEFAULT_X,
-                menu_bar_height + PANEL_MENU_OFFSET_Y,
-            ))
-            .default_width(input_panel_width)
-            .show(ctx, |ui| {
-                lock_panel_content_width(ui);
-                let particle_count = simulation_manager.read().unwrap().particle_count();
-                ui.horizontal(|ui| {
-                    label_normal(ui, "FPS");
-                    label_indicator(ui, &uis.fps.to_string());
-                });
-                ui.horizontal(|ui| {
-                    label_normal(ui, "Frame");
-                    label_indicator(ui, &uis.frame.to_string());
-                });
-                ui.horizontal(|ui| {
-                    label_normal(ui, "Time");
-                    label_indicator(ui, &format_simulation_time(uis.simulation_time));
-                });
-                ui.horizontal(|ui| {
-                    label_normal(ui, "Particle Count");
-                    label_indicator(ui, &particle_count.to_string());
-                });
-                ui.separator();
-                let can_start = UiState::can_start_simulation(particle_count);
-                ui.add_enabled_ui(can_start || uis.is_running, |ui| {
-                    if button_normal(
-                        ui,
-                        if uis.is_running { "Pause" } else { "Start" },
-                        uis.is_running,
-                    )
-                    .clicked()
-                    {
-                        uis.is_running = !uis.is_running;
-                    }
-                });
-                if !can_start && !uis.is_running {
-                    label_normal(ui, "Need at least 2 particles");
-                }
-                ui.separator();
-                if button_normal(ui, "Object Input", false).clicked() {
-                    uis.is_object_input_panel_open = !uis.is_object_input_panel_open;
-                }
-                ui.separator();
-                dragvalue_normal(ui, &mut uis.time_per_frame, 1.0, "Time(sec)/Frame");
-                ui.separator();
-                let dbl_click = primary_double_click_pos(ui);
-                ui.horizontal(|ui| {
-                    label_normal(ui, "Scale");
-                    label_indicator(ui, format_scale(uis.scale_gauge, uis.scale).as_str());
-                });
-                let scale_slider = slider_pure(
+    let input_panel_width = uis.input_panel_width;
+
+    uis.is_simulation_panel_open = show_closable_window(
+        ctx,
+        "Simulation",
+        uis.is_simulation_panel_open,
+        true,
+        |window| {
+            window
+                .resizable(false)
+                .collapsible(true)
+                .default_pos(egui::pos2(
+                    PANEL_DEFAULT_X,
+                    menu_bar_height + PANEL_MENU_OFFSET_Y,
+                ))
+                .default_width(input_panel_width)
+        },
+        |ui| {
+            lock_panel_content_width(ui);
+            let particle_count = simulation_manager.read().unwrap().particle_count();
+            ui.horizontal(|ui| {
+                label_normal(ui, "FPS");
+                label_indicator(ui, &uis.fps.to_string());
+            });
+            ui.horizontal(|ui| {
+                label_normal(ui, "Frame");
+                label_indicator(ui, &uis.frame.to_string());
+            });
+            ui.horizontal(|ui| {
+                label_normal(ui, "Time");
+                label_indicator(ui, &format_simulation_time(uis.simulation_time));
+            });
+            ui.horizontal(|ui| {
+                label_normal(ui, "Particle Count");
+                label_indicator(ui, &particle_count.to_string());
+            });
+            ui.separator();
+            let can_start = UiState::can_start_simulation(particle_count);
+            ui.add_enabled_ui(can_start || uis.is_running, |ui| {
+                if button_normal(
                     ui,
-                    &mut uis.scale_gauge,
-                    DEFAULT_SCALE_UI * 0.2..=DEFAULT_SCALE_UI * 3.0,
-                );
-                apply_slider_double_click_reset_with_pos(&scale_slider, dbl_click, || {
-                    uis.reset_scale_to_base();
-                });
-                ui.separator();
-                ui.style_mut().spacing.slider_width = 160.0;
-                ui.horizontal(|ui| {
-                    label_normal(ui, "Max FPS");
-                    ui.checkbox(&mut uis.max_fps_unlimited, "Unlimited");
-                });
-                let max_fps_slider = ui.add_enabled(
-                    !uis.max_fps_unlimited,
-                    Slider::new(&mut uis.max_fps, 1..=1000),
-                );
-                apply_slider_double_click_reset_with_pos(&max_fps_slider, dbl_click, || {
-                    uis.reset_max_fps_to_default();
-                });
-                ui.separator();
-                label_normal(ui, "Skip drawing frames");
-                let skip_slider = ui.add(Slider::new(&mut uis.skip, 0..=1000));
-                apply_slider_double_click_reset_with_pos(&skip_slider, dbl_click, || {
-                    uis.reset_skip_to_default();
-                });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    let mut v = uis.show_grid;
-                    if ui.add(Checkbox::new(&mut v, "Show Grid")).changed() {
-                        uis.show_grid = v;
-                    }
-                });
-                ui.separator();
-                let (save, load) = button_row_pair(ui, "Save", "Load");
-                if save.clicked() {
-                    uis.pending_snapshot_dialog = Some(PendingSnapshotDialog::Save);
-                }
-                if load.clicked() {
-                    uis.pending_snapshot_dialog = Some(PendingSnapshotDialog::Load);
+                    if uis.is_running { "Pause" } else { "Start" },
+                    uis.is_running,
+                )
+                .clicked()
+                {
+                    uis.is_running = !uis.is_running;
                 }
             });
-        uis.is_simulation_panel_open = panel_open;
-    }
+            if !can_start && !uis.is_running {
+                label_normal(ui, "Need at least 2 particles");
+            }
+            ui.separator();
+            if button_normal(ui, "Object Input", false).clicked() {
+                uis.is_object_input_panel_open = !uis.is_object_input_panel_open;
+            }
+            ui.separator();
+            dragvalue_normal(ui, &mut uis.time_per_frame, 1.0, "Time(sec)/Frame");
+            ui.separator();
+            let dbl_click = primary_double_click_pos(ui);
+            ui.horizontal(|ui| {
+                label_normal(ui, "Scale");
+                label_indicator(ui, format_scale(uis.scale_gauge, uis.scale).as_str());
+            });
+            let scale_slider = slider_pure(
+                ui,
+                &mut uis.scale_gauge,
+                DEFAULT_SCALE_UI * 0.2..=DEFAULT_SCALE_UI * 3.0,
+            );
+            apply_slider_double_click_reset_with_pos(&scale_slider, dbl_click, || {
+                uis.reset_scale_to_base();
+            });
+            ui.separator();
+            ui.style_mut().spacing.slider_width = 160.0;
+            ui.horizontal(|ui| {
+                label_normal(ui, "Max FPS");
+                ui.checkbox(&mut uis.max_fps_unlimited, "Unlimited");
+            });
+            let max_fps_slider = ui.add_enabled(
+                !uis.max_fps_unlimited,
+                Slider::new(&mut uis.max_fps, 1..=1000),
+            );
+            apply_slider_double_click_reset_with_pos(&max_fps_slider, dbl_click, || {
+                uis.reset_max_fps_to_default();
+            });
+            ui.separator();
+            label_normal(ui, "Skip drawing frames");
+            let skip_slider = ui.add(Slider::new(&mut uis.skip, 0..=1000));
+            apply_slider_double_click_reset_with_pos(&skip_slider, dbl_click, || {
+                uis.reset_skip_to_default();
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                let mut v = uis.show_grid;
+                if ui.add(Checkbox::new(&mut v, "Show Grid")).changed() {
+                    uis.show_grid = v;
+                }
+            });
+            ui.separator();
+            let (save, load) = button_row_pair(ui, "Save", "Load");
+            if save.clicked() {
+                uis.pending_snapshot_dialog = Some(PendingSnapshotDialog::Save);
+            }
+            if load.clicked() {
+                uis.pending_snapshot_dialog = Some(PendingSnapshotDialog::Load);
+            }
+        },
+    );
 
-    if uis.is_settings_panel_open {
-        let mut panel_open = uis.is_settings_panel_open;
-        let input_panel_width = uis.input_panel_width;
-        egui::Window::new("Settings")
-            .open(&mut panel_open)
-            .resizable(false)
-            .collapsible(true)
-            .default_width(input_panel_width)
-            .show(ctx, |ui| {
-                dragvalue_normal(ui, &mut uis.min_window_width, 1.0, "Min Window Width");
-                dragvalue_normal(ui, &mut uis.min_window_height, 1.0, "Min Window Height");
-                dragvalue_normal(ui, &mut uis.max_particle_count, 10.0, "Max Particle Count");
-                combobox_particle_display_mode(ui, &mut uis);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    let mut v = uis.start_maximized;
-                    if ui.add(Checkbox::new(&mut v, "Start Maximized")).changed() {
-                        uis.start_maximized = v;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let mut v = uis.link_point_size_to_scale;
-                    if ui
-                        .add(Checkbox::new(&mut v, "Link Point Size to Scale"))
-                        .changed()
-                    {
-                        uis.link_point_size_to_scale = v;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let mut v = uis.lock_camera_up;
-                    if ui
-                        .add(Checkbox::new(&mut v, "Lock Camera Up/Down"))
-                        .changed()
-                    {
-                        uis.lock_camera_up = v;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let mut v = uis.mailbox_present_mode;
-                    if ui
-                        .add(Checkbox::new(&mut v, "Mailbox Present Mode"))
-                        .changed()
-                    {
-                        uis.mailbox_present_mode = v;
-                    }
-                });
-                ui.separator();
-                if button_normal(ui, "Save Settings", false).clicked() {
-                    settings.window_min_width = uis.min_window_width;
-                    settings.window_min_height = uis.min_window_height;
-                    settings.max_particle_count = uis.max_particle_count;
-                    settings.start_maximized = uis.start_maximized;
-                    settings.link_point_size_to_scale = uis.link_point_size_to_scale;
-                    settings.lock_camera_up = uis.lock_camera_up;
-                    settings.mailbox_present_mode = uis.mailbox_present_mode;
-                    settings.particle_display_mode = uis.particle_display_mode;
-                    if let Err(e) = settings.save() {
-                        eprintln!("Failed to save settings: {}", e);
-                    }
+    uis.is_settings_panel_open = show_closable_window(
+        ctx,
+        "Settings",
+        uis.is_settings_panel_open,
+        true,
+        |window| {
+            window
+                .resizable(false)
+                .collapsible(true)
+                .default_width(input_panel_width)
+        },
+        |ui| {
+            dragvalue_normal(ui, &mut uis.min_window_width, 1.0, "Min Window Width");
+            dragvalue_normal(ui, &mut uis.min_window_height, 1.0, "Min Window Height");
+            dragvalue_normal(ui, &mut uis.max_particle_count, 10.0, "Max Particle Count");
+            combobox_particle_display_mode(ui, &mut uis);
+            ui.separator();
+            ui.horizontal(|ui| {
+                let mut v = uis.start_maximized;
+                if ui.add(Checkbox::new(&mut v, "Start Maximized")).changed() {
+                    uis.start_maximized = v;
                 }
             });
-        uis.is_settings_panel_open = panel_open;
-    }
+            ui.horizontal(|ui| {
+                let mut v = uis.link_point_size_to_scale;
+                if ui
+                    .add(Checkbox::new(&mut v, "Link Point Size to Scale"))
+                    .changed()
+                {
+                    uis.link_point_size_to_scale = v;
+                }
+            });
+            ui.horizontal(|ui| {
+                let mut v = uis.lock_camera_up;
+                if ui
+                    .add(Checkbox::new(&mut v, "Lock Camera Up/Down"))
+                    .changed()
+                {
+                    uis.lock_camera_up = v;
+                }
+            });
+            ui.horizontal(|ui| {
+                let mut v = uis.mailbox_present_mode;
+                if ui
+                    .add(Checkbox::new(&mut v, "Mailbox Present Mode"))
+                    .changed()
+                {
+                    uis.mailbox_present_mode = v;
+                }
+            });
+            ui.separator();
+            if button_normal(ui, "Save Settings", false).clicked() {
+                settings.window_min_width = uis.min_window_width;
+                settings.window_min_height = uis.min_window_height;
+                settings.max_particle_count = uis.max_particle_count;
+                settings.start_maximized = uis.start_maximized;
+                settings.link_point_size_to_scale = uis.link_point_size_to_scale;
+                settings.lock_camera_up = uis.lock_camera_up;
+                settings.mailbox_present_mode = uis.mailbox_present_mode;
+                settings.particle_display_mode = uis.particle_display_mode;
+                if let Err(e) = settings.save() {
+                    eprintln!("Failed to save settings: {}", e);
+                }
+            }
+        },
+    );
 
-    if uis.is_object_input_panel_open {
-        let mut panel_open = uis.is_object_input_panel_open;
-        let input_panel_width = uis.input_panel_width;
-        egui::Window::new("Object Input")
-            .open(&mut panel_open)
-            .resizable(false)
-            .collapsible(true)
-            .default_width(input_panel_width)
-            .show(ctx, |ui| {
-                lock_panel_content_width(ui);
-                combobox_simulation_type(ui, &mut uis);
-                ui.separator();
-                combobox_computing_unit(ui, &mut uis);
-                ui.separator();
-                base_scale_input(ui, &mut uis);
-                ui.separator();
-                combobox_placement_mode(ui, &mut uis);
-                placement_mode_conditions(ui, &mut uis);
-                if !uis.is_reset_requested {
-                    button_reset(ui, &mut uis);
-                } else {
-                    label_normal(ui, "Resetting...");
+    uis.is_object_input_panel_open = show_closable_window(
+        ctx,
+        "Object Input",
+        uis.is_object_input_panel_open,
+        true,
+        |window| {
+            window
+                .resizable(false)
+                .collapsible(true)
+                .default_width(input_panel_width)
+        },
+        |ui| {
+            lock_panel_content_width(ui);
+            combobox_simulation_type(ui, &mut uis);
+            ui.separator();
+            combobox_computing_unit(ui, &mut uis);
+            ui.separator();
+            base_scale_input(ui, &mut uis);
+            ui.separator();
+            combobox_placement_mode(ui, &mut uis);
+            placement_mode_conditions(ui, &mut uis);
+            if !uis.is_reset_requested {
+                button_reset(ui, &mut uis);
+            } else {
+                label_normal(ui, "Resetting...");
+            }
+            ui.separator();
+            combobox_object_input_type(ui, &mut uis);
+            object_input_type_conditions(ui, &mut uis);
+            let current_count = simulation_manager.read().unwrap().particle_count();
+            if uis.object_input_type.uses_add_particle_count() {
+                slider_add_particle_count(ui, &mut uis, current_count);
+            }
+            ui.separator();
+            slider_add_center(ui, &mut uis);
+            ui.horizontal(|ui| {
+                let mut v = uis.show_add_center_preview;
+                if ui
+                    .add(Checkbox::new(&mut v, "Show Add Center Pointer"))
+                    .changed()
+                {
+                    uis.show_add_center_preview = v;
                 }
-                ui.separator();
-                combobox_object_input_type(ui, &mut uis);
-                object_input_type_conditions(ui, &mut uis);
-                let current_count = simulation_manager.read().unwrap().particle_count();
-                if uis.object_input_type.uses_add_particle_count() {
-                    slider_add_particle_count(ui, &mut uis, current_count);
-                }
-                ui.separator();
-                slider_add_center(ui, &mut uis);
-                ui.horizontal(|ui| {
-                    let mut v = uis.show_add_center_preview;
-                    if ui
-                        .add(Checkbox::new(&mut v, "Show Add Center Pointer"))
-                        .changed()
-                    {
-                        uis.show_add_center_preview = v;
-                    }
-                });
-                button_add_particles(ui, &mut uis, current_count);
             });
-        uis.is_object_input_panel_open = panel_open;
-    }
+            button_add_particles(ui, &mut uis, current_count);
+        },
+    );
 
     if uis.is_resetting && uis.is_reset_requested {
         uis.is_resetting = false;
@@ -314,13 +322,18 @@ const RESET_LOG_ROW_HEIGHT: f32 = 14.0;
 
 fn solar_system_reset_log_window(ctx: &egui::Context, uis: &mut UiState) {
     let in_progress = uis.reset_log.in_progress;
-    let mut panel_open = uis.reset_log.is_open;
-    egui::Window::new("Solar System Reset")
-        .open(&mut panel_open)
-        .resizable(true)
-        .collapsible(true)
-        .default_size([480.0, 320.0])
-        .show(ctx, |ui| {
+    uis.reset_log.is_open = show_closable_window(
+        ctx,
+        "Solar System Reset",
+        uis.reset_log.is_open,
+        !in_progress,
+        |window| {
+            window
+                .resizable(true)
+                .collapsible(true)
+                .default_size([480.0, 320.0])
+        },
+        |ui| {
             ui.set_min_width(320.0);
             let line_count = uis.reset_log.lines.len();
             egui::ScrollArea::vertical()
@@ -351,12 +364,8 @@ fn solar_system_reset_log_window(ctx: &egui::Context, uis: &mut UiState) {
                     uis.append_reset_log("Abort requested...");
                 }
             }
-        });
-    if in_progress {
-        uis.reset_log.is_open = true;
-    } else {
-        uis.reset_log.is_open = panel_open;
-    }
+        },
+    );
 }
 
 /// Formats simulation time into a compact signed human-readable duration string.

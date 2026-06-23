@@ -29,17 +29,13 @@ pub fn draw_ui(
 
                 ui.menu_button("Panel", |ui| {
                     ui.set_min_width(MENU_POPUP_WIDTH);
-                    if ui
-                        .checkbox(&mut uis.is_graph3d_panel_open, PanelKind::Graph3D.label())
-                        .clicked()
-                    {
-                        ui.close_menu();
-                    }
-                    if ui
-                        .checkbox(&mut uis.is_settings_panel_open, PanelKind::Settings.label())
-                        .clicked()
-                    {
-                        ui.close_menu();
+                    for panel in PANELS {
+                        if ui
+                            .checkbox(uis.panel_open_mut(*panel), panel.label())
+                            .clicked()
+                        {
+                            ui.close_menu();
+                        }
                     }
                 });
 
@@ -55,72 +51,78 @@ pub fn draw_ui(
         .rect
         .height();
 
-    if uis.is_settings_panel_open {
-        let mut panel_open = uis.is_settings_panel_open;
-        let input_panel_width = uis.input_panel_width;
-        egui::Window::new("Settings")
-            .open(&mut panel_open)
-            .resizable(false)
-            .collapsible(true)
-            .default_width(input_panel_width)
-            .show(ctx, |ui| {
-                dragvalue_normal(ui, &mut uis.min_window_width, 1.0, "Min Window Width");
-                dragvalue_normal(ui, &mut uis.min_window_height, 1.0, "Min Window Height");
-                combobox_particle_display_mode(ui, &mut uis);
-                ui.separator();
-                ui.checkbox(&mut uis.start_maximized, "Start Maximized");
-                ui.checkbox(&mut uis.lock_camera_up, "Lock Camera Up/Down");
-                ui.checkbox(&mut uis.mailbox_present_mode, "Mailbox Present Mode");
-                ui.separator();
-                if button_normal(ui, "Save Settings", false).clicked() {
-                    settings.window_min_width = uis.min_window_width;
-                    settings.window_min_height = uis.min_window_height;
-                    settings.start_maximized = uis.start_maximized;
-                    settings.lock_camera_up = uis.lock_camera_up;
-                    settings.mailbox_present_mode = uis.mailbox_present_mode;
-                    settings.particle_display_mode = uis.particle_display_mode;
-                    if let Err(e) = settings.save() {
-                        eprintln!("Failed to save settings: {}", e);
-                    }
+    let input_panel_width = uis.input_panel_width;
+
+    uis.is_settings_panel_open = show_closable_window(
+        ctx,
+        "Settings",
+        uis.is_settings_panel_open,
+        true,
+        |window| {
+            window
+                .resizable(false)
+                .collapsible(true)
+                .default_width(input_panel_width)
+        },
+        |ui| {
+            dragvalue_normal(ui, &mut uis.min_window_width, 1.0, "Min Window Width");
+            dragvalue_normal(ui, &mut uis.min_window_height, 1.0, "Min Window Height");
+            combobox_particle_display_mode(ui, &mut uis);
+            ui.separator();
+            ui.checkbox(&mut uis.start_maximized, "Start Maximized");
+            ui.checkbox(&mut uis.lock_camera_up, "Lock Camera Up/Down");
+            ui.checkbox(&mut uis.mailbox_present_mode, "Mailbox Present Mode");
+            ui.separator();
+            if button_normal(ui, "Save Settings", false).clicked() {
+                settings.window_min_width = uis.min_window_width;
+                settings.window_min_height = uis.min_window_height;
+                settings.start_maximized = uis.start_maximized;
+                settings.lock_camera_up = uis.lock_camera_up;
+                settings.mailbox_present_mode = uis.mailbox_present_mode;
+                settings.particle_display_mode = uis.particle_display_mode;
+                if let Err(e) = settings.save() {
+                    eprintln!("Failed to save settings: {}", e);
                 }
-            });
-        uis.is_settings_panel_open = panel_open;
-    }
+            }
+        },
+    );
 
-    if uis.is_graph3d_panel_open {
-        let mut panel_open = uis.is_graph3d_panel_open;
-        let input_panel_width = uis.input_panel_width;
-        egui::Window::new("3D Graph")
-            .open(&mut panel_open)
-            .resizable(false)
-            .collapsible(true)
-            .default_pos(egui::pos2(
-                PANEL_DEFAULT_X,
-                menu_bar_height + PANEL_MENU_OFFSET_Y,
-            ))
-            .default_width(input_panel_width)
-            .show(ctx, |ui| {
-                combobox_graph_type(ui, &mut uis);
-                ui.separator();
+    uis.is_graph3d_panel_open = show_closable_window(
+        ctx,
+        "3D Graph",
+        uis.is_graph3d_panel_open,
+        true,
+        |window| {
+            window
+                .resizable(false)
+                .collapsible(true)
+                .default_pos(egui::pos2(
+                    PANEL_DEFAULT_X,
+                    menu_bar_height + PANEL_MENU_OFFSET_Y,
+                ))
+                .default_width(input_panel_width)
+        },
+        |ui| {
+            combobox_graph_type(ui, &mut uis);
+            ui.separator();
 
-                match uis.graph_type {
-                    GraphType::SphericalFibonacciLattice => {
-                        condition_spherical_fibonacci_lattice(ui, &mut uis);
-                    }
-                    GraphType::RapidityFieldMatrix => {
-                        condition_rapidity_field_matrix(ui, &mut uis);
-                    }
-                    GraphType::RapidityFieldBiquaternion => {
-                        condition_rapidity_field_biquaternion(ui, &mut uis);
-                    }
+            match uis.graph_type {
+                GraphType::SphericalFibonacciLattice => {
+                    condition_spherical_fibonacci_lattice(ui, &mut uis);
                 }
+                GraphType::RapidityFieldMatrix => {
+                    condition_rapidity_field_matrix(ui, &mut uis);
+                }
+                GraphType::RapidityFieldBiquaternion => {
+                    condition_rapidity_field_biquaternion(ui, &mut uis);
+                }
+            }
 
-                ui.separator();
-                label_normal(ui, "Sample Count");
-                ui.add(Slider::new(&mut uis.graph_sample_count, 1..=5000).drag_value_speed(1.0));
-            });
-        uis.is_graph3d_panel_open = panel_open;
-    }
+            ui.separator();
+            label_normal(ui, "Sample Count");
+            ui.add(Slider::new(&mut uis.graph_sample_count, 1..=5000).drag_value_speed(1.0));
+        },
+    );
 }
 
 fn combobox_particle_display_mode(ui: &mut egui::Ui, uis: &mut UiState) {

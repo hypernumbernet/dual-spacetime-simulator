@@ -27,6 +27,8 @@ impl PanelKind {
     }
 }
 
+pub const PANELS: &[PanelKind] = &[PanelKind::Graph3D, PanelKind::Settings];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DragOwner {
     None,
@@ -152,6 +154,14 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Returns the open-state flag for the given panel kind.
+    pub fn panel_open_mut(&mut self, panel: PanelKind) -> &mut bool {
+        match panel {
+            PanelKind::Graph3D => &mut self.is_graph3d_panel_open,
+            PanelKind::Settings => &mut self.is_settings_panel_open,
+        }
+    }
+
     /// Applies persisted app settings to runtime UI state.
     pub fn apply_settings(&mut self, settings: &AppSettings) {
         self.min_window_width = settings.window_min_width;
