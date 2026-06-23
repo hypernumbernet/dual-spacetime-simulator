@@ -47,33 +47,7 @@ struct Graph3dBuildResult {
 pub fn run() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::new()?;
     let mut app = App::default();
-    spawn_fps_worker(Arc::clone(&app.ui_state), Arc::clone(&app.need_redraw));
     event_loop.run_app(&mut app)
-}
-
-/// Spawns a background thread that updates the FPS counter every second.
-fn spawn_fps_worker(ui_state_clone: Arc<RwLock<UiState>>, need_redraw: Arc<RwLock<bool>>) {
-    std::thread::spawn(move || {
-        let mut last_fps = Instant::now();
-        let mut prev_frame: i64 = 1;
-        loop {
-            std::thread::sleep(Duration::from_millis(200));
-            let now = Instant::now();
-            let dt = now.duration_since(last_fps).as_secs_f64();
-            if dt >= 1.0 {
-                let mut ui_state = ui_state_clone.write().unwrap();
-                ui_state.fps = if ui_state.frame - prev_frame > 0 {
-                    ui_state.frame - prev_frame
-                } else {
-                    0
-                };
-                prev_frame = ui_state.frame;
-                drop(ui_state);
-                last_fps = now;
-                *need_redraw.write().unwrap() = true;
-            }
-        }
-    });
 }
 
 /// Builds the window title from crate name and version metadata.
@@ -90,7 +64,6 @@ pub struct App {
     vulkan_base: Option<VulkanBase>,
     window: Option<Arc<Window>>,
     ui_state: Arc<RwLock<UiState>>,
-    need_redraw: Arc<RwLock<bool>>,
     mouse_left_down: bool,
     mouse_right_down: bool,
     mouse_middle_down: bool,
@@ -138,7 +111,6 @@ impl Default for App {
             render_pipeline: None,
             gui: None,
             ui_state: Arc::new(RwLock::new(ui_state)),
-            need_redraw: Arc::new(RwLock::new(true)),
             mouse_left_down: false,
             mouse_right_down: false,
             mouse_middle_down: false,
@@ -332,8 +304,6 @@ impl ApplicationHandler for App {
 
                 gui.finish_frame();
                 vb.advance_frame();
-                self.ui_state.write().unwrap().frame += 1;
-                *self.need_redraw.write().unwrap() = false;
             }
             _ => (),
         }
@@ -458,7 +428,6 @@ impl ApplicationHandler for App {
                             pipeline.set_graph_lines(&result.line_vertices);
                         }
                         self.last_graph3d_fingerprint = result.fp;
-                        *self.need_redraw.write().unwrap() = true;
                     }
                 }
                 Err(TryRecvError::Empty) => {}

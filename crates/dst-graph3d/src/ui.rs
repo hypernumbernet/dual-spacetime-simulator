@@ -54,12 +54,6 @@ pub fn draw_ui(
                         ui.close_menu();
                     }
                 });
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!("Frame {}", uis.frame));
-                    ui.separator();
-                    ui.label(format!("FPS {}", uis.fps));
-                });
             });
         })
         .response
