@@ -34,18 +34,10 @@ pub fn draw_ui(
                 ui.menu_button("Panel", |ui| {
                     ui.set_min_width(MENU_POPUP_WIDTH);
                     for panel in PANELS {
-                        let (open, label) = match panel {
-                            PanelKind::Simulation => {
-                                (&mut uis.is_simulation_panel_open, panel.label())
-                            }
-                            PanelKind::ObjectInput => {
-                                (&mut uis.is_object_input_panel_open, panel.label())
-                            }
-                            PanelKind::Settings => {
-                                (&mut uis.is_settings_panel_open, panel.label())
-                            }
-                        };
-                        if ui.checkbox(open, label).clicked() {
+                        if ui
+                            .checkbox(uis.panel_open_mut(*panel), panel.label())
+                            .clicked()
+                        {
                             ui.close_menu();
                         }
                     }
@@ -99,6 +91,7 @@ pub fn draw_ui(
             .default_width(uis.input_panel_width)
             .show(ctx, |ui| {
                 lock_panel_content_width(ui);
+                let particle_count = simulation_manager.read().unwrap().particle_count();
                 ui.horizontal(|ui| {
                     label_normal(ui, "FPS");
                     label_indicator(ui, &uis.fps.to_string());
@@ -113,11 +106,9 @@ pub fn draw_ui(
                 });
                 ui.horizontal(|ui| {
                     label_normal(ui, "Particle Count");
-                    let count = simulation_manager.read().unwrap().particle_count();
-                    label_indicator(ui, &count.to_string());
+                    label_indicator(ui, &particle_count.to_string());
                 });
                 ui.separator();
-                let particle_count = simulation_manager.read().unwrap().particle_count();
                 let can_start = UiState::can_start_simulation(particle_count);
                 ui.add_enabled_ui(can_start || uis.is_running, |ui| {
                     if button_normal(

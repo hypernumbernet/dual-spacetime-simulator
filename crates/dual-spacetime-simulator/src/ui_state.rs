@@ -468,6 +468,15 @@ impl UiState {
         particle_count >= Self::MIN_PARTICLES_TO_START
     }
 
+    /// Returns the open-state flag for the given panel kind.
+    pub fn panel_open_mut(&mut self, panel: PanelKind) -> &mut bool {
+        match panel {
+            PanelKind::Simulation => &mut self.is_simulation_panel_open,
+            PanelKind::ObjectInput => &mut self.is_object_input_panel_open,
+            PanelKind::Settings => &mut self.is_settings_panel_open,
+        }
+    }
+
     /// Returns how many more particles can be added before hitting the configured maximum.
     pub fn remaining_particle_capacity(&self, current_count: u32) -> u32 {
         self.max_particle_count.saturating_sub(current_count)

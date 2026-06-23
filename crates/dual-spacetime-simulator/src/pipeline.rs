@@ -338,13 +338,15 @@ impl ParticleRenderPipeline {
 
         self.draw_particles(command_buffer, &pc, particle_display_mode);
 
-        if let Some(ref buf) = self.add_center_marker_buffer {
-            self.draw_axes_lines(
-                command_buffer,
-                &line_pc,
-                buf.buffer,
-                self.add_center_marker_vertex_count,
-            );
+        if self.add_center_marker_vertex_count > 0 {
+            if let Some(ref buf) = self.add_center_marker_buffer {
+                self.draw_axes_lines(
+                    command_buffer,
+                    &line_pc,
+                    buf.buffer,
+                    self.add_center_marker_vertex_count,
+                );
+            }
         }
 
         gui.draw(command_buffer, extent);
@@ -354,27 +356,24 @@ impl ParticleRenderPipeline {
         }
     }
 
-    /// Uploads add-center preview marker vertices and rebuilds the marker line buffer.
-    pub fn set_add_center_marker(&mut self, vertices: &[([f32; 3], [f32; 4])]) {
-        let verts = axes_vertices_from_tuples(vertices);
-        let allocator = Arc::clone(&self.allocator);
-        upload_axes_line_buffer(
-            &self.device,
-            &allocator,
-            &mut self.retired_buffers,
-            &mut self.add_center_marker_buffer,
-            &mut self.add_center_marker_vertex_count,
-            &verts,
-            "add_center_marker",
-        );
-    }
-
     /// Rebuilds add-center preview geometry from current UI state when needed.
     pub fn sync_add_center_marker(&mut self, ui_state: &crate::ui_state::UiState) {
         use crate::object_input::ObjectInput;
+
         let show_marker = ui_state.is_object_input_panel_open && ui_state.show_add_center_preview;
         if !show_marker {
-            self.add_center_marker_vertex_count = 0;
+            if self.add_center_marker_buffer.is_some() {
+                let allocator = Arc::clone(&self.allocator);
+                upload_axes_line_buffer(
+                    &self.device,
+                    &allocator,
+                    &mut self.retired_buffers,
+                    &mut self.add_center_marker_buffer,
+                    &mut self.add_center_marker_vertex_count,
+                    &[],
+                    "add_center_marker",
+                );
+            }
             self.last_add_center_marker_key = None;
             return;
         }
@@ -398,21 +397,6 @@ impl ParticleRenderPipeline {
             &verts,
             "add_center_marker",
         );
-    }
-
-    /// Clears add-center preview geometry and cached sync state.
-    pub fn reset_add_center_marker(&mut self) {
-        let allocator = Arc::clone(&self.allocator);
-        upload_axes_line_buffer(
-            &self.device,
-            &allocator,
-            &mut self.retired_buffers,
-            &mut self.add_center_marker_buffer,
-            &mut self.add_center_marker_vertex_count,
-            &[],
-            "add_center_marker",
-        );
-        self.last_add_center_marker_key = None;
     }
 
     // --- Camera methods ---
@@ -684,16 +668,6 @@ fn upload_axes_line_buffer(
     );
     *buffer = Some(buf);
     *vertex_count = count;
-}
-
-fn axes_vertices_from_tuples(vertices: &[([f32; 3], [f32; 4])]) -> Vec<AxesVertex> {
-    vertices
-        .iter()
-        .map(|(position, color)| AxesVertex {
-            position: *position,
-            color: *color,
-        })
-        .collect()
 }
 
 fn write_mapped_axes_vertices(buffer: &AllocatedBuffer, vertices: &[AxesVertex]) -> bool {
