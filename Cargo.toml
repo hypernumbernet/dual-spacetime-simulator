@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/dst-graph3d",
     "crates/dst-math",
     "crates/dst-expand",
     "crates/dual-spacetime-simulator",

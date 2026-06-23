@@ -611,6 +611,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "dst-graph3d"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "ash",
+ "ash-window",
+ "bytemuck",
+ "dst-math",
+ "egui",
+ "egui-ash-renderer",
+ "egui-winit",
+ "glam",
+ "gpu-allocator",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "vulkanvil",
+ "winit",
+]
+
+[[package]]
 name = "dst-math"
 version = "0.1.0"
 dependencies = [

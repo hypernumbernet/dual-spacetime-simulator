@@ -1,0 +1,250 @@
+//! 3D Graph mode: sample points from UI parameters for the particle buffer.
+
+use dst_math::spacetime::{Spacetime, lorentz_boost_matrix_from_velocity};
+use glam::{DVec3, DVec4};
+use std::hash::{Hash, Hasher};
+
+const MAX_SAMPLES: u32 = 5000;
+const GOLDEN: f64 = 1.618033988749895;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum GraphType {
+    SphericalFibonacciLattice,
+    RapidityFieldMatrix,
+    RapidityFieldBiquaternion,
+}
+
+impl std::fmt::Display for GraphType {
+    /// Formats graph type names for UI selection controls.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            GraphType::SphericalFibonacciLattice => "Spherical Fibonacci Lattice",
+            GraphType::RapidityFieldMatrix => "Rapidity Field by matrix",
+            GraphType::RapidityFieldBiquaternion => "Rapidity Field by biquaternion",
+        };
+        write!(f, "{}", text)
+    }
+}
+
+/// Generates an approximately uniform unit direction on a sphere using Fibonacci sampling.
+fn fibonacci_unit_direction(index: usize, n: usize) -> [f64; 3] {
+    if n == 0 {
+        return [0.0, 1.0, 0.0];
+    }
+    let t = (index as f64 + 0.5) / n as f64;
+    let z = 1.0 - 2.0 * t;
+    let r = (1.0 - z * z).max(0.0).sqrt();
+    let theta = std::f64::consts::TAU * index as f64 * GOLDEN;
+    let x = r * theta.cos();
+    let y = r * theta.sin();
+    [x, y, z]
+}
+
+/// Clamps the requested sample count to a valid GPU-friendly range.
+fn clamp_samples(n: u32) -> usize {
+    (n.clamp(1, MAX_SAMPLES)) as usize
+}
+
+/// Converts each graph type into a stable numeric tag for hashing.
+fn graph_type_tag(gt: GraphType) -> u8 {
+    match gt {
+        GraphType::SphericalFibonacciLattice => 0,
+        GraphType::RapidityFieldMatrix => 1,
+        GraphType::RapidityFieldBiquaternion => 2,
+    }
+}
+
+/// Computes a stable fingerprint for graph parameters to detect buffer update needs.
+pub fn graph_params_fingerprint(
+    graph_type: GraphType,
+    graph_sample_count: u32,
+    graph_t_slice: f64,
+    graph_velocity_scale: f64,
+) -> u64 {
+    let mut h = ahash::AHasher::default();
+    graph_type_tag(graph_type).hash(&mut h);
+    graph_sample_count.hash(&mut h);
+    graph_t_slice.to_bits().hash(&mut h);
+    graph_velocity_scale.to_bits().hash(&mut h);
+    h.finish()
+}
+
+/// Builds point positions and colors for the selected 3D graph visualization mode.
+pub fn build_points(
+    graph_type: GraphType,
+    graph_sample_count: u32,
+    graph_t_slice: f64,
+    _graph_velocity_scale: f64,
+) -> (Vec<[f32; 3]>, Vec<[f32; 4]>) {
+    let n = clamp_samples(graph_sample_count);
+    let mut positions = Vec::with_capacity(n);
+    let mut colors = Vec::with_capacity(n);
+
+    match graph_type {
+        GraphType::SphericalFibonacciLattice => {
+            let t = graph_t_slice;
+            let r = t.abs();
+            for i in 0..n {
+                let d = fibonacci_unit_direction(i, n);
+                let px = (d[0] * r) as f32;
+                let py = (d[1] * r) as f32;
+                let pz = (d[2] * r) as f32;
+                positions.push([px, py, pz]);
+                let cr = (0.5 + 0.5 * d[0]) as f32;
+                let cg = (0.5 + 0.5 * d[1]) as f32;
+                let cb = (0.5 + 0.5 * d[2]) as f32;
+                colors.push([cr, cg, cb, 1.0]);
+            }
+        }
+        GraphType::RapidityFieldMatrix => {}
+        GraphType::RapidityFieldBiquaternion => {}
+    }
+
+    (positions, colors)
+}
+
+/// Builds line-list vertices and colors for graph types that render line segments.
+pub fn build_graph_line_vertices(
+    graph_type: GraphType,
+    graph_sample_count: u32,
+    graph_t_slice: f64,
+    graph_velocity_scale: f64,
+) -> Vec<([f32; 3], [f32; 4])> {
+    match graph_type {
+        GraphType::SphericalFibonacciLattice => {
+            build_light_cone_line_vertices(graph_sample_count, graph_t_slice)
+        }
+        GraphType::RapidityFieldMatrix => build_rapidity_field_line_vertices_with(
+            graph_sample_count,
+            graph_velocity_scale,
+            rapidity_point_matrix,
+        ),
+        GraphType::RapidityFieldBiquaternion => build_rapidity_field_line_vertices_with(
+            graph_sample_count,
+            graph_velocity_scale,
+            rapidity_point_biquaternion,
+        ),
+    }
+}
+
+/// Creates radial light-cone line segments from the origin to sampled sphere directions.
+fn build_light_cone_line_vertices(
+    graph_sample_count: u32,
+    graph_t_slice: f64,
+) -> Vec<([f32; 3], [f32; 4])> {
+    let n = clamp_samples(graph_sample_count);
+    let r = graph_t_slice.abs();
+    let origin = [0.0_f32, 0.0, 0.0];
+    let mut out = Vec::with_capacity(n * 2);
+    for i in 0..n {
+        let d = fibonacci_unit_direction(i, n);
+        let end = [(d[0] * r) as f32, (d[1] * r) as f32, (d[2] * r) as f32];
+        let cr = (0.5 + 0.5 * d[0]) as f32;
+        let cg = (0.5 + 0.5 * d[1]) as f32;
+        let cb = (0.5 + 0.5 * d[2]) as f32;
+        let c = [cr, cg, cb, 1.0];
+        out.push((origin, c));
+        out.push((end, c));
+    }
+    out
+}
+
+/// Builds Lorentz-transformed line mesh on xz grid and y-direction pillars.
+fn build_rapidity_field_line_vertices_with(
+    graph_sample_count: u32,
+    graph_velocity_scale: f64,
+    compute_point: fn(DVec3, f64, DVec4) -> Option<DVec4>,
+) -> Vec<([f32; 3], [f32; 4])> {
+    const RATE_XZ: f64 = 0.07;
+    const RATE_Y: f64 = 0.05;
+    const INVERSE_LIGHT_SPEED: f64 = 1.0;
+    const MIN_GRID_SIZE: i32 = 6;
+    const MAX_GRID_SIZE: i32 = 20;
+    const GRID_BUCKET_COUNT: i32 = ((MAX_GRID_SIZE - MIN_GRID_SIZE) / 2) + 1; // 6,8,10,...,20
+    const RAPIDITY_PILLAR_COLOR: [f32; 4] = [0.05, 0.95, 0.9, 1.0];
+    const RAPIDITY_GRID_U_COLOR: [f32; 4] = [0.95, 0.2, 0.8, 1.0];
+    const RAPIDITY_GRID_V_COLOR: [f32; 4] = [1.0, 0.7, 0.15, 1.0];
+    let scale = graph_velocity_scale.abs().max(1e-9);
+    let clamped = clamp_samples(graph_sample_count) as i32;
+    let bucket = ((clamped - 1) * (GRID_BUCKET_COUNT - 1)) / (MAX_SAMPLES as i32 - 1);
+    let grid_size = MIN_GRID_SIZE + bucket * 2;
+    let spacetime_org = DVec4::new(1.0, 0.0, 0.0, 0.0);
+    let mut out = Vec::with_capacity(4_500);
+
+    for k in (-grid_size..=grid_size).step_by(2) {
+        for j in (-grid_size..=grid_size).step_by(2) {
+            let mut prev: Option<DVec4> = None;
+            for i in (-grid_size..=grid_size).step_by(2) {
+                let speed = DVec3::new(
+                    scale * RATE_XZ * k as f64,
+                    scale * RATE_Y * i as f64,
+                    scale * RATE_XZ * j as f64,
+                );
+                if let Some(current) = compute_point(speed, INVERSE_LIGHT_SPEED, spacetime_org) {
+                    if let Some(previous) = prev {
+                        push_line(&mut out, previous, current, RAPIDITY_PILLAR_COLOR);
+                    }
+                    prev = Some(current);
+                } else {
+                    prev = None;
+                }
+            }
+        }
+    }
+
+    for k in (-grid_size..=grid_size).step_by(2) {
+        let mut prev: Option<DVec4> = None;
+        for j in (-grid_size..=grid_size).step_by(2) {
+            let speed = DVec3::new(scale * RATE_XZ * j as f64, 0.0, scale * RATE_XZ * k as f64);
+            if let Some(current) = compute_point(speed, INVERSE_LIGHT_SPEED, spacetime_org) {
+                if let Some(previous) = prev {
+                    push_line(&mut out, previous, current, RAPIDITY_GRID_U_COLOR);
+                }
+                prev = Some(current);
+            } else {
+                prev = None;
+            }
+        }
+    }
+
+    for k in (-grid_size..=grid_size).step_by(2) {
+        let mut prev: Option<DVec4> = None;
+        for j in (-grid_size..=grid_size).step_by(2) {
+            let speed = DVec3::new(scale * RATE_XZ * k as f64, 0.0, scale * RATE_XZ * j as f64);
+            if let Some(current) = compute_point(speed, INVERSE_LIGHT_SPEED, spacetime_org) {
+                if let Some(previous) = prev {
+                    push_line(&mut out, previous, current, RAPIDITY_GRID_V_COLOR);
+                }
+                prev = Some(current);
+            } else {
+                prev = None;
+            }
+        }
+    }
+
+    out
+}
+
+/// Computes Lorentz boost using matrix multiplication.
+fn rapidity_point_matrix(velocity: DVec3, inverse_light_speed: f64, base: DVec4) -> Option<DVec4> {
+    lorentz_boost_matrix_from_velocity(velocity, inverse_light_speed)
+        .ok()
+        .map(|matrix| matrix * base)
+}
+
+/// Computes Lorentz boost using biquaternion multiplication.
+fn rapidity_point_biquaternion(
+    velocity: DVec3,
+    inverse_light_speed: f64,
+    base: DVec4,
+) -> Option<DVec4> {
+    let mut st = Spacetime::new(base.x, base.y, base.z, base.w);
+    st.apply_lorentz_transform_by_velocity(-velocity, inverse_light_speed);
+    Some(DVec4::new(st.t, st.x, st.y, st.z))
+}
+
+/// Pushes a line segment between two spacetime points to the output vector.
+fn push_line(out: &mut Vec<([f32; 3], [f32; 4])>, a: DVec4, b: DVec4, color: [f32; 4]) {
+    out.push(([a.y as f32, a.z as f32, a.w as f32], color));
+    out.push(([b.y as f32, b.z as f32, b.w as f32], color));
+}

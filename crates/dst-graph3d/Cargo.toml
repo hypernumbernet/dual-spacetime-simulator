@@ -1,0 +1,29 @@
+[package]
+name = "dst-graph3d"
+version = "0.1.0"
+edition.workspace = true
+
+[lib]
+name = "dst_graph3d"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dst-graph3d"
+path = "src/main.rs"
+
+[dependencies]
+ahash = "0.8.12"
+ash.workspace = true
+ash-window.workspace = true
+bytemuck.workspace = true
+dst-math.workspace = true
+egui = "0.31.1"
+egui-ash-renderer = { version = "0.8", default-features = false }
+egui-winit = { version = "0.31.1", default-features = false }
+glam = { workspace = true, features = ["serde"] }
+gpu-allocator.workspace = true
+raw-window-handle.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+vulkanvil.workspace = true
+winit.workspace = true
