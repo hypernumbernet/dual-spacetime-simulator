@@ -3,7 +3,7 @@ use crate::object_input::{
     SOLAR_SYSTEM_SCALE, clamp_world_scale,
 };
 use crate::settings::AppSettings;
-use crate::simulation::{AU, LY, MPC, PC, Particle};
+use crate::simulation::{AU, LY, MPC, PC};
 use glam::DVec3;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -349,14 +349,12 @@ impl std::fmt::Display for ParticleDisplayMode {
     }
 }
 
-/// Snapshot of a particle captured at the moment of selection.
+/// Index of the particle currently tracked by the info panel.
 ///
-/// The particle state is copied so the info panel can keep displaying it even
-/// while the simulation continues advancing.
+/// Live position and velocity are resolved each frame from simulation state.
 #[derive(Clone, Copy, Debug)]
 pub struct SelectedParticleInfo {
     pub index: usize,
-    pub particle: Particle,
 }
 
 pub struct UiState {
@@ -651,9 +649,9 @@ impl UiState {
         self.clamp_satellite_count();
     }
 
-    /// Stores a newly picked particle and opens the info panel.
-    pub fn select_particle(&mut self, index: usize, particle: Particle) {
-        self.selected_particle = Some(SelectedParticleInfo { index, particle });
+    /// Stores a newly picked particle index and opens the info panel.
+    pub fn select_particle(&mut self, index: usize) {
+        self.selected_particle = Some(SelectedParticleInfo { index });
         self.is_particle_info_panel_open = true;
     }
 

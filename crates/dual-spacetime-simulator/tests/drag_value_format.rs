@@ -61,3 +61,35 @@ fn mid_range_output_length_stays_bounded() {
         );
     }
 }
+
+mod particle_info_format {
+    use dual_spacetime_simulator::ui_styles::format_particle_info_value;
+
+    #[test]
+    fn zero_is_zero_padded_to_ten_decimals() {
+        assert_eq!(format_particle_info_value(0.0), "0.0000000000");
+    }
+
+    #[test]
+    fn short_decimals_are_zero_padded() {
+        assert_eq!(format_particle_info_value(1.5), "1.5000000000");
+        assert_eq!(format_particle_info_value(-0.25), "-0.2500000000");
+    }
+
+    #[test]
+    fn extra_decimals_are_truncated_not_rounded() {
+        assert_eq!(
+            format_particle_info_value(1.99999999999),
+            "1.9999999999"
+        );
+        assert_eq!(
+            format_particle_info_value(-3.141592653589),
+            "-3.1415926535"
+        );
+    }
+
+    #[test]
+    fn integers_keep_ten_decimal_places() {
+        assert_eq!(format_particle_info_value(2000.0), "2000.0000000000");
+    }
+}

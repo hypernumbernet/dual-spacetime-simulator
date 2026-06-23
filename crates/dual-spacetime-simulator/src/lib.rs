@@ -220,6 +220,7 @@ pub(crate) fn spawn_simulation_worker(
                         if reset_applied {
                             ui_state.frame = 1;
                             ui_state.simulation_time = 0.0;
+                            ui_state.clear_selected_particle();
                         }
                         ui_state.is_reset_requested = false;
                         if placement_mode == PlacementMode::SolarSystem {
@@ -527,6 +528,7 @@ impl ApplicationHandler for App {
                     draw_ui(
                         &self.ui_state,
                         &self.simulation_manager,
+                        Some(&*pipeline),
                         &mut self.settings,
                         &ctx,
                     );
@@ -929,9 +931,8 @@ impl App {
         if let Some(idx) =
             pipeline.pick_nearest_particle(&particles, click_x, click_y, extent, scale_gauge)
         {
-            let particle = particles[idx];
             let mut uis = self.ui_state.write().unwrap();
-            uis.select_particle(idx, particle);
+            uis.select_particle(idx);
             drop(uis);
             self.need_redraw.write().unwrap().clone_from(&true);
         }

@@ -236,6 +236,14 @@ impl GpuParticleSimulation {
         read_mapped_particles(&self.particle_buffer, self.particle_count as usize)
     }
 
+    /// Reads one particle from the host-mapped SSBO without copying the full buffer.
+    pub fn read_particle_at(&self, index: usize) -> Option<Particle> {
+        if index >= self.particle_count as usize {
+            return None;
+        }
+        read_mapped_particle_at(&self.particle_buffer, index)
+    }
+
     fn ensure_buffer_capacity(&mut self, count: usize) {
         if count <= self.buffer_capacity {
             return;
@@ -332,6 +340,13 @@ fn mapped_particle_slice_mut(buffer: &AllocatedBuffer, count: usize) -> Option<&
     let alloc = buffer.allocation.as_ref()?;
     let mapped = alloc.mapped_ptr()?;
     Some(unsafe { std::slice::from_raw_parts_mut(mapped.as_ptr() as *mut GpuParticle, count) })
+}
+
+fn read_mapped_particle_at(buffer: &AllocatedBuffer, index: usize) -> Option<Particle> {
+    let alloc = buffer.allocation.as_ref()?;
+    let mapped = alloc.mapped_ptr()?;
+    let gpu_particle = unsafe { *(mapped.as_ptr() as *const GpuParticle).add(index) };
+    Some(gpu_particle.to_cpu())
 }
 
 fn read_mapped_particles(buffer: &AllocatedBuffer, count: usize) -> Vec<Particle> {

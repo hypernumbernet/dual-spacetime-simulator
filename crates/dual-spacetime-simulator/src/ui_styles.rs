@@ -104,6 +104,27 @@ pub fn format_drag_value(value: f64) -> String {
     trim_trailing_zeros(&format!("{:.*}", decimals, value))
 }
 
+const PARTICLE_INFO_DECIMAL_SCALE: f64 = 10_000_000_000.0;
+const PARTICLE_INFO_FRAC_MODULO: u64 = 10_000_000_000;
+
+/// Formats particle-info readouts with exactly 10 decimal places, zero-padded.
+/// Digits beyond the 10th decimal place are truncated toward zero.
+pub fn format_particle_info_value(value: f64) -> String {
+    if !value.is_finite() {
+        return format!("{value}");
+    }
+    let sign = if value.is_sign_negative() && value != 0.0 {
+        "-"
+    } else {
+        ""
+    };
+    let abs_scaled = (value.abs() * PARTICLE_INFO_DECIMAL_SCALE).trunc();
+    let int_part = (abs_scaled / PARTICLE_INFO_DECIMAL_SCALE).floor();
+    let frac_part =
+        ((abs_scaled - int_part * PARTICLE_INFO_DECIMAL_SCALE) as u64) % PARTICLE_INFO_FRAC_MODULO;
+    format!("{}{}.{:010}", sign, format!("{:.0}", int_part), frac_part)
+}
+
 fn format_positive_drag_value(value: f64) -> String {
     format_drag_value(value)
 }

@@ -190,6 +190,11 @@ impl ParticleRenderPipeline {
         self.gpu_sim.readback_to_cpu()
     }
 
+    /// Reads one GPU-simulated particle by index for live UI display.
+    pub fn read_particle_at(&self, index: usize) -> Option<Particle> {
+        self.gpu_sim.read_particle_at(index)
+    }
+
     /// Appends particles while keeping the simulated positions of existing ones.
     ///
     /// In GPU mode the CPU `SimulationManager` holds existing particles at their

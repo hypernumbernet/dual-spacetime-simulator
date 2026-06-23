@@ -1,7 +1,8 @@
 use crate::object_input::{ObjectInputType, ParticleBasicColor, clamp_world_scale};
 use crate::particle_snapshot::{ParticleSnapshot, SNAPSHOT_FILTER_EXT, SNAPSHOT_FILTER_NAME};
+use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
-use crate::simulation::{AU, LY, MPC, PC, SimulationManager};
+use crate::simulation::{AU, LY, MPC, PC, Particle, SimulationManager};
 use crate::ui_state::*;
 use crate::ui_styles::*;
 use egui::{Checkbox, ComboBox, Slider};
@@ -16,6 +17,7 @@ const PANEL_MENU_OFFSET_Y: f32 = 16.0;
 pub fn draw_ui(
     ui_state: &Arc<RwLock<UiState>>,
     simulation_manager: &Arc<RwLock<SimulationManager>>,
+    render_pipeline: Option<&ParticleRenderPipeline>,
     settings: &mut AppSettings,
     ctx: &egui::Context,
 ) {
@@ -316,7 +318,11 @@ pub fn draw_ui(
         solar_system_reset_log_window(ctx, &mut uis);
     }
 
-    particle_info_window(ctx, &mut uis);
+    let selection = {
+        let manager = simulation_manager.read().unwrap();
+        resolve_selected_particle(&mut uis, &manager, render_pipeline)
+    };
+    particle_info_window(ctx, &mut uis, selection);
 }
 
 const RESET_LOG_MONO_SIZE: f32 = 12.0;
@@ -370,13 +376,44 @@ fn solar_system_reset_log_window(ctx: &egui::Context, uis: &mut UiState) {
     );
 }
 
+/// Resolves the currently selected particle from live simulation state.
+fn resolve_selected_particle(
+    uis: &mut UiState,
+    simulation_manager: &SimulationManager,
+    render_pipeline: Option<&ParticleRenderPipeline>,
+) -> Option<(usize, Particle)> {
+    let index = uis.selected_particle?.index;
+    if !uis.is_particle_info_panel_open {
+        return None;
+    }
+
+    let particle = if uis.uses_gpu_simulation() {
+        match render_pipeline.and_then(|pipeline| pipeline.read_particle_at(index)) {
+            Some(particle) => particle,
+            None => {
+                uis.clear_selected_particle();
+                return None;
+            }
+        }
+    } else {
+        match simulation_manager.particles().get(index).copied() {
+            Some(particle) => particle,
+            None => {
+                uis.clear_selected_particle();
+                return None;
+            }
+        }
+    };
+
+    Some((index, particle))
+}
+
 /// Renders the picked particle's info as a closable, draggable window.
 ///
-/// Reads the current `selected_particle` snapshot and lays it out using the
-/// existing panel styling helpers. Closing the window clears the selection so
-/// later picks always start from a clean state.
-fn particle_info_window(ctx: &egui::Context, uis: &mut UiState) {
-    let Some(info) = uis.selected_particle else {
+/// Displays live position and velocity resolved each frame from simulation state.
+/// Closing the window clears the selection so later picks always start from a clean state.
+fn particle_info_window(ctx: &egui::Context, uis: &mut UiState, selection: Option<(usize, Particle)>) {
+    let Some((index, particle)) = selection else {
         return;
     };
     if !uis.is_particle_info_panel_open {
@@ -393,11 +430,11 @@ fn particle_info_window(ctx: &egui::Context, uis: &mut UiState) {
         _ => "Speed |v|",
     };
 
-    let position = info.particle.position;
-    let velocity = info.particle.velocity;
+    let position = particle.position;
+    let velocity = particle.velocity;
     let speed = velocity.length();
     let distance = position.length();
-    let color_rgba = info.particle.color;
+    let color_rgba = particle.color;
 
     uis.is_particle_info_panel_open = show_closable_window(
         ctx,
@@ -414,47 +451,47 @@ fn particle_info_window(ctx: &egui::Context, uis: &mut UiState) {
             lock_panel_content_width(ui);
             ui.horizontal(|ui| {
                 label_normal(ui, "Index");
-                label_indicator(ui, &info.index.to_string());
+                label_indicator(ui, &index.to_string());
             });
             ui.horizontal(|ui| {
                 label_normal(ui, "Mass (kg)");
-                label_indicator(ui, &format_drag_value(info.particle.mass));
+                label_indicator(ui, &format_particle_info_value(particle.mass));
             });
             ui.separator();
             label_normal(ui, "Position (m)");
             ui.horizontal(|ui| {
                 label_normal(ui, "X");
-                label_indicator(ui, &format_drag_value(position.x));
+                label_indicator(ui, &format_particle_info_value(position.x));
             });
             ui.horizontal(|ui| {
                 label_normal(ui, "Y");
-                label_indicator(ui, &format_drag_value(position.y));
+                label_indicator(ui, &format_particle_info_value(position.y));
             });
             ui.horizontal(|ui| {
                 label_normal(ui, "Z");
-                label_indicator(ui, &format_drag_value(position.z));
+                label_indicator(ui, &format_particle_info_value(position.z));
             });
             ui.horizontal(|ui| {
                 label_normal(ui, "Distance |r|");
-                label_indicator(ui, &format_drag_value(distance));
+                label_indicator(ui, &format_particle_info_value(distance));
             });
             ui.separator();
             label_normal(ui, velocity_section_label);
             ui.horizontal(|ui| {
                 label_normal(ui, "X");
-                label_indicator(ui, &format_drag_value(velocity.x));
+                label_indicator(ui, &format_particle_info_value(velocity.x));
             });
             ui.horizontal(|ui| {
                 label_normal(ui, "Y");
-                label_indicator(ui, &format_drag_value(velocity.y));
+                label_indicator(ui, &format_particle_info_value(velocity.y));
             });
             ui.horizontal(|ui| {
                 label_normal(ui, "Z");
-                label_indicator(ui, &format_drag_value(velocity.z));
+                label_indicator(ui, &format_particle_info_value(velocity.z));
             });
             ui.horizontal(|ui| {
                 label_normal(ui, magnitude_label);
-                label_indicator(ui, &format_drag_value(speed));
+                label_indicator(ui, &format_particle_info_value(speed));
             });
             ui.separator();
             draw_particle_color_swatch(ui, color_rgba);
@@ -940,6 +977,7 @@ fn load_particles(
     uis.frame = 1;
     uis.simulation_time = 0.0;
     uis.is_running = false;
+    uis.clear_selected_particle();
     simulation_manager
         .write()
         .unwrap()
