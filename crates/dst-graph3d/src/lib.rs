@@ -11,7 +11,7 @@ pub mod ui;
 pub mod ui_state;
 pub mod ui_styles;
 
-use crate::graph3d::GraphType;
+use crate::graph3d::{GraphGeometry, GraphType};
 use crate::integration::Gui;
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
@@ -38,11 +38,22 @@ const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
 
 type GraphParams = (GraphType, u32, f64, f64);
 
+struct GraphParamsCache {
+    params: GraphParams,
+    fingerprint: u64,
+}
+
 struct Graph3dBuildResult {
+    generation: u64,
     fp: u64,
-    positions: Vec<[f32; 3]>,
-    colors: Vec<[f32; 4]>,
-    line_vertices: Vec<([f32; 3], [f32; 4])>,
+    geometry: GraphGeometry,
+}
+
+struct FrameRenderSettings {
+    lock_camera_up: bool,
+    mailbox_present_mode: bool,
+    show_grid: bool,
+    particle_display_mode: crate::ui_state::ParticleDisplayMode,
 }
 
 /// Run the desktop application (window + Vulkan + UI loop).
@@ -73,8 +84,9 @@ pub struct App {
     last_right_click_pos: Option<(f64, f64)>,
     settings: AppSettings,
     last_graph3d_fingerprint: u64,
-    cached_graph_params: GraphParams,
-    cached_graph_fingerprint: u64,
+    graph_params_cache: GraphParamsCache,
+    graph_build_generation: u64,
+    graph3d_build_target_fp: Option<u64>,
     graph3d_pending_rx: Option<Receiver<Graph3dBuildResult>>,
     drag_owner: DragOwner,
 }
@@ -119,13 +131,17 @@ impl Default for App {
             last_right_click_pos: None,
             settings,
             last_graph3d_fingerprint: u64::MAX,
-            cached_graph_params: (
-                GraphType::SphericalFibonacciLattice,
-                0,
-                f64::NAN,
-                f64::NAN,
-            ),
-            cached_graph_fingerprint: 0,
+            graph_params_cache: GraphParamsCache {
+                params: (
+                    GraphType::SphericalFibonacciLattice,
+                    0,
+                    f64::NAN,
+                    f64::NAN,
+                ),
+                fingerprint: 0,
+            },
+            graph_build_generation: 0,
+            graph3d_build_target_fp: None,
             graph3d_pending_rx: None,
             drag_owner: DragOwner::None,
         }
@@ -208,15 +224,14 @@ impl ApplicationHandler for App {
 
         let render_settings = {
             let ui_state = self.ui_state.read().unwrap();
-            (
-                ui_state.lock_camera_up,
-                ui_state.mailbox_present_mode,
-                ui_state.link_point_size_to_scale,
-                ui_state.show_grid,
-                ui_state.particle_display_mode,
-            )
+            FrameRenderSettings {
+                lock_camera_up: ui_state.lock_camera_up,
+                mailbox_present_mode: ui_state.mailbox_present_mode,
+                show_grid: ui_state.show_grid,
+                particle_display_mode: ui_state.particle_display_mode,
+            }
         };
-        pipeline.set_lock_camera_up(render_settings.0);
+        pipeline.set_lock_camera_up(render_settings.lock_camera_up);
 
         match &event {
             WindowEvent::Resized(size) => {
@@ -234,12 +249,11 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 gui.immediate_ui(window, |gui| {
-                    let ctx = gui.context();
-                    draw_ui(&self.ui_state, &mut self.settings, &ctx);
+                    draw_ui(&self.ui_state, &mut self.settings, &gui.egui_ctx);
                 });
 
-                if vb.mailbox_present_mode != render_settings.1 {
-                    vb.mailbox_present_mode = render_settings.1;
+                if vb.mailbox_present_mode != render_settings.mailbox_present_mode {
+                    vb.mailbox_present_mode = render_settings.mailbox_present_mode;
                     vb.recreate_swapchain(window);
                     pipeline.recreate_framebuffers(vb);
                 }
@@ -274,9 +288,8 @@ impl ApplicationHandler for App {
                     image_index as usize,
                     vb.swapchain_extent,
                     gui,
-                    render_settings.2,
-                    render_settings.3,
-                    render_settings.4,
+                    render_settings.show_grid,
+                    render_settings.particle_display_mode,
                 );
 
                 unsafe {
@@ -383,7 +396,9 @@ impl ApplicationHandler for App {
     /// Performs per-frame updates before the event loop waits for new events.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(pipeline) = self.render_pipeline.as_mut() {
-            pipeline.update_animation();
+            if pipeline.is_animating() {
+                pipeline.update_animation();
+            }
         }
 
         let uis = self.ui_state.read().unwrap();
@@ -395,48 +410,44 @@ impl ApplicationHandler for App {
         );
         drop(uis);
 
-        let fp = if params != self.cached_graph_params {
-            self.cached_graph_params = params;
-            self.cached_graph_fingerprint = crate::graph3d::graph_params_fingerprint(
-                params.0,
-                params.1,
-                params.2,
-                params.3,
-            );
-            self.cached_graph_fingerprint
-        } else {
-            self.cached_graph_fingerprint
-        };
+        let fp = self.graph_params_fingerprint(params);
 
         if let Some(rx) = self.graph3d_pending_rx.as_ref() {
             match rx.try_recv() {
                 Ok(result) => {
                     self.graph3d_pending_rx = None;
-                    if result.fp == fp {
+                    if result.generation == self.graph_build_generation && result.fp == fp {
                         if let Some(pipeline) = self.render_pipeline.as_mut() {
-                            pipeline.set_particles(&result.positions, &result.colors);
-                            pipeline.set_graph_lines(&result.line_vertices);
+                            pipeline.set_particles(
+                                &result.geometry.positions,
+                                &result.geometry.colors,
+                            );
+                            pipeline.set_graph_lines(&result.geometry.line_vertices);
                         }
                         self.last_graph3d_fingerprint = result.fp;
+                        self.graph3d_build_target_fp = None;
                     }
                 }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
                     self.graph3d_pending_rx = None;
+                    self.graph3d_build_target_fp = None;
                 }
             }
         }
 
-        if fp != self.last_graph3d_fingerprint && self.graph3d_pending_rx.is_none() {
-            let (tx, rx) = mpsc::channel::<Graph3dBuildResult>();
+        if fp != self.last_graph3d_fingerprint && self.graph3d_build_target_fp != Some(fp) {
+            self.graph_build_generation = self.graph_build_generation.wrapping_add(1);
+            let generation = self.graph_build_generation;
+            self.graph3d_build_target_fp = Some(fp);
             let (gt, n, t, vs) = params;
+            let (tx, rx) = mpsc::channel::<Graph3dBuildResult>();
             std::thread::spawn(move || {
                 let geometry = crate::graph3d::build_graph_geometry(gt, n, t, vs);
                 let _ = tx.send(Graph3dBuildResult {
+                    generation,
                     fp,
-                    positions: geometry.positions,
-                    colors: geometry.colors,
-                    line_vertices: geometry.line_vertices,
+                    geometry,
                 });
             });
             self.graph3d_pending_rx = Some(rx);
@@ -449,6 +460,18 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    fn graph_params_fingerprint(&mut self, params: GraphParams) -> u64 {
+        if params != self.graph_params_cache.params {
+            self.graph_params_cache.params = params;
+            self.graph_params_cache.fingerprint = crate::graph3d::graph_params_fingerprint(
+                params.0,
+                params.1,
+                params.2,
+                params.3,
+            );
+        }
+        self.graph_params_cache.fingerprint
+    }
     /// Returns `true` when a double-click was recognized (click history is cleared).
     fn try_consume_double_click(
         click_pos: (f64, f64),

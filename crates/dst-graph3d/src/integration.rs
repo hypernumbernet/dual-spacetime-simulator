@@ -100,16 +100,6 @@ impl Gui {
         layout_function(self);
     }
 
-    /// Returns a clone of the egui context for external UI construction.
-    pub fn context(&self) -> egui::Context {
-        self.egui_ctx.clone()
-    }
-
-    /// Reports whether egui requested another repaint after the last pass.
-    pub fn wants_repaint(&self) -> bool {
-        self.egui_ctx.has_requested_repaint()
-    }
-
     /// Finalizes the current UI pass and prepares tessellated meshes and textures.
     pub fn prepare_frame(&mut self, window: &Window) {
         self.end_frame(window);

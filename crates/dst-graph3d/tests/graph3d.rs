@@ -1,6 +1,20 @@
 use dst_graph3d::graph3d::{
-    GraphType, build_graph_line_vertices, build_points, graph_params_fingerprint,
+    GraphType, build_graph_geometry, build_graph_line_vertices, build_points,
+    graph_params_fingerprint,
 };
+
+#[test]
+fn build_graph_geometry_matches_separate_builders_for_sphere() {
+    let n = 64;
+    let t = 2.0;
+    let vs = 1.0;
+    let geometry = build_graph_geometry(GraphType::SphericalFibonacciLattice, n, t, vs);
+    let (positions, colors) = build_points(GraphType::SphericalFibonacciLattice, n, t, vs);
+    let lines = build_graph_line_vertices(GraphType::SphericalFibonacciLattice, n, t, vs);
+    assert_eq!(geometry.positions, positions);
+    assert_eq!(geometry.colors, colors);
+    assert_eq!(geometry.line_vertices, lines);
+}
 
 #[test]
 fn build_points_respects_sample_clamp() {

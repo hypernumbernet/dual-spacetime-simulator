@@ -81,6 +81,14 @@ impl ParticleDisplayMode {
     pub const ALL: [Self; 2] = [Self::Glow, Self::Sphere];
     const SPHERE_SIZE_SCALE: f32 = 0.7;
 
+    /// Returns the combobox label for this display mode.
+    pub const fn combobox_label(self) -> &'static str {
+        match self {
+            Self::Glow => "Glow",
+            Self::Sphere => "Sphere",
+        }
+    }
+
     /// Returns the particle pipeline slot for this display mode.
     pub const fn pipeline_index(self) -> usize {
         self as usize
@@ -98,11 +106,7 @@ impl ParticleDisplayMode {
 impl std::fmt::Display for ParticleDisplayMode {
     /// Formats particle display mode names for UI selection controls.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let text = match self {
-            ParticleDisplayMode::Glow => "Glow",
-            ParticleDisplayMode::Sphere => "Sphere",
-        };
-        write!(f, "{}", text)
+        f.write_str(self.combobox_label())
     }
 }
 
@@ -113,7 +117,6 @@ pub struct UiState {
     pub is_graph3d_panel_open: bool,
     pub is_settings_panel_open: bool,
     pub start_maximized: bool,
-    pub link_point_size_to_scale: bool,
     pub lock_camera_up: bool,
     pub mailbox_present_mode: bool,
     pub show_grid: bool,
@@ -135,7 +138,6 @@ impl Default for UiState {
             is_graph3d_panel_open: true,
             is_settings_panel_open: false,
             start_maximized: false,
-            link_point_size_to_scale: true,
             lock_camera_up: true,
             mailbox_present_mode: false,
             show_grid: true,
@@ -155,7 +157,6 @@ impl UiState {
         self.min_window_width = settings.window_min_width;
         self.min_window_height = settings.window_min_height;
         self.start_maximized = settings.start_maximized;
-        self.link_point_size_to_scale = settings.link_point_size_to_scale;
         self.lock_camera_up = settings.lock_camera_up;
         self.mailbox_present_mode = settings.mailbox_present_mode;
         self.particle_display_mode = settings.particle_display_mode;

@@ -66,10 +66,6 @@ pub fn draw_ui(
                 combobox_particle_display_mode(ui, &mut uis);
                 ui.separator();
                 ui.checkbox(&mut uis.start_maximized, "Start Maximized");
-                ui.checkbox(
-                    &mut uis.link_point_size_to_scale,
-                    "Link Point Size to Scale",
-                );
                 ui.checkbox(&mut uis.lock_camera_up, "Lock Camera Up/Down");
                 ui.checkbox(&mut uis.mailbox_present_mode, "Mailbox Present Mode");
                 ui.separator();
@@ -77,7 +73,6 @@ pub fn draw_ui(
                     settings.window_min_width = uis.min_window_width;
                     settings.window_min_height = uis.min_window_height;
                     settings.start_maximized = uis.start_maximized;
-                    settings.link_point_size_to_scale = uis.link_point_size_to_scale;
                     settings.lock_camera_up = uis.lock_camera_up;
                     settings.mailbox_present_mode = uis.mailbox_present_mode;
                     settings.particle_display_mode = uis.particle_display_mode;
@@ -126,7 +121,7 @@ fn combobox_particle_display_mode(ui: &mut egui::Ui, uis: &mut UiState) {
         let id = ui.make_persistent_id("particle_display_mode_combobox");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ComboBox::from_id_salt(id)
-                .selected_text(uis.particle_display_mode.to_string())
+                .selected_text(uis.particle_display_mode.combobox_label())
                 .width(90.0)
                 .show_ui(ui, |ui| {
                     for mode in ParticleDisplayMode::ALL {
@@ -141,7 +136,7 @@ fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {
     label_normal(ui, "Graph Type");
     let id = ui.make_persistent_id("graph_type_combobox");
     ComboBox::from_id_salt(id)
-        .selected_text(uis.graph_type.to_string())
+        .selected_text(uis.graph_type.combobox_label())
         .width(ui.available_width())
         .show_ui(ui, |ui| {
             selectable_value(

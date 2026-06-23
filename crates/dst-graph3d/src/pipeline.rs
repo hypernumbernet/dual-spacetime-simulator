@@ -61,6 +61,7 @@ pub struct ParticleRenderPipeline {
     display_buffer: DisplayParticleBuffer,
     retired_buffers: Vec<AllocatedBuffer>,
     particles_gpu_dirty: bool,
+    applied_lock_camera_up: Option<bool>,
 
     camera: OrbitCamera,
 }
@@ -121,6 +122,7 @@ impl ParticleRenderPipeline {
             display_buffer,
             retired_buffers: Vec::new(),
             particles_gpu_dirty: false,
+            applied_lock_camera_up: None,
             camera,
         }
     }
@@ -164,7 +166,6 @@ impl ParticleRenderPipeline {
         framebuffer_index: usize,
         extent: vk::Extent2D,
         gui: &mut Gui,
-        _link_point_size_to_scale: bool,
         show_grid: bool,
         particle_display_mode: ParticleDisplayMode,
     ) {
@@ -340,6 +341,10 @@ impl ParticleRenderPipeline {
 
     /// Enables or disables camera up-lock behavior.
     pub fn set_lock_camera_up(&mut self, lock: bool) {
+        if self.applied_lock_camera_up == Some(lock) {
+            return;
+        }
+        self.applied_lock_camera_up = Some(lock);
         self.camera.set_lock_up(lock);
     }
 

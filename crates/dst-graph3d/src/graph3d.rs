@@ -14,15 +14,21 @@ pub enum GraphType {
     RapidityFieldBiquaternion,
 }
 
-impl std::fmt::Display for GraphType {
-    /// Formats graph type names for UI selection controls.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let text = match self {
+impl GraphType {
+    /// Returns the combobox label for this graph type.
+    pub const fn combobox_label(self) -> &'static str {
+        match self {
             GraphType::SphericalFibonacciLattice => "Spherical Fibonacci Lattice",
             GraphType::RapidityFieldMatrix => "Rapidity Field by matrix",
             GraphType::RapidityFieldBiquaternion => "Rapidity Field by biquaternion",
-        };
-        write!(f, "{}", text)
+        }
+    }
+}
+
+impl std::fmt::Display for GraphType {
+    /// Formats graph type names for UI selection controls.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.combobox_label())
     }
 }
 
