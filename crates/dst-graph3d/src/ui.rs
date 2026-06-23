@@ -18,12 +18,12 @@ pub fn draw_ui(
     let mut uis = ui_state.write().unwrap();
     let menu_bar_height = egui::TopBottomPanel::top("menu_bar")
         .show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     ui.set_min_width(MENU_POPUP_WIDTH);
                     if ui.button("Exit").clicked() {
                         uis.request_exit = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
 
@@ -34,7 +34,7 @@ pub fn draw_ui(
                             .checkbox(uis.panel_open_mut(*panel), panel.label())
                             .clicked()
                         {
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                 });
@@ -42,7 +42,7 @@ pub fn draw_ui(
                 ui.menu_button("View", |ui| {
                     ui.set_min_width(MENU_POPUP_WIDTH);
                     if ui.checkbox(&mut uis.show_grid, "Show Grid").clicked() {
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
             });
