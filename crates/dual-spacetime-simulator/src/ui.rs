@@ -31,69 +31,21 @@ pub fn draw_ui(
                     }
                 });
 
-                ui.menu_button("Mode", |ui| {
-                    ui.set_min_width(MENU_POPUP_WIDTH);
-                    if ui
-                        .selectable_label(
-                            uis.app_mode == crate::ui_state::AppMode::Simulation,
-                            "Simulation",
-                        )
-                        .clicked()
-                    {
-                        uis.app_mode = crate::ui_state::AppMode::Simulation;
-                        ui.close_menu();
-                    }
-                    if ui
-                        .selectable_label(
-                            uis.app_mode == crate::ui_state::AppMode::Graph3D,
-                            "3D Graph",
-                        )
-                        .clicked()
-                    {
-                        uis.app_mode = crate::ui_state::AppMode::Graph3D;
-                        uis.is_running = false;
-                        ui.close_menu();
-                    }
-                });
-
                 ui.menu_button("Panel", |ui| {
                     ui.set_min_width(MENU_POPUP_WIDTH);
-                    let available = uis.get_available_panels();
-                    if available.contains(&PanelKind::Simulation) {
-                        if ui
-                            .checkbox(
-                                &mut uis.is_simulation_panel_open,
-                                PanelKind::Simulation.label(),
-                            )
-                            .clicked()
-                        {
-                            ui.close_menu();
-                        }
-                    }
-                    if available.contains(&PanelKind::ObjectInput) {
-                        if ui
-                            .checkbox(
-                                &mut uis.is_object_input_panel_open,
-                                PanelKind::ObjectInput.label(),
-                            )
-                            .clicked()
-                        {
-                            ui.close_menu();
-                        }
-                    }
-                    if available.contains(&PanelKind::Graph3D) {
-                        if ui
-                            .checkbox(&mut uis.is_graph3d_panel_open, PanelKind::Graph3D.label())
-                            .clicked()
-                        {
-                            ui.close_menu();
-                        }
-                    }
-                    if available.contains(&PanelKind::Settings) {
-                        if ui
-                            .checkbox(&mut uis.is_settings_panel_open, PanelKind::Settings.label())
-                            .clicked()
-                        {
+                    for panel in PANELS {
+                        let (open, label) = match panel {
+                            PanelKind::Simulation => {
+                                (&mut uis.is_simulation_panel_open, panel.label())
+                            }
+                            PanelKind::ObjectInput => {
+                                (&mut uis.is_object_input_panel_open, panel.label())
+                            }
+                            PanelKind::Settings => {
+                                (&mut uis.is_settings_panel_open, panel.label())
+                            }
+                        };
+                        if ui.checkbox(open, label).clicked() {
                             ui.close_menu();
                         }
                     }
@@ -106,26 +58,24 @@ pub fn draw_ui(
                     }
                 });
 
-                if uis.app_mode == AppMode::Simulation {
-                    ui.menu_button("Simulation", |ui| {
-                        ui.set_min_width(MENU_POPUP_WIDTH);
-                        let particle_count = simulation_manager.read().unwrap().particle_count();
-                        let can_start = UiState::can_start_simulation(particle_count);
-                        ui.add_enabled_ui(can_start || uis.is_running, |ui| {
-                            if ui
-                                .button(if uis.is_running { "Pause" } else { "Start" })
-                                .clicked()
-                            {
-                                uis.is_running = !uis.is_running;
-                                ui.close_menu();
-                            }
-                        });
-                        if ui.button("Reset").clicked() {
-                            uis.request_reset();
+                ui.menu_button("Simulation", |ui| {
+                    ui.set_min_width(MENU_POPUP_WIDTH);
+                    let particle_count = simulation_manager.read().unwrap().particle_count();
+                    let can_start = UiState::can_start_simulation(particle_count);
+                    ui.add_enabled_ui(can_start || uis.is_running, |ui| {
+                        if ui
+                            .button(if uis.is_running { "Pause" } else { "Start" })
+                            .clicked()
+                        {
+                            uis.is_running = !uis.is_running;
                             ui.close_menu();
                         }
                     });
-                }
+                    if ui.button("Reset").clicked() {
+                        uis.request_reset();
+                        ui.close_menu();
+                    }
+                });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(format!("Frame {}", uis.frame));
@@ -138,14 +88,7 @@ pub fn draw_ui(
         .rect
         .height();
 
-    let from_mode = uis.last_app_mode_for_panel_sync;
-    let to_mode = uis.app_mode;
-    if from_mode != to_mode {
-        uis.apply_panel_defaults_on_app_mode_change(from_mode, to_mode);
-        uis.last_app_mode_for_panel_sync = to_mode;
-    }
-
-    if uis.app_mode == AppMode::Simulation && uis.is_simulation_panel_open {
+    if uis.is_simulation_panel_open {
         egui::Window::new("Simulation")
             .resizable(false)
             .collapsible(true)
@@ -308,7 +251,7 @@ pub fn draw_ui(
             });
     }
 
-    if uis.app_mode == AppMode::Simulation && uis.is_object_input_panel_open {
+    if uis.is_object_input_panel_open {
         egui::Window::new("Object Input")
             .resizable(false)
             .collapsible(true)
@@ -356,37 +299,6 @@ pub fn draw_ui(
         uis.object_input = uis.build_reset_object_input();
         uis.reset_scale_to_base();
         uis.apply_reset_timing_defaults();
-    }
-
-    if uis.app_mode == AppMode::Graph3D && uis.is_graph3d_panel_open {
-        egui::Window::new("3D Graph")
-            .resizable(false)
-            .collapsible(true)
-            .default_pos(egui::pos2(
-                PANEL_DEFAULT_X,
-                menu_bar_height + PANEL_MENU_OFFSET_Y,
-            ))
-            .default_width(uis.input_panel_width)
-            .show(ctx, |ui| {
-                combobox_graph_type(ui, &mut uis);
-                ui.separator();
-
-                match uis.graph_type {
-                    GraphType::SphericalFibonacciLattice => {
-                        condition_spherical_fibonacci_lattice(ui, &mut uis);
-                    }
-                    GraphType::RapidityFieldMatrix => {
-                        condition_rapidity_field_matrix(ui, &mut uis);
-                    }
-                    GraphType::RapidityFieldBiquaternion => {
-                        condition_rapidity_field_biquaternion(ui, &mut uis);
-                    }
-                }
-
-                ui.separator();
-                label_normal(ui, "Sample Count");
-                ui.add(Slider::new(&mut uis.graph_sample_count, 1..=5000).drag_value_speed(1.0));
-            });
     }
 
     if uis.reset_log.is_open {
@@ -918,62 +830,4 @@ fn combobox_particle_display_mode(ui: &mut egui::Ui, uis: &mut UiState) {
                 });
         });
     });
-}
-
-fn combobox_graph_type(ui: &mut egui::Ui, uis: &mut UiState) {
-    label_normal(ui, "Graph Type");
-    let id = ui.make_persistent_id("graph_type_combobox");
-    ComboBox::from_id_salt(id)
-        .selected_text(format!("{}", uis.graph_type))
-        .width(ui.available_width())
-        .show_ui(ui, |ui| {
-            selectable_value(
-                ui,
-                &mut uis.graph_type,
-                GraphType::SphericalFibonacciLattice,
-            );
-            selectable_value(ui, &mut uis.graph_type, GraphType::RapidityFieldMatrix);
-            selectable_value(
-                ui,
-                &mut uis.graph_type,
-                GraphType::RapidityFieldBiquaternion,
-            );
-        });
-}
-
-/// Renders controls specific to spherical Fibonacci lattice graph mode.
-fn condition_spherical_fibonacci_lattice(ui: &mut egui::Ui, uis: &mut UiState) {
-    label_normal(ui, "Spherical Fibonacci Lattice");
-    dragvalue_normal(ui, &mut uis.graph_radius, 0.01, "Radius");
-    label_normal(
-        ui,
-        "Deterministic spherical sampling using a Fibonacci lattice.",
-    );
-    ui.separator();
-    label_normal(
-        ui,
-        "Uses golden-angle azimuth progression with near-equal-area latitude spacing.",
-    );
-    label_normal(
-        ui,
-        "Generates quasi-uniform points on the sphere, then scales by radius.",
-    );
-}
-
-/// Renders controls specific to the rapidity-field graph mode by matrix.
-fn condition_rapidity_field_matrix(ui: &mut egui::Ui, uis: &mut UiState) {
-    label_normal(ui, "Rapidity Vector Field by matrix");
-    dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.01, "Velocity Scale");
-    ui.separator();
-    label_normal(
-        ui,
-        "Lorentz boost using matrices (standard 4x4 representation)",
-    );
-}
-
-/// Renders controls specific to the rapidity-field graph mode by biquaternion.
-fn condition_rapidity_field_biquaternion(ui: &mut egui::Ui, uis: &mut UiState) {
-    label_normal(ui, "Rapidity Vector Field by biquaternion");
-    dragvalue_normal(ui, &mut uis.graph_velocity_scale, 0.01, "Velocity Scale");
-    label_normal(ui, "Calculation of Lorentz boost using biquaternions.");
 }

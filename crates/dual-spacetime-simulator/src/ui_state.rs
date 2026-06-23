@@ -139,25 +139,11 @@ pub(crate) fn trim_trailing_zeros(formatted: &str) -> String {
         .to_string()
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum AppMode {
-    Simulation,
-    Graph3D,
-}
-
-impl Default for AppMode {
-    /// Selects simulation mode as the default application startup mode.
-    fn default() -> Self {
-        AppMode::Simulation
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PanelKind {
     Simulation,
     ObjectInput,
     Settings,
-    Graph3D,
 }
 
 impl PanelKind {
@@ -167,7 +153,6 @@ impl PanelKind {
             PanelKind::Simulation => "Simulation",
             PanelKind::ObjectInput => "Object Input",
             PanelKind::Settings => "Settings",
-            PanelKind::Graph3D => "3D Graph",
         }
     }
 }
@@ -214,13 +199,11 @@ impl DragOwner {
     }
 }
 
-const PANELS_SIMULATION: &[PanelKind] = &[
+pub const PANELS: &[PanelKind] = &[
     PanelKind::Simulation,
     PanelKind::ObjectInput,
     PanelKind::Settings,
 ];
-
-const PANELS_GRAPH3D: &[PanelKind] = &[PanelKind::Graph3D, PanelKind::Settings];
 
 #[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum SimulationType {
@@ -366,25 +349,6 @@ impl std::fmt::Display for ParticleDisplayMode {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum GraphType {
-    SphericalFibonacciLattice,
-    RapidityFieldMatrix,
-    RapidityFieldBiquaternion,
-}
-
-impl std::fmt::Display for GraphType {
-    /// Formats graph type names for UI selection controls.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let text = match self {
-            GraphType::SphericalFibonacciLattice => "Spherical Fibonacci Lattice",
-            GraphType::RapidityFieldMatrix => "Rapidity Field by matrix",
-            GraphType::RapidityFieldBiquaternion => "Rapidity Field by biquaternion",
-        };
-        write!(f, "{}", text)
-    }
-}
-
 pub struct UiState {
     pub input_panel_width: f32,
     pub min_window_width: f32,
@@ -407,8 +371,6 @@ pub struct UiState {
     pub is_add_particles_requested: bool,
     pub is_add_particles_enabled: bool,
     pub skip: u32,
-    pub app_mode: AppMode,
-    pub last_app_mode_for_panel_sync: AppMode,
     pub object_input_type: ObjectInputType,
     pub object_input: ObjectInput,
     pub placement_mode: PlacementMode,
@@ -427,7 +389,6 @@ pub struct UiState {
     pub is_simulation_panel_open: bool,
     pub is_object_input_panel_open: bool,
     pub is_settings_panel_open: bool,
-    pub is_graph3d_panel_open: bool,
     pub start_maximized: bool,
     pub link_point_size_to_scale: bool,
     pub lock_camera_up: bool,
@@ -438,10 +399,6 @@ pub struct UiState {
     pub pending_snapshot_dialog: Option<PendingSnapshotDialog>,
     /// CPU-side particle data was replaced (e.g. snapshot load); GPU buffer must be refreshed.
     pub particle_buffer_reload_requested: bool,
-    pub graph_type: GraphType,
-    pub graph_sample_count: u32,
-    pub graph_radius: f64,
-    pub graph_velocity_scale: f64,
     pub reset_log: ResetLogPanelState,
 }
 
@@ -470,8 +427,6 @@ impl Default for UiState {
             is_add_particles_requested: false,
             is_add_particles_enabled: true,
             skip: DEFAULT_SKIP_DRAWING_FRAMES,
-            app_mode: AppMode::default(),
-            last_app_mode_for_panel_sync: AppMode::default(),
             object_input_type: ObjectInputType::default(),
             object_input: ObjectInput::default(),
             placement_mode: PlacementMode::default(),
@@ -490,7 +445,6 @@ impl Default for UiState {
             is_simulation_panel_open: true,
             is_object_input_panel_open: false,
             is_settings_panel_open: false,
-            is_graph3d_panel_open: false,
             start_maximized: false,
             link_point_size_to_scale: true,
             lock_camera_up: true,
@@ -500,10 +454,6 @@ impl Default for UiState {
             request_exit: false,
             pending_snapshot_dialog: None,
             particle_buffer_reload_requested: false,
-            graph_type: GraphType::SphericalFibonacciLattice,
-            graph_sample_count: 1000,
-            graph_radius: 1.0,
-            graph_velocity_scale: 1.0,
             reset_log: ResetLogPanelState::default(),
         }
     }
@@ -575,41 +525,6 @@ impl UiState {
             self.add_particle_count = self.max_particle_count;
         }
         self.clamp_satellite_count();
-    }
-
-    /// Resets all 3D graph parameters back to their default values.
-    pub fn reset_graph_params(&mut self) {
-        self.graph_type = GraphType::SphericalFibonacciLattice;
-        self.graph_sample_count = 1000;
-        self.graph_radius = 1.0;
-        self.graph_velocity_scale = 1.0;
-    }
-
-    /// Applies panel open-state defaults when switching between major app modes.
-    pub fn apply_panel_defaults_on_app_mode_change(&mut self, from: AppMode, to: AppMode) {
-        if from == to {
-            return;
-        }
-        match to {
-            AppMode::Graph3D => {
-                self.is_simulation_panel_open = false;
-                self.is_object_input_panel_open = false;
-                self.is_graph3d_panel_open = true;
-                self.reset_graph_params();
-            }
-            AppMode::Simulation => {
-                self.is_graph3d_panel_open = false;
-                self.is_simulation_panel_open = true;
-            }
-        }
-    }
-
-    /// Returns the panel set available for the currently selected app mode.
-    pub fn get_available_panels(&self) -> &'static [PanelKind] {
-        match self.app_mode {
-            AppMode::Simulation => PANELS_SIMULATION,
-            AppMode::Graph3D => PANELS_GRAPH3D,
-        }
     }
 
     /// Returns the current base scale as a value in the selected display unit.

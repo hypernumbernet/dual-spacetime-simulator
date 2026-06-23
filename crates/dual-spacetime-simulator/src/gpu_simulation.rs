@@ -156,16 +156,6 @@ impl GpuParticleSimulation {
         self.write_cpu_particles(particles);
     }
 
-    /// Uploads display-only point data (Graph3D and similar viewers).
-    pub fn upload_display_points(&mut self, positions: &[[f32; 3]], colors: &[[f32; 4]]) {
-        self.particle_count = positions.len() as u32;
-        if positions.is_empty() {
-            return;
-        }
-        self.ensure_buffer_capacity(positions.len());
-        self.write_display_points(positions, colors);
-    }
-
     /// Records compute dispatches that advance `steps` simulation steps on the GPU.
     ///
     /// Each step runs phase 0 (position integration) then phase 1 (velocity update),
@@ -272,15 +262,6 @@ impl GpuParticleSimulation {
         };
         for (slot, particle) in dst.iter_mut().zip(particles) {
             *slot = GpuParticle::from_cpu(particle);
-        }
-    }
-
-    fn write_display_points(&self, positions: &[[f32; 3]], colors: &[[f32; 4]]) {
-        let Some(dst) = mapped_particle_slice_mut(&self.particle_buffer, positions.len()) else {
-            return;
-        };
-        for (slot, (position, color)) in dst.iter_mut().zip(positions.iter().zip(colors)) {
-            *slot = GpuParticle::from_display(*position, *color);
         }
     }
 

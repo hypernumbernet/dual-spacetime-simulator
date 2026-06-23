@@ -82,8 +82,6 @@ pub struct ParticleRenderPipeline {
 
     axes_buffer: AllocatedBuffer,
     axes_vertex_count: u32,
-    graph_lines_buffer: Option<AllocatedBuffer>,
-    graph_lines_vertex_count: u32,
     add_center_marker_buffer: Option<AllocatedBuffer>,
     add_center_marker_vertex_count: u32,
     last_add_center_marker_key: Option<(glam::DVec3, u64)>,
@@ -146,8 +144,6 @@ impl ParticleRenderPipeline {
             depth_image,
             axes_buffer,
             axes_vertex_count,
-            graph_lines_buffer: None,
-            graph_lines_vertex_count: 0,
             add_center_marker_buffer: None,
             add_center_marker_vertex_count: 0,
             last_add_center_marker_key: None,
@@ -255,7 +251,6 @@ impl ParticleRenderPipeline {
         scale: f64,
         link_point_size_to_scale: bool,
         show_grid: bool,
-        app_mode: AppMode,
         particle_display_mode: ParticleDisplayMode,
     ) {
         self.flush_retired_buffers();
@@ -341,28 +336,15 @@ impl ParticleRenderPipeline {
             view_proj: view_proj_cols,
         };
 
-        if app_mode == AppMode::Graph3D {
-            if let Some(ref buf) = self.graph_lines_buffer {
-                self.draw_axes_lines(
-                    command_buffer,
-                    &line_pc,
-                    buf.buffer,
-                    self.graph_lines_vertex_count,
-                );
-            }
-        }
-
         self.draw_particles(command_buffer, &pc, particle_display_mode);
 
-        if app_mode == AppMode::Simulation {
-            if let Some(ref buf) = self.add_center_marker_buffer {
-                self.draw_axes_lines(
-                    command_buffer,
-                    &line_pc,
-                    buf.buffer,
-                    self.add_center_marker_vertex_count,
-                );
-            }
+        if let Some(ref buf) = self.add_center_marker_buffer {
+            self.draw_axes_lines(
+                command_buffer,
+                &line_pc,
+                buf.buffer,
+                self.add_center_marker_vertex_count,
+            );
         }
 
         gui.draw(command_buffer, extent);
@@ -370,26 +352,6 @@ impl ParticleRenderPipeline {
         unsafe {
             self.device.cmd_end_render_pass(command_buffer);
         }
-    }
-
-    /// Uploads display-only particle points into the shared GPU storage buffer.
-    pub fn set_particles(&mut self, positions: &[[f32; 3]], colors: &[[f32; 4]]) {
-        self.gpu_sim.upload_display_points(positions, colors);
-    }
-
-    /// Uploads graph line vertices and rebuilds the line vertex buffer.
-    pub fn set_graph_lines(&mut self, vertices: &[([f32; 3], [f32; 4])]) {
-        let verts = axes_vertices_from_tuples(vertices);
-        let allocator = Arc::clone(&self.allocator);
-        upload_axes_line_buffer(
-            &self.device,
-            &allocator,
-            &mut self.retired_buffers,
-            &mut self.graph_lines_buffer,
-            &mut self.graph_lines_vertex_count,
-            &verts,
-            "graph_lines",
-        );
     }
 
     /// Uploads add-center preview marker vertices and rebuilds the marker line buffer.
@@ -410,11 +372,7 @@ impl ParticleRenderPipeline {
     /// Rebuilds add-center preview geometry from current UI state when needed.
     pub fn sync_add_center_marker(&mut self, ui_state: &crate::ui_state::UiState) {
         use crate::object_input::ObjectInput;
-        use crate::ui_state::AppMode;
-
-        let show_marker = ui_state.app_mode == AppMode::Simulation
-            && ui_state.is_object_input_panel_open
-            && ui_state.show_add_center_preview;
+        let show_marker = ui_state.is_object_input_panel_open && ui_state.show_add_center_preview;
         if !show_marker {
             self.add_center_marker_vertex_count = 0;
             self.last_add_center_marker_key = None;
@@ -631,9 +589,6 @@ impl Drop for ParticleRenderPipeline {
                 eprintln!("ParticleRenderPipeline::drop device_wait_idle failed: {err:?}");
             }
 
-            if let Some(buf) = self.graph_lines_buffer.take() {
-                buf.destroy(&self.device, self.allocator());
-            }
             if let Some(buf) = self.add_center_marker_buffer.take() {
                 buf.destroy(&self.device, self.allocator());
             }

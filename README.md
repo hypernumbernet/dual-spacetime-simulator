@@ -21,14 +21,13 @@ Cargo workspace 構成です。ルート `Cargo.toml` は workspace 定義（メ
   - 主なモジュール: `biquaternion` / `expr` / `pga` / `pga_expr` / `format` / `algebra`
 - **`dual-spacetime-simulator`**（`crates/dual-spacetime-simulator`・lib + bin）— 本アプリ
   - Vulkan（ash）+ egui で動くデスクトップ・シミュレータ本体
-  - N 体重力シミュレーション（CPU / GPU）と 3D Graph モードを可視化
+  - N 体重力シミュレーション（CPU / GPU）を可視化
   - `dst-math`（数学）と `vulkanvil`（Vulkan 基盤）に path 依存
   - 主なモジュール:
     - `simulation` / `gpu_simulation`: 粒子の物理更新（CPU は rayon 並列 / GPU はコンピュートシェーダ）
     - `pipeline` / `camera`: 描画パイプラインと軌道カメラ
     - `ui` / `ui_state` / `ui_styles` / `integration`: egui の UI 描画と状態管理
     - `object_input` / `solar_system_data`: 粒子の初期配置生成と JPL 暦データ取得
-    - `graph3d`: 3D Graph モードの点・線生成
     - `settings` / `particle_snapshot`: 設定の永続化とスナップショットの保存・読み込み
   - `build.rs` が `glslc` で `src/shaders/` の GLSL を SPIR-V にコンパイルする
 - **`vulkanvil`**（`crates/vulkanvil`・lib）— 共有 Vulkan 基盤ライブラリ
@@ -145,7 +144,7 @@ cargo test --workspace
 シーンと UI を **1 つのレンダーパス**で描き切る、軽量な前方描画パイプラインです。
 
 - 深度テスト付きで 3D シーンを描いたあと、同じレンダーパス内で egui を重ねる（追加パス不要）
-- グラフィックスパイプラインを用途別に保持: 軸・グリッド・グラフ線・中心マーカーは `LineList`、粒子は `PointList`（点表示と球表示のフラグメント違いを `ParticleDisplayMode` ごとに用意）
+- グラフィックスパイプラインを用途別に保持: 軸・グリッド・中心マーカーは `LineList`、粒子は `PointList`（点表示と球表示のフラグメント違いを `ParticleDisplayMode` ごとに用意）
 - **粒子は頂点バッファを使わず SSBO から直接読む**（`particles_vertex_ssbo.vert` が `gl_VertexIndex` で storage buffer を参照）。コンピュートが書き込むバッファをそのまま描画に使う **ゼロコピー構成**
 - カメラ行列とポイントサイズは push constants で渡すだけ。リサイズは `recreate_framebuffers`、バッファ差し替えは retired バッファキューで安全に処理
 
@@ -189,4 +188,4 @@ N 体計算をコンピュートシェーダ（`particles_compute.comp`）で回
 - **マウスホイール**: ズーム
 - **左ダブルクリック**: 俯瞰寄りの視点へ
 - **右ダブルクリック**: 注視点を原点付近へリセット
-- **メニュー / パネル**: モード切替、シミュレーション開始/停止、各種パラメータ変更
+- **メニュー / パネル**: シミュレーション開始/停止、各種パラメータ変更

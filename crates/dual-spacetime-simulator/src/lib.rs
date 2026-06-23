@@ -3,7 +3,6 @@
 
 pub mod camera;
 pub mod gpu_simulation;
-pub mod graph3d;
 pub mod integration;
 pub mod object_input;
 pub mod particle_snapshot;
@@ -21,10 +20,9 @@ use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
 use crate::ui::{draw_ui, process_pending_snapshot_dialog};
-use crate::ui_state::{AppMode, DragOwner, PlacementMode, UiState};
+use crate::ui_state::{DragOwner, PlacementMode, UiState};
 use ash::vk;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use vulkanvil::VulkanBase;
@@ -42,13 +40,6 @@ const DOUBLE_CLICK_MILLIS: u64 = 400;
 const DOUBLE_CLICK_DIST: f64 = 25.0;
 const DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
-
-struct Graph3dBuildResult {
-    fp: u64,
-    positions: Vec<[f32; 3]>,
-    colors: Vec<[f32; 4]>,
-    line_vertices: Vec<([f32; 3], [f32; 4])>,
-}
 
 /// Coordinates CPU→GPU particle buffer synchronization between the UI, worker, and render loop.
 #[derive(Clone)]
@@ -270,7 +261,6 @@ pub(crate) fn spawn_simulation_worker(
             }
             let ui_state = ui_state_clone.read().unwrap();
             let is_running = ui_state.is_running;
-            let app_mode = ui_state.app_mode;
             let max_fps = ui_state.max_fps;
             let max_fps_unlimited = ui_state.max_fps_unlimited;
             let time_per_frame = ui_state.time_per_frame;
@@ -290,7 +280,7 @@ pub(crate) fn spawn_simulation_worker(
                 drop(ui_state);
                 last_fps = now;
             }
-            if !is_running || app_mode != AppMode::Simulation {
+            if !is_running {
                 std::thread::sleep(Duration::from_millis(16));
                 continue;
             }
@@ -356,9 +346,6 @@ pub struct App {
     last_right_click_time: Option<Instant>,
     last_right_click_pos: Option<(f64, f64)>,
     settings: AppSettings,
-    last_graph3d_fingerprint: u64,
-    graph3d_pending_rx: Option<Receiver<Graph3dBuildResult>>,
-    prev_app_mode: AppMode,
     drag_owner: DragOwner,
 }
 
@@ -410,9 +397,6 @@ impl Default for App {
             last_right_click_time: None,
             last_right_click_pos: None,
             settings,
-            last_graph3d_fingerprint: u64::MAX,
-            graph3d_pending_rx: None,
-            prev_app_mode: AppMode::default(),
             drag_owner: DragOwner::None,
         }
     }
@@ -587,7 +571,6 @@ impl ApplicationHandler for App {
                 let scale = ui_state.scale_gauge;
                 let link_point_size_to_scale = ui_state.link_point_size_to_scale;
                 let show_grid = ui_state.show_grid;
-                let app_mode = ui_state.app_mode;
                 let particle_display_mode = ui_state.particle_display_mode;
                 let uses_gpu = ui_state.uses_gpu_simulation();
                 let time_per_frame = ui_state.time_per_frame;
@@ -618,7 +601,6 @@ impl ApplicationHandler for App {
                     scale,
                     link_point_size_to_scale,
                     show_grid,
-                    app_mode,
                     particle_display_mode,
                 );
 
@@ -746,82 +728,6 @@ impl ApplicationHandler for App {
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
         }
-        let app_mode = self.ui_state.read().unwrap().app_mode;
-        let prev = self.prev_app_mode;
-        if prev == AppMode::Graph3D && app_mode != AppMode::Graph3D {
-            self.graph3d_pending_rx = None;
-            if let Some(pipeline) = self.render_pipeline.as_mut() {
-                pipeline.set_graph_lines(&[]);
-            }
-        }
-        if prev != app_mode && app_mode == AppMode::Graph3D {
-            if let Some(pipeline) = self.render_pipeline.as_mut() {
-                pipeline.reset_add_center_marker();
-            }
-        }
-        if prev != app_mode && app_mode == AppMode::Simulation {
-            // Force a fresh simulation redraw when returning from non-simulation views.
-            if let Some(pipeline) = self.render_pipeline.as_mut() {
-                pipeline.set_graph_lines(&[]);
-            }
-            self.last_graph3d_fingerprint = u64::MAX;
-            *self.need_redraw.write().unwrap() = true;
-        }
-        self.prev_app_mode = app_mode;
-
-        if app_mode == AppMode::Graph3D {
-            let uis = self.ui_state.read().unwrap();
-            let fp = crate::graph3d::graph_params_fingerprint(
-                uis.graph_type,
-                uis.graph_sample_count,
-                uis.graph_radius,
-                uis.graph_velocity_scale,
-            );
-            let (gt, n, t, vs) = (
-                uis.graph_type,
-                uis.graph_sample_count,
-                uis.graph_radius,
-                uis.graph_velocity_scale,
-            );
-            drop(uis);
-
-            if let Some(rx) = self.graph3d_pending_rx.as_ref() {
-                match rx.try_recv() {
-                    Ok(result) => {
-                        self.graph3d_pending_rx = None;
-                        if result.fp == fp {
-                            if let Some(pipeline) = self.render_pipeline.as_mut() {
-                                pipeline.set_particles(&result.positions, &result.colors);
-                                pipeline.set_graph_lines(&result.line_vertices);
-                            }
-                            self.last_graph3d_fingerprint = result.fp;
-                        }
-                    }
-                    Err(TryRecvError::Empty) => {}
-                    Err(TryRecvError::Disconnected) => {
-                        self.graph3d_pending_rx = None;
-                    }
-                }
-            }
-
-            if fp != self.last_graph3d_fingerprint && self.graph3d_pending_rx.is_none() {
-                let (tx, rx) = mpsc::channel::<Graph3dBuildResult>();
-                std::thread::spawn(move || {
-                    let (positions, colors) = crate::graph3d::build_points(gt, n, t, vs);
-                    let line_vertices = crate::graph3d::build_graph_line_vertices(gt, n, t, vs);
-                    let _ = tx.send(Graph3dBuildResult {
-                        fp,
-                        positions,
-                        colors,
-                        line_vertices,
-                    });
-                });
-                self.graph3d_pending_rx = Some(rx);
-            }
-            return;
-        }
-        self.graph3d_pending_rx = None;
-        self.last_graph3d_fingerprint = u64::MAX;
         if *self.need_redraw.read().unwrap() == false && !self.gpu_particle_sync.has_pending_sync()
         {
             return;

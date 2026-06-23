@@ -1,9 +1,6 @@
 # プロジェクトの全体設計概要
 
-このリポジトリは **Rust** で書かれたデスクトップアプリです。**Vulkan（ash）** で 3D を描画し、**egui** で UI を重ねます。主要機能は次の 2 つです。
-
-1. **N 体に近い重力シミュレーション**（ニュートン近似に、光速スケールやローレンツ変換に基づく変種を追加）
-2. **3D Graph モード**：双四元数・行列によるラピディティ場や球上フィボナッチ格子などを、サンプル点と補助線として可視化
+このリポジトリは **Rust** で書かれたデスクトップアプリです。**Vulkan（ash）** で 3D を描画し、**egui** で UI を重ねます。主要機能は **N 体に近い重力シミュレーション**（ニュートン近似に、光速スケールやローレンツ変換に基づく変種を追加）です。
 
 設計方針は、**ウィンドウ / Vulkan / UI / シミュレーションの責務を分離すること**、および **シミュレーション更新を描画ループから切り離すこと**です。
 
@@ -58,9 +55,6 @@
 - **`Arc<RwLock<SimulationManager>>`**：シミュレーション状態（粒子ベクトル）
 - **`need_redraw` / `skip_redraw`**：シミュ結果を GPU バッファへ反映するタイミング制御
 - **`AppSettings`**：`setting.config`（実行ファイルと同じディレクトリの JSON）へのロード／セーブ。起動時に `UiState::apply_settings` でランタイム状態へ反映
-- **`graph3d_pending_rx`**：`AppMode::Graph3D` のとき、パラメータ変更時にバックグラウンドスレッドで点列・ライン頂点を生成し、`mpsc` でメインループへ返す非同期ビルド用の受信側
-- **`last_graph3d_fingerprint`**：Graph3D の GPU バッファ更新が必要か判定
-- **`prev_app_mode`**：モード遷移時（Simulation 復帰等）の再構築・リセット制御
 - **`drag_owner`**（`DragOwner`）：egui がポインタを掴んでいるときはシーンのカメラ操作と衝突しないよう、左／右／中ドラッグの担当を区別
 
 **ドロップ順**：`gui` と `render_pipeline` を **`vulkan_base` より先に** 破棄する必要があります。
@@ -68,21 +62,15 @@
 ### 2.2 シミュレーションと描画の分離
 
 - メインスレッド：`RedrawRequested` で **UI 更新** → **描画コマンド記録** → **Present**。スワップチェーンは `UiState::mailbox_present_mode` と一致するよう、必要に応じて再作成します。
-- 別スレッド：`UiState` の `is_running` と `AppMode::Simulation` のときだけ、`rayon` スレッドプール上で `SimulationManager::advance` を周期実行。終了後に `need_redraw` を立て、`about_to_wait` 側で粒子バッファを `pipeline.set_particles` に流し込みます。
-- **`AppMode::Graph3D`**：`about_to_wait` でフィンガープリントが変わったときのみ、専用スレッドで `graph3d::build_points` / `build_graph_line_vertices` を実行し、完了次第パイプラインへ反映します（UI スレッドをブロックしません）。
+- 別スレッド：`UiState` の `is_running` のときだけ、`rayon` スレッドプール上で `SimulationManager::advance` を周期実行。終了後に `need_redraw` を立て、`about_to_wait` 側で粒子バッファを `pipeline.upload_particles` に流し込みます。
 
 これにより、UI の応答性とシミュレーション／重い可視化のスループットを両立しています。
 
 ---
 
-## 3. アプリモード（`UiState` / `crates/dual-spacetime-simulator/src/ui_state.rs`）
+## 3. UI 状態（`UiState` / `crates/dual-spacetime-simulator/src/ui_state.rs`）
 
-| モード | 役割 |
-|--------|------|
-| **`Simulation`** | 粒子シミュレーション。左ペインは Simulation / Object Input / Settings |
-| **`Graph3D`** | `graph3d.rs` が点列とグラフ用ライン頂点を生成し、粒子パイプライン＋ライン描画で表示。ペインは 3D Graph / Settings。**グラフ種別**は `GraphType`：`SphericalFibonacciLattice`、`RapidityFieldMatrix`、`RapidityFieldBiquaternion` |
-
-モード切替時は `about_to_wait` でフィンガープリントや前モードを参照し、必要な GPU バッファのみ更新します。
+パネルは Simulation / Object Input / Settings の 3 種。`PanelKind` と `PANELS` 定数で管理します。
 
 ---
 
@@ -108,8 +96,8 @@
 
 独立クレート **`dst-math`**（workspace path 依存）。シミュレータは `dst_math::...` で参照します。
 
-- **`spacetime`**：時空・ラピディティ・ローレンツ行列。Graph3D のラピディティ場モードでも使用。
-- **`biquaternion`**, **`bivector`**：Graph3D（双四元数ベースのラピディティ可視化など）
+- **`spacetime`**：時空・ラピディティ・ローレンツ行列
+- **`biquaternion`**, **`bivector`**：双四元数・ビベクトル演算
 
 テストは `cargo test -p dst-math`（`crates/dst-math/tests/` とモジュール内 `#[cfg(test)]`）。
 
@@ -140,7 +128,7 @@
 
 ## 8. UI（`crates/dual-spacetime-simulator/src/ui.rs` など）
 
-`draw_ui` が `UiState` と `AppSettings` を編集します。粒子数、時間刻み、スケール、シミュレーション種別、Graph の各パラメータ、ウィンドウ・プレゼントモード・カメラ関連の固定設定、および設定保存（`AppSettings::save`）を担当します。
+`draw_ui` が `UiState` と `AppSettings` を編集します。粒子数、時間刻み、スケール、シミュレーション種別、ウィンドウ・プレゼントモード・カメラ関連の固定設定、および設定保存（`AppSettings::save`）を担当します。
 
 ---
 
@@ -164,7 +152,7 @@
 ### 10.2 実行コマンド
 
 - **数学**: `cargo test -p dst-math`（`crates/dst-math/tests/` および `spacetime` / `biquaternion` 内の `#[cfg(test)]`）
-- **シミュレータ**: `cargo test -p dual-spacetime-simulator`（`crates/dual-spacetime-simulator/tests/`）。例：`simulation`、`object_input`、`camera`、`settings`、`ui_state`、`graph3d` など。
+- **シミュレータ**: `cargo test -p dual-spacetime-simulator`（`crates/dual-spacetime-simulator/tests/`）。例：`simulation`、`object_input`、`camera`、`settings`、`ui_state` など。
 - **Vulkan ヘッドレス系**（`vulkan_base_headless.rs`）: 通常の `cargo test -p dual-spacetime-simulator` に含まれる。Vulkan ローダーと対応 GPU が必要（無い環境では失敗する）。
 - **ワークスペース全体**: `cargo test --workspace`
 
@@ -179,5 +167,5 @@ Solar System 配置でリセットすると、`satkit` 用データ（JPL 暦等
 ## 11. 補足
 
 - バイナリの `main` は `crates/dual-spacetime-simulator/src/main.rs` のみ。アプリ本体の **`App`** と **`run()`** は同クレートの **`src/lib.rs`** にあります。
-- シミュレータのモジュールは `camera`, `graph3d`, `object_input`, `integration`, `pipeline`, `settings`, `simulation`, `ui`, `ui_state`, `ui_styles`, `vulkan_base` など（数学は `dst-math` クレート）。
+- シミュレータのモジュールは `camera`, `object_input`, `integration`, `pipeline`, `settings`, `simulation`, `ui`, `ui_state`, `ui_styles`, `vulkan_base` など（数学は `dst-math` クレート）。
 - シェーダは `crates/dual-spacetime-simulator/src/shaders/*.vert|*.frag` を `build.rs` で `glslc` コンパイルし、`OUT_DIR/shaders/*.spv` を `include_bytes!` で読み込みます。
