@@ -19,7 +19,7 @@ use crate::object_input::{ObjectInput, SolarSystemBuildError, build_solar_system
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
-use crate::ui::{draw_ui, process_pending_snapshot_dialog};
+use crate::ui::{draw_ui, process_pending_particle_delete, process_pending_snapshot_dialog};
 use crate::ui_state::{DragOwner, PlacementMode, UiState};
 use ash::vk;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -724,6 +724,11 @@ impl ApplicationHandler for App {
                 &self.ui_state,
                 &self.simulation_manager,
                 self.render_pipeline.as_ref(),
+                &self.need_redraw,
+            );
+            process_pending_particle_delete(
+                &self.ui_state,
+                &self.simulation_manager,
                 &self.need_redraw,
             );
             window.request_redraw();

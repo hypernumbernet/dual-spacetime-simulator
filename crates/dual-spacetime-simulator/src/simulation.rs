@@ -387,6 +387,21 @@ impl SimulationManager {
         particles.extend(new_particles.into_iter().take(to_add));
         to_add as u32
     }
+
+    /// Removes the particle at `index`. Returns false when the index is out of bounds.
+    pub fn remove_particle_at(&self, index: usize) -> bool {
+        let mut state_guard = self.state.write().unwrap();
+        let particles = match &mut *state_guard {
+            SimulationState::Normal(s) => &mut s.particles,
+            SimulationState::SpeedOfLightLimit(s) => &mut s.particles,
+            SimulationState::LorentzTransformation(s) => &mut s.particles,
+        };
+        if index >= particles.len() {
+            return false;
+        }
+        particles.remove(index);
+        true
+    }
 }
 
 impl Default for SimulationManager {

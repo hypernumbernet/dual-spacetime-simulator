@@ -109,6 +109,28 @@ fn clear_removes_all_particles() {
 }
 
 #[test]
+fn remove_particle_at_deletes_index_and_shifts_remaining() {
+    let ic = ObjectInput::RandomSphere {
+        scale: 1e10,
+        radius: 1e9,
+        mass_range: (1e28, 1e29),
+        velocity_std: 1e5,
+    };
+    let state = SimulationManager::create_simulation(ic, UiSimType::Normal, 3, 1e10);
+    let mgr = SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(state)),
+    };
+    assert_eq!(mgr.particle_count(), 3);
+    assert!(mgr.remove_particle_at(1));
+    assert_eq!(mgr.particle_count(), 2);
+    assert!(!mgr.remove_particle_at(2));
+    assert!(mgr.remove_particle_at(0));
+    assert_eq!(mgr.particle_count(), 1);
+    assert!(mgr.remove_particle_at(0));
+    assert_eq!(mgr.particle_count(), 0);
+}
+
+#[test]
 fn advance_with_zero_particles_is_noop_for_all_simulation_types() {
     let scale = 1e10;
     for sim_type in [

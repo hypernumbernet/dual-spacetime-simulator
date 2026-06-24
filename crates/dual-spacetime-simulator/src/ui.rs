@@ -486,6 +486,10 @@ fn particle_info_window(ctx: &egui::Context, uis: &mut UiState, selection: Optio
             });
             ui.separator();
             draw_particle_color_swatch(ui, color_rgba);
+            ui.separator();
+            if button_normal(ui, "Delete", false).clicked() {
+                uis.pending_delete_particle_index = Some(index);
+            }
         },
     );
 
@@ -877,6 +881,28 @@ fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
     if button_normal(ui, "Reset", false).clicked() {
         uis.request_reset();
     }
+}
+
+/// Removes a particle scheduled for deletion from the Particle Info panel.
+pub fn process_pending_particle_delete(
+    ui_state: &Arc<RwLock<UiState>>,
+    simulation_manager: &Arc<RwLock<SimulationManager>>,
+    need_redraw: &Arc<RwLock<bool>>,
+) {
+    let index = ui_state.write().unwrap().pending_delete_particle_index.take();
+    let Some(index) = index else {
+        return;
+    };
+    if !simulation_manager.write().unwrap().remove_particle_at(index) {
+        return;
+    }
+    let mut uis = ui_state.write().unwrap();
+    uis.clear_selected_particle();
+    if uis.uses_gpu_simulation() {
+        uis.request_particle_buffer_reload();
+    }
+    drop(uis);
+    need_redraw.write().unwrap().clone_from(&true);
 }
 
 /// Opens a deferred save/load dialog after the UI frame completes.

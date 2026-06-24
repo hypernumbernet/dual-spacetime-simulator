@@ -409,6 +409,8 @@ pub struct UiState {
     pub pending_snapshot_dialog: Option<PendingSnapshotDialog>,
     /// CPU-side particle data was replaced (e.g. snapshot load); GPU buffer must be refreshed.
     pub particle_buffer_reload_requested: bool,
+    /// Particle index scheduled for deletion from the Particle Info panel.
+    pub pending_delete_particle_index: Option<usize>,
     pub reset_log: ResetLogPanelState,
 }
 
@@ -466,6 +468,7 @@ impl Default for UiState {
             request_exit: false,
             pending_snapshot_dialog: None,
             particle_buffer_reload_requested: false,
+            pending_delete_particle_index: None,
             reset_log: ResetLogPanelState::default(),
         }
     }
