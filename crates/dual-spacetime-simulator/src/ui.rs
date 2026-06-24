@@ -54,17 +54,13 @@ pub fn draw_ui(
 
                 ui.menu_button("Simulation", |ui| {
                     ui.set_min_width(MENU_POPUP_WIDTH);
-                    let particle_count = simulation_manager.read().unwrap().particle_count();
-                    let can_start = UiState::can_start_simulation(particle_count);
-                    ui.add_enabled_ui(can_start || uis.is_running, |ui| {
-                        if ui
-                            .button(if uis.is_running { "Pause" } else { "Start" })
-                            .clicked()
-                        {
-                            uis.is_running = !uis.is_running;
-                            ui.close_kind(egui::UiKind::Menu);
-                        }
-                    });
+                    if ui
+                        .button(if uis.is_running { "Pause" } else { "Start" })
+                        .clicked()
+                    {
+                        uis.is_running = !uis.is_running;
+                        ui.close_kind(egui::UiKind::Menu);
+                    }
                     if ui.button("Reset").clicked() {
                         uis.request_reset();
                         ui.close_kind(egui::UiKind::Menu);
@@ -119,20 +115,14 @@ pub fn draw_ui(
                 label_indicator(ui, &particle_count.to_string());
             });
             ui.separator();
-            let can_start = UiState::can_start_simulation(particle_count);
-            ui.add_enabled_ui(can_start || uis.is_running, |ui| {
-                if button_normal(
-                    ui,
-                    if uis.is_running { "Pause" } else { "Start" },
-                    uis.is_running,
-                )
-                .clicked()
-                {
-                    uis.is_running = !uis.is_running;
-                }
-            });
-            if !can_start && !uis.is_running {
-                label_normal(ui, "Need at least 2 particles");
+            if button_normal(
+                ui,
+                if uis.is_running { "Pause" } else { "Start" },
+                uis.is_running,
+            )
+            .clicked()
+            {
+                uis.is_running = !uis.is_running;
             }
             ui.separator();
             if button_normal(ui, "Object Input", false).clicked() {

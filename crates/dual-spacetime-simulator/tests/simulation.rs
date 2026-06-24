@@ -107,3 +107,21 @@ fn clear_removes_all_particles() {
     mgr.clear(UiSimType::Normal, 1e10);
     assert_eq!(mgr.particle_count(), 0);
 }
+
+#[test]
+fn advance_with_zero_particles_is_noop_for_all_simulation_types() {
+    let scale = 1e10;
+    for sim_type in [
+        UiSimType::Normal,
+        UiSimType::SpeedOfLightLimit,
+        UiSimType::LorentzTransformation,
+    ] {
+        let mgr = SimulationManager::new();
+        mgr.clear(sim_type, scale);
+        assert_eq!(mgr.particle_count(), 0);
+        for _ in 0..50 {
+            mgr.advance(1e3);
+        }
+        assert_eq!(mgr.particle_count(), 0);
+    }
+}

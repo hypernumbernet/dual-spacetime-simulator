@@ -285,11 +285,6 @@ pub(crate) fn spawn_simulation_worker(
                 std::thread::sleep(Duration::from_millis(16));
                 continue;
             }
-            let particle_count = simulation_manager.read().unwrap().particle_count();
-            if !UiState::can_start_simulation(particle_count) {
-                std::thread::sleep(Duration::from_millis(16));
-                continue;
-            }
             let dt = now.duration_since(last_advance).as_secs_f64();
             if !max_fps_unlimited {
                 let target_fps = max_fps as f64;

@@ -46,8 +46,8 @@ fn clamp_satellite_count_respects_max_particle_count() {
 fn add_particle_count_range_matches_remaining_capacity() {
     assert_eq!(UiState::add_particle_count_range(0), None);
     assert_eq!(UiState::add_particle_count_range(1), Some(1..=1));
-    assert_eq!(UiState::add_particle_count_range(2), Some(2..=2));
-    assert_eq!(UiState::add_particle_count_range(500), Some(2..=500));
+    assert_eq!(UiState::add_particle_count_range(2), Some(1..=2));
+    assert_eq!(UiState::add_particle_count_range(500), Some(1..=500));
 }
 
 #[test]
@@ -179,13 +179,6 @@ fn placement_mode_change_disables_add_until_reset() {
     ui.placement_mode = PlacementMode::SatelliteOrbit;
     ui.apply_placement_mode_change(PlacementMode::SolarSystem);
     assert!(!ui.is_add_particles_enabled);
-}
-
-#[test]
-fn can_start_simulation_requires_at_least_two_particles() {
-    assert!(!UiState::can_start_simulation(0));
-    assert!(!UiState::can_start_simulation(1));
-    assert!(UiState::can_start_simulation(2));
 }
 
 #[test]

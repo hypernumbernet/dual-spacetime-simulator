@@ -472,14 +472,6 @@ impl Default for UiState {
 }
 
 impl UiState {
-    /// Minimum particle count required before simulation can start.
-    pub const MIN_PARTICLES_TO_START: u32 = 2;
-
-    /// Returns whether the simulation has enough particles to start advancing.
-    pub fn can_start_simulation(particle_count: u32) -> bool {
-        particle_count >= Self::MIN_PARTICLES_TO_START
-    }
-
     /// Returns the open-state flag for the given panel kind.
     pub fn panel_open_mut(&mut self, panel: PanelKind) -> &mut bool {
         match panel {
@@ -498,8 +490,7 @@ impl UiState {
     pub fn add_particle_count_range(remaining: u32) -> Option<std::ops::RangeInclusive<u32>> {
         match remaining {
             0 => None,
-            1 => Some(1..=1),
-            n => Some(2..=n),
+            n => Some(1..=n),
         }
     }
 
