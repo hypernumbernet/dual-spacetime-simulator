@@ -22,6 +22,7 @@ use crate::simulation::SimulationManager;
 use crate::ui::{draw_ui, process_pending_particle_delete, process_pending_snapshot_dialog};
 use crate::ui_state::{DragOwner, PlacementMode, UiState};
 use ash::vk;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -343,6 +344,7 @@ pub struct App {
     last_right_click_pos: Option<(f64, f64)>,
     settings: AppSettings,
     drag_owner: DragOwner,
+    held_keys: HashSet<KeyCode>,
 }
 
 impl Drop for App {
@@ -394,6 +396,7 @@ impl Default for App {
             last_right_click_pos: None,
             settings,
             drag_owner: DragOwner::None,
+            held_keys: HashSet::new(),
         }
     }
 }
@@ -493,15 +496,22 @@ impl ApplicationHandler for App {
 
         match &event {
             WindowEvent::KeyboardInput { event, .. } => {
-                // Pause shortcut that stays reachable even when heavy draw-skipping
-                // makes the egui controls hard to click.
-                if event.state == ElementState::Pressed
-                    && matches!(
-                        event.physical_key,
-                        PhysicalKey::Code(KeyCode::Escape) | PhysicalKey::Code(KeyCode::Pause)
-                    )
-                {
-                    self.ui_state.write().unwrap().is_running = false;
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    match event.state {
+                        ElementState::Pressed => {
+                            self.held_keys.insert(code);
+                        }
+                        ElementState::Released => {
+                            self.held_keys.remove(&code);
+                        }
+                    }
+                    // Pause shortcut that stays reachable even when heavy draw-skipping
+                    // makes the egui controls hard to click.
+                    if event.state == ElementState::Pressed
+                        && matches!(code, KeyCode::Escape | KeyCode::Pause)
+                    {
+                        self.ui_state.write().unwrap().is_running = false;
+                    }
                 }
             }
             WindowEvent::Resized(size) => {
@@ -737,6 +747,7 @@ impl ApplicationHandler for App {
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.update_animation();
         }
+        self.apply_keyboard_camera_controls();
         if *self.need_redraw.read().unwrap() == false && !self.gpu_particle_sync.has_pending_sync()
         {
             return;
@@ -796,6 +807,67 @@ impl App {
         drop(uis);
         if reload_requested && uses_gpu {
             self.gpu_particle_sync.request_full_upload();
+        }
+    }
+
+    /// Applies WASD pan, Q/E yaw, and Space/Shift vertical move when Lock Camera Up/Down is enabled.
+    fn apply_keyboard_camera_controls(&mut self) {
+        let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
+        if !lock_camera_up {
+            return;
+        }
+        if self
+            .gui
+            .as_ref()
+            .is_some_and(|gui| gui.keyboard_wants_input())
+        {
+            return;
+        }
+
+        let mut forward = 0.0f32;
+        let mut right = 0.0f32;
+        let mut yaw = 0.0f32;
+        let mut vertical = 0.0f32;
+        if self.held_keys.contains(&KeyCode::KeyW) {
+            forward += 1.0;
+        }
+        if self.held_keys.contains(&KeyCode::KeyS) {
+            forward -= 1.0;
+        }
+        if self.held_keys.contains(&KeyCode::KeyD) {
+            right += 1.0;
+        }
+        if self.held_keys.contains(&KeyCode::KeyA) {
+            right -= 1.0;
+        }
+        if self.held_keys.contains(&KeyCode::KeyQ) {
+            yaw -= 1.0;
+        }
+        if self.held_keys.contains(&KeyCode::KeyE) {
+            yaw += 1.0;
+        }
+        if self.held_keys.contains(&KeyCode::Space) {
+            vertical -= 1.0;
+        }
+        if self.held_keys.contains(&KeyCode::ShiftLeft)
+            || self.held_keys.contains(&KeyCode::ShiftRight)
+        {
+            vertical += 1.0;
+        }
+        if forward == 0.0 && right == 0.0 && yaw == 0.0 && vertical == 0.0 {
+            return;
+        }
+
+        if let Some(pipeline) = self.render_pipeline.as_mut() {
+            if forward != 0.0 || right != 0.0 {
+                pipeline.pan_camera_relative_xz(forward, right);
+            }
+            if yaw != 0.0 {
+                pipeline.orbit_camera_yaw(yaw);
+            }
+            if vertical != 0.0 {
+                pipeline.move_camera_y(vertical);
+            }
         }
     }
 

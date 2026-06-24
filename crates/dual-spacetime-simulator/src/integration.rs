@@ -93,6 +93,11 @@ impl Gui {
         self.egui_ctx.wants_pointer_input() || self.egui_ctx.is_pointer_over_area()
     }
 
+    /// Reports whether keyboard input should be captured by the GUI layer.
+    pub fn keyboard_wants_input(&self) -> bool {
+        self.egui_ctx.wants_keyboard_input()
+    }
+
     /// Begins an egui pass, runs immediate UI code, and keeps outputs for rendering.
     pub fn immediate_ui(&mut self, window: &Window, layout_function: impl FnOnce(&mut Self)) {
         let raw_input = self.egui_winit.take_egui_input(window);

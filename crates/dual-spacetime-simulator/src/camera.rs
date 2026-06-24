@@ -75,6 +75,32 @@ impl OrbitCamera {
         }
     }
 
+    /// Translates target and position together on the XZ plane, preserving orbit distance.
+    pub fn pan_xz(&mut self, delta: Vec3) {
+        let offset = Vec3::new(delta.x, 0.0, delta.z);
+        if offset.length_squared() <= EPSILON {
+            return;
+        }
+        self.target += offset;
+        self.position += offset;
+    }
+
+    /// Yaws the camera around the target while keeping the target fixed.
+    pub fn orbit_yaw(&mut self, delta_yaw: f32) {
+        self.revolve(delta_yaw, 0.0);
+    }
+
+    /// Moves the viewpoint along the world Y axis while keeping the target fixed.
+    pub fn move_position_y(&mut self, delta_y: f32) {
+        if delta_y.abs() <= EPSILON {
+            return;
+        }
+        self.position.y += delta_y;
+        if self.lock_up {
+            self.up = get_closest_perp_unit_to_y(self.position, self.target);
+        }
+    }
+
     /// Moves the camera toward or away from the target while preserving view direction.
     pub fn zoom(&mut self, zoom_factor: f32) {
         let direction = (self.target - self.position).normalize_or_zero();
