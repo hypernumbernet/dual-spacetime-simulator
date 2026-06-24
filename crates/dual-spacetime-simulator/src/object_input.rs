@@ -593,8 +593,10 @@ impl ObjectInput {
                     .map(|i| {
                         let theta = (i as f64) * TAU / (particle_count as f64);
                         let r = rng.random_range(radius * 0.1..radius);
+                        let r_over_radius = r / radius;
+                        let enclosed_fraction = r_over_radius * r_over_radius;
                         let speed_rate =
-                            (crate::simulation::G * total_mass * (r / radius) / r).sqrt();
+                            (crate::simulation::G * total_mass * enclosed_fraction / r).sqrt();
                         let y_thickness = normal.sample(&mut rng);
                         let pos = DVec3 {
                             x: r * theta.cos(),

@@ -260,3 +260,53 @@ fn get_scale_clamps_negative_input() {
     };
     assert_eq!(ic.get_scale(), MIN_WORLD_SCALE);
 }
+
+#[test]
+fn spiral_disk_initial_speed_scales_with_enclosed_mass() {
+    use dual_spacetime_simulator::simulation::G;
+
+    let scale = ObjectInputType::SpiralDisk.default_base_scale();
+    let input = ObjectInputType::SpiralDisk.to_object_input(scale);
+    let particle_count = 128u32;
+    let sim = input.generate_particles(particle_count);
+
+    let ObjectInput::SpiralDisk {
+        disk_radius,
+        mass_fixed,
+        ..
+    } = input
+    else {
+        panic!("expected SpiralDisk");
+    };
+
+    let radius = disk_radius / scale;
+    let mass = mass_fixed / (scale * scale * scale);
+    let total_mass = particle_count as f64 * mass;
+    let edge_speed = (G * total_mass / radius).sqrt();
+
+    let mut min_speed = f64::INFINITY;
+    let mut max_speed = 0.0_f64;
+
+    for particle in &sim.particles {
+        let r = (particle.position.x * particle.position.x
+            + particle.position.z * particle.position.z)
+            .sqrt();
+        assert!(r >= radius * 0.1 - 1e-9 && r <= radius + 1e-9);
+
+        let speed = particle.velocity.length();
+        let expected = edge_speed * (r / radius).sqrt();
+        assert!(
+            (speed - expected).abs() < 1e-9 * edge_speed.max(1.0),
+            "speed {speed} != expected {expected} at r={r}"
+        );
+
+        min_speed = min_speed.min(speed);
+        max_speed = max_speed.max(speed);
+    }
+
+    assert!(min_speed < max_speed);
+    let inner_expected = edge_speed * (0.1_f64).sqrt();
+    let outer_expected = edge_speed;
+    assert!((min_speed - inner_expected).abs() < 0.05 * edge_speed);
+    assert!((max_speed - outer_expected).abs() < 0.05 * edge_speed);
+}
