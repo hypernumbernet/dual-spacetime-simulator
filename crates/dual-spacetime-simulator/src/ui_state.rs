@@ -12,6 +12,8 @@ pub const DEFAULT_SCALE_UI: f64 = 5000.0;
 pub const DEFAULT_MAX_FPS: u32 = 60;
 pub const DEFAULT_SKIP_DRAWING_FRAMES: u32 = 0;
 pub const DEFAULT_ADD_PARTICLE_COUNT: u32 = 1000;
+/// Fixed inner width for Simulation, Settings, Object Input, and Particle Info panels.
+pub const INPUT_PANEL_WIDTH: f32 = 220.0;
 pub const BASE_SCALE_DRAG_SPEED: f64 = 0.01;
 /// Default satellite count for Satellite Orbit reset (Earth is added separately).
 pub const DEFAULT_SATELLITE_COUNT: u32 = 1000;
@@ -358,7 +360,6 @@ pub struct SelectedParticleInfo {
 }
 
 pub struct UiState {
-    pub input_panel_width: f32,
     pub min_window_width: f32,
     pub min_window_height: f32,
     pub add_particle_count: u32,
@@ -418,7 +419,6 @@ impl Default for UiState {
     /// Initializes UI state with startup defaults for simulation and panels.
     fn default() -> Self {
         Self {
-            input_panel_width: 200.0,
             min_window_width: 400.0,
             min_window_height: 300.0,
             add_particle_count: DEFAULT_ADD_PARTICLE_COUNT,

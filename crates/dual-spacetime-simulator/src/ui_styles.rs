@@ -266,9 +266,46 @@ const SLIDER_VALUE_MIN_RESERVE: f32 = 36.0;
 /// Width reserved for f64 panel sliders with two decimal places (e.g. "-10.00").
 const SLIDER_F64_VALUE_RESERVE_WIDTH: f32 = 48.0;
 
+/// Applies fixed width constraints for input-style panels.
+fn fixed_width_panel(window: egui::Window, width: f32) -> egui::Window {
+    window
+        .default_width(width)
+        .min_width(width)
+        .max_width(width)
+}
+
 /// Locks panel column width so later widgets cannot widen separators or buttons above.
-pub fn lock_panel_content_width(ui: &mut Ui) {
-    ui.set_max_width(ui.available_width());
+fn lock_panel_content_width(ui: &mut Ui, width: f32) {
+    ui.set_min_width(width);
+    ui.set_max_width(width);
+}
+
+/// Shows a fixed-width closable panel and locks its content column width.
+pub fn show_fixed_width_closable_window(
+    ctx: &egui::Context,
+    title: &'static str,
+    is_open: bool,
+    width: f32,
+    configure: impl FnOnce(egui::Window) -> egui::Window,
+    add_contents: impl FnOnce(&mut Ui),
+) -> bool {
+    show_closable_window(
+        ctx,
+        title,
+        is_open,
+        true,
+        |window| {
+            configure(
+                fixed_width_panel(window, width)
+                    .resizable(false)
+                    .collapsible(true),
+            )
+        },
+        |ui| {
+            lock_panel_content_width(ui, width);
+            add_contents(ui);
+        },
+    )
 }
 
 /// Shows a closable window when `is_open` is true and returns the updated open state.

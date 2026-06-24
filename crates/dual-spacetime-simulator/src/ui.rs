@@ -12,7 +12,6 @@ use winit::window::Window;
 const MENU_POPUP_WIDTH: f32 = 180.0;
 const PANEL_DEFAULT_X: f32 = 16.0;
 const PANEL_MENU_OFFSET_Y: f32 = 16.0;
-
 /// Draws the full control UI and applies user edits to shared UI/application state.
 pub fn draw_ui(
     ui_state: &Arc<RwLock<UiState>>,
@@ -78,25 +77,18 @@ pub fn draw_ui(
         .rect
         .height();
 
-    let input_panel_width = uis.input_panel_width;
-
-    uis.is_simulation_panel_open = show_closable_window(
+    uis.is_simulation_panel_open = show_fixed_width_closable_window(
         ctx,
         "Simulation",
         uis.is_simulation_panel_open,
-        true,
+        INPUT_PANEL_WIDTH,
         |window| {
-            window
-                .resizable(false)
-                .collapsible(true)
-                .default_pos(egui::pos2(
-                    PANEL_DEFAULT_X,
-                    menu_bar_height + PANEL_MENU_OFFSET_Y,
-                ))
-                .default_width(input_panel_width)
+            window.default_pos(egui::pos2(
+                PANEL_DEFAULT_X,
+                menu_bar_height + PANEL_MENU_OFFSET_Y,
+            ))
         },
         |ui| {
-            lock_panel_content_width(ui);
             let particle_count = simulation_manager.read().unwrap().particle_count();
             ui.horizontal(|ui| {
                 label_normal(ui, "FPS");
@@ -181,17 +173,12 @@ pub fn draw_ui(
         },
     );
 
-    uis.is_settings_panel_open = show_closable_window(
+    uis.is_settings_panel_open = show_fixed_width_closable_window(
         ctx,
         "Settings",
         uis.is_settings_panel_open,
-        true,
-        |window| {
-            window
-                .resizable(false)
-                .collapsible(true)
-                .default_width(input_panel_width)
-        },
+        INPUT_PANEL_WIDTH,
+        |window| window,
         |ui| {
             dragvalue_normal(ui, &mut uis.min_window_width, 1.0, "Min Window Width");
             dragvalue_normal(ui, &mut uis.min_window_height, 1.0, "Min Window Height");
@@ -248,19 +235,13 @@ pub fn draw_ui(
         },
     );
 
-    uis.is_object_input_panel_open = show_closable_window(
+    uis.is_object_input_panel_open = show_fixed_width_closable_window(
         ctx,
         "Object Input",
         uis.is_object_input_panel_open,
-        true,
-        |window| {
-            window
-                .resizable(false)
-                .collapsible(true)
-                .default_width(input_panel_width)
-        },
+        INPUT_PANEL_WIDTH,
+        |window| window,
         |ui| {
-            lock_panel_content_width(ui);
             combobox_simulation_type(ui, &mut uis);
             ui.separator();
             combobox_computing_unit(ui, &mut uis);
@@ -426,20 +407,13 @@ fn particle_info_window(ctx: &egui::Context, uis: &mut UiState, selection: Optio
     let distance = position.length();
     let mass_kg = particle.mass * uis.base_scale.powi(3);
     let color_rgba = particle.color;
-
-    uis.is_particle_info_panel_open = show_closable_window(
+    uis.is_particle_info_panel_open = show_fixed_width_closable_window(
         ctx,
         "Particle Info",
         uis.is_particle_info_panel_open,
-        true,
-        |window| {
-            window
-                .resizable(false)
-                .collapsible(true)
-                .default_width(220.0)
-        },
+        INPUT_PANEL_WIDTH,
+        |window| window,
         |ui| {
-            lock_panel_content_width(ui);
             ui.horizontal(|ui| {
                 label_normal(ui, "Index");
                 label_indicator(ui, &index.to_string());
