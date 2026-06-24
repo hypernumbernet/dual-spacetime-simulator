@@ -109,3 +109,51 @@ fn move_position_y_zero_is_noop() {
     cam.move_position_y(0.0);
     assert!((cam.position - before_p).length() < 1e-5);
 }
+
+#[test]
+fn move_target_y_keeps_position_fixed() {
+    let position = Vec3::new(4.0, 1.0, 0.0);
+    let target = Vec3::new(1.0, -0.5, 2.0);
+    let mut cam = OrbitCamera::new(position, target);
+    cam.move_target_y(-0.7);
+    assert!((cam.position - position).length() < 1e-5);
+    assert!((cam.target.y - (-1.2)).abs() < 1e-5);
+}
+
+#[test]
+fn move_target_y_zero_is_noop() {
+    let pos = Vec3::new(2.0, 1.0, 3.0);
+    let target = Vec3::ZERO;
+    let mut cam = OrbitCamera::new(pos, target);
+    let before_t = cam.target;
+    cam.move_target_y(0.0);
+    assert!((cam.target - before_t).length() < 1e-5);
+}
+
+#[test]
+fn move_target_around_position_y_keeps_position_fixed() {
+    let position = Vec3::new(4.0, 1.0, 0.0);
+    let target = Vec3::new(1.0, -0.5, 2.0);
+    let mut cam = OrbitCamera::new(position, target);
+    cam.move_target_around_position_y(0.3);
+    assert!((cam.position - position).length() < 1e-5);
+}
+
+#[test]
+fn move_target_around_position_y_preserves_distance() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 2.0, 5.0), Vec3::ZERO);
+    let before = (cam.target - cam.position).length();
+    cam.move_target_around_position_y(0.4);
+    let after = (cam.target - cam.position).length();
+    assert!((before - after).abs() < 1e-5);
+}
+
+#[test]
+fn move_target_around_position_y_zero_is_noop() {
+    let pos = Vec3::new(2.0, 1.0, 3.0);
+    let target = Vec3::ZERO;
+    let mut cam = OrbitCamera::new(pos, target);
+    let before_t = cam.target;
+    cam.move_target_around_position_y(0.0);
+    assert!((cam.target - before_t).length() < 1e-5);
+}

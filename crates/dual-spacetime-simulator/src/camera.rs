@@ -101,6 +101,34 @@ impl OrbitCamera {
         }
     }
 
+    /// Moves the rotation center along the world Y axis while keeping the position fixed.
+    pub fn move_target_y(&mut self, delta_y: f32) {
+        if delta_y.abs() <= EPSILON {
+            return;
+        }
+        self.target.y += delta_y;
+        if self.lock_up {
+            self.up = get_closest_perp_unit_to_y(self.position, self.target);
+        }
+    }
+
+    /// Moves the rotation center around the vertical axis through the viewpoint.
+    pub fn move_target_around_position_y(&mut self, delta_yaw: f32) {
+        if delta_yaw.abs() <= EPSILON {
+            return;
+        }
+        let mut relative = self.target - self.position;
+        if relative.length_squared() <= EPSILON {
+            return;
+        }
+        let rotation = Quat::from_axis_angle(Vec3::Y, delta_yaw);
+        relative = rotation.mul_vec3(relative);
+        self.target = self.position + relative;
+        if self.lock_up {
+            self.up = get_closest_perp_unit_to_y(self.position, self.target);
+        }
+    }
+
     /// Moves the camera toward or away from the target while preserving view direction.
     pub fn zoom(&mut self, zoom_factor: f32) {
         let direction = (self.target - self.position).normalize_or_zero();

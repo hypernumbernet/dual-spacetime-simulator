@@ -810,7 +810,8 @@ impl App {
         }
     }
 
-    /// Applies WASD pan, Q/E yaw, and Space/Shift vertical move when Lock Camera Up/Down is enabled.
+    /// Applies WASD pan, Q/E yaw, Space/Shift vertical move, Arrow Up/Down target pitch,
+    /// and Arrow Left/Right target yaw when Lock Camera Up/Down is enabled.
     fn apply_keyboard_camera_controls(&mut self) {
         let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
         if !lock_camera_up {
@@ -828,6 +829,8 @@ impl App {
         let mut right = 0.0f32;
         let mut yaw = 0.0f32;
         let mut vertical = 0.0f32;
+        let mut target_vertical = 0.0f32;
+        let mut target_horizontal = 0.0f32;
         if self.held_keys.contains(&KeyCode::KeyW) {
             forward += 1.0;
         }
@@ -854,7 +857,25 @@ impl App {
         {
             vertical += 1.0;
         }
-        if forward == 0.0 && right == 0.0 && yaw == 0.0 && vertical == 0.0 {
+        if self.held_keys.contains(&KeyCode::ArrowUp) {
+            target_vertical -= 1.0;
+        }
+        if self.held_keys.contains(&KeyCode::ArrowDown) {
+            target_vertical += 1.0;
+        }
+        if self.held_keys.contains(&KeyCode::ArrowLeft) {
+            target_horizontal += 1.0;
+        }
+        if self.held_keys.contains(&KeyCode::ArrowRight) {
+            target_horizontal -= 1.0;
+        }
+        if forward == 0.0
+            && right == 0.0
+            && yaw == 0.0
+            && vertical == 0.0
+            && target_vertical == 0.0
+            && target_horizontal == 0.0
+        {
             return;
         }
 
@@ -867,6 +888,12 @@ impl App {
             }
             if vertical != 0.0 {
                 pipeline.move_camera_y(vertical);
+            }
+            if target_vertical != 0.0 {
+                pipeline.move_camera_target_y(target_vertical);
+            }
+            if target_horizontal != 0.0 {
+                pipeline.move_camera_target_around_position_y(target_horizontal);
             }
         }
     }

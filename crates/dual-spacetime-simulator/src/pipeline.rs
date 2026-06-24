@@ -14,8 +14,8 @@ use vulkanvil::{
 
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
 const MOUSE_RIGHT_DRAG_SENS: f32 = 0.001f32;
-const KEYBOARD_PAN_SPEED: f32 = 0.002f32;
-const KEYBOARD_ORBIT_YAW_SPEED: f32 = 0.02f32;
+const KEYBOARD_PAN_SPEED: f32 = 0.006f32;
+const KEYBOARD_ORBIT_YAW_SPEED: f32 = 0.03f32;
 const SIZE_RATIO: f32 = 0.06;
 const INITIAL_POSITION: Vec3 = Vec3::new(1.6, -1.6, 3.0);
 const INITIAL_TARGET: Vec3 = Vec3::new(0.0, 0.0, 0.0);
@@ -464,6 +464,25 @@ impl ParticleRenderPipeline {
         let distance = (self.camera.target - self.camera.position).length();
         let speed = distance * KEYBOARD_PAN_SPEED;
         self.camera.move_position_y(vertical * speed);
+    }
+
+    /// Moves the rotation center along the world Y axis from keyboard input (Arrow Up/Down).
+    pub fn move_camera_target_y(&mut self, vertical: f32) {
+        if vertical.abs() <= f32::EPSILON {
+            return;
+        }
+        let distance = (self.camera.target - self.camera.position).length();
+        let speed = distance * KEYBOARD_PAN_SPEED;
+        self.camera.move_target_y(vertical * speed);
+    }
+
+    /// Moves the rotation center around the viewpoint Y axis from keyboard input (Arrow Left/Right).
+    pub fn move_camera_target_around_position_y(&mut self, horizontal: f32) {
+        if horizontal.abs() <= f32::EPSILON {
+            return;
+        }
+        self.camera
+            .move_target_around_position_y(horizontal * KEYBOARD_ORBIT_YAW_SPEED);
     }
 
     /// Rotates camera roll around screen-center-aware gesture input.
