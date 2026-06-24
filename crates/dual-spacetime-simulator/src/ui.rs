@@ -244,7 +244,7 @@ pub fn draw_ui(
         |ui| {
             combobox_simulation_type(ui, &mut uis);
             ui.separator();
-            combobox_computing_unit(ui, &mut uis);
+            computing_unit_gpu_checkbox(ui, &mut uis);
             ui.separator();
             base_scale_input(ui, &mut uis);
             ui.separator();
@@ -586,18 +586,20 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
     uis.apply_simulation_type_change(previous_type);
 }
 
-/// Renders the computing-unit combo box and updates dependent UI state.
-fn combobox_computing_unit(ui: &mut egui::Ui, uis: &mut UiState) {
-    label_normal(ui, "Computing Unit");
+/// Renders the computing-unit GPU checkbox and updates dependent UI state.
+fn computing_unit_gpu_checkbox(ui: &mut egui::Ui, uis: &mut UiState) {
     let previous_unit = uis.computing_unit;
-    let id = ui.make_persistent_id("computing_unit_combobox");
-    ComboBox::from_id_salt(id)
-        .selected_text(format!("{}", uis.computing_unit))
-        .width(ui.available_width())
-        .show_ui(ui, |ui| {
-            selectable_value(ui, &mut uis.computing_unit, ComputingUnit::Cpu);
-            selectable_value(ui, &mut uis.computing_unit, ComputingUnit::Gpu);
-        });
+    ui.horizontal(|ui| {
+        label_normal(ui, "Computing Unit");
+        let mut gpu_enabled = uis.computing_unit == ComputingUnit::Gpu;
+        if ui.checkbox(&mut gpu_enabled, "GPU").changed() {
+            uis.computing_unit = if gpu_enabled {
+                ComputingUnit::Gpu
+            } else {
+                ComputingUnit::Cpu
+            };
+        }
+    });
     uis.apply_computing_unit_change(previous_unit);
 }
 

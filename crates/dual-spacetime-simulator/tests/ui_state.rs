@@ -67,18 +67,18 @@ fn clamp_add_particle_count_to_capacity_limits_batch_size() {
 fn computing_unit_change_held_until_reset() {
     let mut ui = UiState::default();
     assert!(ui.is_add_particles_enabled);
-    assert!(!ui.uses_gpu_simulation());
+    assert!(ui.uses_gpu_simulation());
 
-    ui.computing_unit = ComputingUnit::Gpu;
-    ui.apply_computing_unit_change(ComputingUnit::Cpu);
-    assert_eq!(ui.computing_unit, ComputingUnit::Gpu);
-    assert_eq!(ui.active_computing_unit, ComputingUnit::Cpu);
-    assert!(!ui.uses_gpu_simulation());
+    ui.computing_unit = ComputingUnit::Cpu;
+    ui.apply_computing_unit_change(ComputingUnit::Gpu);
+    assert_eq!(ui.computing_unit, ComputingUnit::Cpu);
+    assert_eq!(ui.active_computing_unit, ComputingUnit::Gpu);
+    assert!(ui.uses_gpu_simulation());
     assert!(!ui.is_add_particles_enabled);
 
     ui.request_reset();
-    assert_eq!(ui.active_computing_unit, ComputingUnit::Gpu);
-    assert!(ui.uses_gpu_simulation());
+    assert_eq!(ui.active_computing_unit, ComputingUnit::Cpu);
+    assert!(!ui.uses_gpu_simulation());
     assert!(ui.is_add_particles_enabled);
 }
 

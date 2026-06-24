@@ -227,13 +227,13 @@ impl SimulationType {
 
 #[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum ComputingUnit {
-    #[default]
     Cpu,
+    #[default]
     Gpu,
 }
 
 impl std::fmt::Display for ComputingUnit {
-    /// Formats computing unit for combo-box and labels.
+    /// Formats computing unit for labels and debug output.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
             ComputingUnit::Cpu => "CPU",
