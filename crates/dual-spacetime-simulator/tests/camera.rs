@@ -1,5 +1,63 @@
 use dual_spacetime_simulator::camera::OrbitCamera;
 use glam::Vec3;
+use std::thread;
+use std::time::Duration;
+
+fn run_origin_center_animation(cam: &mut OrbitCamera, steps: u32) {
+    cam.center_target_on_origin();
+    for _ in 0..steps {
+        thread::sleep(Duration::from_millis(10));
+        cam.update_animation();
+    }
+}
+
+#[test]
+fn center_target_on_origin_lock_up_preserves_distance() {
+    let pos = Vec3::new(4.0, 2.0, 6.0);
+    let target = Vec3::new(1.5, -0.5, 2.0);
+    let mut cam = OrbitCamera::new(pos, target);
+    cam.set_lock_up(true);
+    let initial_distance = (cam.target - cam.position).length();
+
+    run_origin_center_animation(&mut cam, 60);
+
+    let final_distance = (cam.target - cam.position).length();
+    assert!(
+        (initial_distance - final_distance).abs() < 1e-3,
+        "distance changed: {initial_distance} -> {final_distance}"
+    );
+    assert!(
+        cam.target.length() < 0.06,
+        "target not at origin: {:?}",
+        cam.target
+    );
+    let view_dir = (cam.target - cam.position).normalize();
+    let goal_dir = (-cam.position).normalize();
+    assert!(
+        view_dir.dot(goal_dir) > 0.99,
+        "view not aimed at origin: view={view_dir:?} goal={goal_dir:?}"
+    );
+}
+
+#[test]
+fn center_target_on_origin_lock_up_off_keeps_position_moves_target() {
+    let pos = Vec3::new(4.0, 2.0, 6.0);
+    let target = Vec3::new(1.5, -0.5, 2.0);
+    let mut cam = OrbitCamera::new(pos, target);
+
+    run_origin_center_animation(&mut cam, 30);
+
+    assert!(
+        (cam.position - pos).length() < 1e-3,
+        "position moved: {:?}",
+        cam.position
+    );
+    assert!(
+        cam.target.length() < target.length(),
+        "target did not move toward origin: {:?}",
+        cam.target
+    );
+}
 
 #[test]
 fn initial_up_orthogonal_to_view_ray() {
