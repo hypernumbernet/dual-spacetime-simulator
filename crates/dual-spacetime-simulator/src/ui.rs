@@ -423,7 +423,7 @@ fn particle_info_window(ctx: &egui::Context, uis: &mut UiState, selection: Optio
     let simulation_type = uis.simulation_type;
     let velocity_section_label = match simulation_type {
         SimulationType::LorentzTransformation => "Rapidity",
-        _ => "Velocity (m/s)",
+        _ => "Velocity (Base Scale Units/s)",
     };
     let magnitude_label = match simulation_type {
         SimulationType::LorentzTransformation => "|η|",
@@ -434,6 +434,7 @@ fn particle_info_window(ctx: &egui::Context, uis: &mut UiState, selection: Optio
     let velocity = particle.velocity;
     let speed = velocity.length();
     let distance = position.length();
+    let mass_kg = particle.mass * uis.base_scale.powi(3);
     let color_rgba = particle.color;
 
     uis.is_particle_info_panel_open = show_closable_window(
@@ -455,10 +456,10 @@ fn particle_info_window(ctx: &egui::Context, uis: &mut UiState, selection: Optio
             });
             ui.horizontal(|ui| {
                 label_normal(ui, "Mass (kg)");
-                label_indicator(ui, &format_particle_info_value(particle.mass));
+                label_indicator(ui, &format_drag_value(mass_kg));
             });
             ui.separator();
-            label_normal(ui, "Position (m)");
+            label_normal(ui, "Position (Base Scale Units)");
             ui.horizontal(|ui| {
                 label_normal(ui, "X");
                 label_indicator(ui, &format_particle_info_value(position.x));
