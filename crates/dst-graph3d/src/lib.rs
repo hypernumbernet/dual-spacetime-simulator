@@ -28,6 +28,7 @@ use winit::{
     error::EventLoopError,
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
 
@@ -387,6 +388,15 @@ impl ApplicationHandler for App {
                             pipeline.zoom_camera(*y as f32 * 0.1);
                         }
                     }
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(KeyCode::Home) = event.physical_key
+                    && event.state == ElementState::Pressed
+                    && !event.repeat
+                    && !gui.keyboard_wants_input()
+                {
+                    pipeline.center_target_on_origin();
                 }
             }
             _ => {}

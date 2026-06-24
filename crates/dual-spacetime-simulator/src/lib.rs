@@ -720,6 +720,15 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(KeyCode::Home) = event.physical_key
+                    && event.state == ElementState::Pressed
+                    && !event.repeat
+                    && !gui.keyboard_wants_input()
+                {
+                    pipeline.center_target_on_origin();
+                }
+            }
             _ => {}
         }
     }
