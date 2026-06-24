@@ -712,12 +712,10 @@ impl ApplicationHandler for App {
                 if !ui_wants_pointer && !ui_consumed {
                     match delta {
                         MouseScrollDelta::LineDelta(_, y) => {
-                            let zoom_factor = y * 0.1;
-                            pipeline.zoom_camera(zoom_factor);
+                            pipeline.move_camera_forward(*y);
                         }
                         MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                            let zoom_factor = y * 0.1;
-                            pipeline.zoom_camera(zoom_factor as f32);
+                            pipeline.move_camera_forward(*y as f32);
                         }
                     }
                 }

@@ -129,6 +129,17 @@ impl OrbitCamera {
         }
     }
 
+    /// Translates position and target together along the view direction.
+    pub fn move_forward(&mut self, delta: f32) {
+        let direction = (self.target - self.position).normalize_or_zero();
+        if direction == Vec3::ZERO || delta.abs() <= EPSILON {
+            return;
+        }
+        let offset = direction * delta;
+        self.position += offset;
+        self.target += offset;
+    }
+
     /// Moves the camera toward or away from the target while preserving view direction.
     pub fn zoom(&mut self, zoom_factor: f32) {
         let direction = (self.target - self.position).normalize_or_zero();

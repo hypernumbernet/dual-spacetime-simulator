@@ -12,6 +12,40 @@ fn initial_up_orthogonal_to_view_ray() {
 }
 
 #[test]
+fn move_forward_preserves_distance() {
+    let mut cam = OrbitCamera::new(Vec3::new(1.0, 2.0, 5.0), Vec3::new(0.5, -1.0, 1.0));
+    let before = (cam.target - cam.position).length();
+    cam.move_forward(0.7);
+    let after = (cam.target - cam.position).length();
+    assert!((before - after).abs() < 1e-5);
+}
+
+#[test]
+fn move_forward_moves_both() {
+    let pos = Vec3::new(1.0, 2.0, 5.0);
+    let target = Vec3::new(0.5, -1.0, 1.0);
+    let mut cam = OrbitCamera::new(pos, target);
+    let direction = (target - pos).normalize();
+    let delta = 0.7;
+    cam.move_forward(delta);
+    let offset = direction * delta;
+    assert!((cam.position - (pos + offset)).length() < 1e-5);
+    assert!((cam.target - (target + offset)).length() < 1e-5);
+}
+
+#[test]
+fn move_forward_zero_is_noop() {
+    let pos = Vec3::new(2.0, 1.0, 3.0);
+    let target = Vec3::ZERO;
+    let mut cam = OrbitCamera::new(pos, target);
+    let before_p = cam.position;
+    let before_t = cam.target;
+    cam.move_forward(0.0);
+    assert!((cam.position - before_p).length() < 1e-5);
+    assert!((cam.target - before_t).length() < 1e-5);
+}
+
+#[test]
 fn zoom_clamps_distance() {
     let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
     cam.zoom(1000.0);

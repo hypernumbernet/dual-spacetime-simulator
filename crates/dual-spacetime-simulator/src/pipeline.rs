@@ -15,6 +15,7 @@ use vulkanvil::{
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
 const MOUSE_RIGHT_DRAG_SENS: f32 = 0.001f32;
 const KEYBOARD_PAN_SPEED: f32 = 0.006f32;
+const MOUSE_WHEEL_FORWARD_SPEED: f32 = 0.03f32;
 const KEYBOARD_ORBIT_YAW_SPEED: f32 = 0.03f32;
 const SIZE_RATIO: f32 = 0.06;
 const INITIAL_POSITION: Vec3 = Vec3::new(1.6, -1.6, 3.0);
@@ -427,6 +428,16 @@ impl ParticleRenderPipeline {
     /// Applies camera zoom toward or away from target.
     pub fn zoom_camera(&mut self, zoom_factor: f32) {
         self.camera.zoom(zoom_factor);
+    }
+
+    /// Moves position and target together along the view direction.
+    pub fn move_camera_forward(&mut self, forward: f32) {
+        if forward.abs() <= f32::EPSILON {
+            return;
+        }
+        let distance = (self.camera.target - self.camera.position).length();
+        let speed = distance * MOUSE_WHEEL_FORWARD_SPEED;
+        self.camera.move_forward(forward * speed);
     }
 
     /// Pans target and position on the XZ plane using camera-relative forward/right axes.
