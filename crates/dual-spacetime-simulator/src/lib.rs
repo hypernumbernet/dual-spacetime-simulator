@@ -1,7 +1,6 @@
 //! Library crate for `dual-spacetime-simulator` (binary entry in `main.rs`).
 //! Exposes modules for integration tests under `tests/`.
 
-pub mod camera;
 pub mod gpu_simulation;
 pub mod integration;
 pub mod object_input;
@@ -22,11 +21,10 @@ use crate::simulation::SimulationManager;
 use crate::ui::{draw_ui, process_pending_particle_delete, process_pending_snapshot_dialog};
 use crate::ui_state::{DragOwner, PlacementMode, UiState};
 use ash::vk;
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use vulkanvil::VulkanBase;
+use vulkanvil::{InputState, VulkanBase};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalPosition,
@@ -344,7 +342,7 @@ pub struct App {
     last_right_click_pos: Option<(f64, f64)>,
     settings: AppSettings,
     drag_owner: DragOwner,
-    held_keys: HashSet<KeyCode>,
+    input: InputState,
 }
 
 impl Drop for App {
@@ -396,7 +394,7 @@ impl Default for App {
             last_right_click_pos: None,
             settings,
             drag_owner: DragOwner::None,
-            held_keys: HashSet::new(),
+            input: InputState::default(),
         }
     }
 }
@@ -497,14 +495,7 @@ impl ApplicationHandler for App {
         match &event {
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    match event.state {
-                        ElementState::Pressed => {
-                            self.held_keys.insert(code);
-                        }
-                        ElementState::Released => {
-                            self.held_keys.remove(&code);
-                        }
-                    }
+                    self.input.key_event(code, event.state);
                     // Pause shortcut that stays reachable even when heavy draw-skipping
                     // makes the egui controls hard to click.
                     if event.state == ElementState::Pressed
@@ -821,87 +812,12 @@ impl App {
     /// and Arrow Left/Right target yaw when Lock Camera Up/Down is enabled.
     fn apply_keyboard_camera_controls(&mut self) {
         let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
-        if !lock_camera_up {
-            return;
-        }
-        if self
+        let keyboard_blocked = self
             .gui
             .as_ref()
-            .is_some_and(|gui| gui.keyboard_wants_input())
-        {
-            return;
-        }
-
-        let mut forward = 0.0f32;
-        let mut right = 0.0f32;
-        let mut yaw = 0.0f32;
-        let mut vertical = 0.0f32;
-        let mut target_vertical = 0.0f32;
-        let mut target_horizontal = 0.0f32;
-        if self.held_keys.contains(&KeyCode::KeyW) {
-            forward += 1.0;
-        }
-        if self.held_keys.contains(&KeyCode::KeyS) {
-            forward -= 1.0;
-        }
-        if self.held_keys.contains(&KeyCode::KeyD) {
-            right += 1.0;
-        }
-        if self.held_keys.contains(&KeyCode::KeyA) {
-            right -= 1.0;
-        }
-        if self.held_keys.contains(&KeyCode::KeyQ) {
-            yaw -= 1.0;
-        }
-        if self.held_keys.contains(&KeyCode::KeyE) {
-            yaw += 1.0;
-        }
-        if self.held_keys.contains(&KeyCode::Space) {
-            vertical -= 1.0;
-        }
-        if self.held_keys.contains(&KeyCode::ShiftLeft)
-            || self.held_keys.contains(&KeyCode::ShiftRight)
-        {
-            vertical += 1.0;
-        }
-        if self.held_keys.contains(&KeyCode::ArrowUp) {
-            target_vertical -= 1.0;
-        }
-        if self.held_keys.contains(&KeyCode::ArrowDown) {
-            target_vertical += 1.0;
-        }
-        if self.held_keys.contains(&KeyCode::ArrowLeft) {
-            target_horizontal += 1.0;
-        }
-        if self.held_keys.contains(&KeyCode::ArrowRight) {
-            target_horizontal -= 1.0;
-        }
-        if forward == 0.0
-            && right == 0.0
-            && yaw == 0.0
-            && vertical == 0.0
-            && target_vertical == 0.0
-            && target_horizontal == 0.0
-        {
-            return;
-        }
-
+            .is_some_and(|gui| gui.keyboard_wants_input());
         if let Some(pipeline) = self.render_pipeline.as_mut() {
-            if forward != 0.0 || right != 0.0 {
-                pipeline.pan_camera_relative_xz(forward, right);
-            }
-            if yaw != 0.0 {
-                pipeline.orbit_camera_yaw(yaw);
-            }
-            if vertical != 0.0 {
-                pipeline.move_camera_y(vertical);
-            }
-            if target_vertical != 0.0 {
-                pipeline.move_camera_target_y(target_vertical);
-            }
-            if target_horizontal != 0.0 {
-                pipeline.move_camera_target_around_position_y(target_horizontal);
-            }
+            pipeline.apply_keyboard_controls(&self.input, lock_camera_up, keyboard_blocked);
         }
     }
 

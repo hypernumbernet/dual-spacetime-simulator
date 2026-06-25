@@ -8,6 +8,7 @@ name = "vulkanvil"
 path = "src/lib.rs"
 
 [dependencies]
+glam.workspace = true
 ash.workspace = true
 ash-window.workspace = true
 bytemuck.workspace = true

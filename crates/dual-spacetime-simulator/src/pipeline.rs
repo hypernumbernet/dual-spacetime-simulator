@@ -1,4 +1,3 @@
-use crate::camera::OrbitCamera;
 use crate::gpu_simulation::{GpuParticleSimulation, create_particle_descriptor_set_layout};
 use crate::integration::Gui;
 use crate::simulation::Particle;
@@ -8,15 +7,13 @@ use glam::{Mat4, Vec3, Vec4};
 use gpu_allocator::vulkan::Allocator;
 use std::sync::{Arc, Mutex};
 use vulkanvil::{
-    AllocatedBuffer, AllocatedImage, VulkanBase, create_buffer_with_data, create_depth_image,
-    create_shader_module, select_depth_format,
+    AllocatedBuffer, AllocatedImage, InputState, OrbitCamera, VulkanBase, apply_orbit_keyboard,
+    apply_wheel_forward, create_buffer_with_data, create_depth_image, create_shader_module,
+    select_depth_format,
 };
 
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
 const MOUSE_RIGHT_DRAG_SENS: f32 = 0.001f32;
-const KEYBOARD_PAN_SPEED: f32 = 0.006f32;
-const MOUSE_WHEEL_FORWARD_SPEED: f32 = 0.03f32;
-const KEYBOARD_ORBIT_YAW_SPEED: f32 = 0.03f32;
 const SIZE_RATIO: f32 = 0.06;
 const INITIAL_POSITION: Vec3 = Vec3::new(1.6, -1.6, 3.0);
 const INITIAL_TARGET: Vec3 = Vec3::new(0.0, 0.0, 0.0);
@@ -432,68 +429,22 @@ impl ParticleRenderPipeline {
 
     /// Moves position and target together along the view direction.
     pub fn move_camera_forward(&mut self, forward: f32) {
-        if forward.abs() <= f32::EPSILON {
-            return;
-        }
-        let distance = (self.camera.target - self.camera.position).length();
-        let speed = distance * MOUSE_WHEEL_FORWARD_SPEED;
-        self.camera.move_forward(forward * speed);
+        apply_wheel_forward(&mut self.camera, forward);
     }
 
-    /// Pans target and position on the XZ plane using camera-relative forward/right axes.
-    pub fn pan_camera_relative_xz(&mut self, forward: f32, right: f32) {
-        if forward.abs() <= f32::EPSILON && right.abs() <= f32::EPSILON {
-            return;
-        }
-        let view = (self.camera.target - self.camera.position).normalize_or_zero();
-        let mut forward_xz = Vec3::new(view.x, 0.0, view.z);
-        if forward_xz.length_squared() <= f32::EPSILON {
-            forward_xz = Vec3::NEG_Z;
-        } else {
-            forward_xz = forward_xz.normalize();
-        }
-        let right_xz = forward_xz.cross(Vec3::Y).normalize();
-        let distance = (self.camera.target - self.camera.position).length();
-        let speed = distance * KEYBOARD_PAN_SPEED;
-        let offset = (forward_xz * forward + right_xz * right) * speed;
-        self.camera.pan_xz(offset);
-    }
-
-    /// Yaws the camera around the target from keyboard input (Q/E).
-    pub fn orbit_camera_yaw(&mut self, yaw: f32) {
-        if yaw.abs() <= f32::EPSILON {
-            return;
-        }
-        self.camera.orbit_yaw(yaw * KEYBOARD_ORBIT_YAW_SPEED);
-    }
-
-    /// Moves the viewpoint along the world Y axis from keyboard input (Space/Shift).
-    pub fn move_camera_y(&mut self, vertical: f32) {
-        if vertical.abs() <= f32::EPSILON {
-            return;
-        }
-        let distance = (self.camera.target - self.camera.position).length();
-        let speed = distance * KEYBOARD_PAN_SPEED;
-        self.camera.move_position_y(vertical * speed);
-    }
-
-    /// Moves the rotation center along the world Y axis from keyboard input (Arrow Up/Down).
-    pub fn move_camera_target_y(&mut self, vertical: f32) {
-        if vertical.abs() <= f32::EPSILON {
-            return;
-        }
-        let distance = (self.camera.target - self.camera.position).length();
-        let speed = distance * KEYBOARD_PAN_SPEED;
-        self.camera.move_target_y(vertical * speed);
-    }
-
-    /// Moves the rotation center around the viewpoint Y axis from keyboard input (Arrow Left/Right).
-    pub fn move_camera_target_around_position_y(&mut self, horizontal: f32) {
-        if horizontal.abs() <= f32::EPSILON {
-            return;
-        }
-        self.camera
-            .move_target_around_position_y(horizontal * KEYBOARD_ORBIT_YAW_SPEED);
+    /// Applies keyboard orbit camera controls from held keys.
+    pub fn apply_keyboard_controls(
+        &mut self,
+        input: &InputState,
+        lock_camera_up: bool,
+        keyboard_blocked: bool,
+    ) -> bool {
+        apply_orbit_keyboard(
+            &mut self.camera,
+            input,
+            lock_camera_up,
+            keyboard_blocked,
+        )
     }
 
     /// Rotates camera roll around screen-center-aware gesture input.

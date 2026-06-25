@@ -2689,6 +2689,7 @@ dependencies = [
  "ash",
  "ash-window",
  "bytemuck",
+ "glam",
  "gpu-allocator",
  "raw-window-handle",
  "winit",

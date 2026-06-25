@@ -1,7 +1,6 @@
 //! Library crate for `dst-graph3d` (binary entry in `main.rs`).
 //! Exposes modules for integration tests under `tests/`.
 
-pub mod camera;
 pub mod display_buffer;
 pub mod graph3d;
 pub mod integration;
@@ -21,7 +20,7 @@ use ash::vk;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use vulkanvil::VulkanBase;
+use vulkanvil::{InputState, VulkanBase};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalPosition,
@@ -90,6 +89,7 @@ pub struct App {
     graph3d_build_target_fp: Option<u64>,
     graph3d_pending_rx: Option<Receiver<Graph3dBuildResult>>,
     drag_owner: DragOwner,
+    input: InputState,
 }
 
 impl Drop for App {
@@ -145,6 +145,7 @@ impl Default for App {
             graph3d_build_target_fp: None,
             graph3d_pending_rx: None,
             drag_owner: DragOwner::None,
+            input: InputState::default(),
         }
     }
 }
@@ -382,21 +383,24 @@ impl ApplicationHandler for App {
                 if !ui_wants_pointer && !ui_consumed {
                     match delta {
                         MouseScrollDelta::LineDelta(_, y) => {
-                            pipeline.zoom_camera(y * 0.1);
+                            pipeline.move_camera_forward(*y);
                         }
                         MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                            pipeline.zoom_camera(*y as f32 * 0.1);
+                            pipeline.move_camera_forward(*y as f32);
                         }
                     }
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if let PhysicalKey::Code(KeyCode::Home) = event.physical_key
-                    && event.state == ElementState::Pressed
-                    && !event.repeat
-                    && !gui.keyboard_wants_input()
-                {
-                    pipeline.center_target_on_origin();
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    self.input.key_event(code, event.state);
+                    if event.physical_key == PhysicalKey::Code(KeyCode::Home)
+                        && event.state == ElementState::Pressed
+                        && !event.repeat
+                        && !gui.keyboard_wants_input()
+                    {
+                        pipeline.center_target_on_origin();
+                    }
                 }
             }
             _ => {}
@@ -405,10 +409,14 @@ impl ApplicationHandler for App {
 
     /// Performs per-frame updates before the event loop waits for new events.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
+        let keyboard_blocked = self
+            .gui
+            .as_ref()
+            .is_some_and(|gui| gui.keyboard_wants_input());
         if let Some(pipeline) = self.render_pipeline.as_mut() {
-            if pipeline.is_animating() {
-                pipeline.update_animation();
-            }
+            pipeline.update_animation();
+            pipeline.apply_keyboard_controls(&self.input, lock_camera_up, keyboard_blocked);
         }
 
         let uis = self.ui_state.read().unwrap();

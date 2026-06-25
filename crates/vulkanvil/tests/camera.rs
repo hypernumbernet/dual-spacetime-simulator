@@ -1,7 +1,7 @@
-use dual_spacetime_simulator::camera::OrbitCamera;
 use glam::Vec3;
 use std::thread;
 use std::time::Duration;
+use vulkanvil::OrbitCamera;
 
 fn run_origin_center_animation(cam: &mut OrbitCamera, steps: u32) {
     cam.center_target_on_origin();
