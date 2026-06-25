@@ -25,8 +25,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use vulkanvil::{
-    InputState, VulkanBase, apply_spacecraft_mouse_left, apply_spacecraft_mouse_right,
-    apply_spacecraft_wheel_thrust, apply_wheel_forward, tick_orbit_camera, tick_spacecraft_camera,
+    InputState, VulkanBase, apply_camera_mouse_wheel, apply_spacecraft_mouse_right,
+    spacecraft_scene_wheel_allowed, spacecraft_steer_offset, tick_orbit_camera,
+    tick_spacecraft_steer_and_motion, toggle_spacecraft_steer_anchor as toggle_steer_anchor,
 };
 use winit::{
     application::ApplicationHandler,
@@ -646,6 +647,15 @@ impl ApplicationHandler for App {
                         match button {
                             MouseButton::Left => {
                                 self.drag_owner = DragOwner::PendingSceneLeft;
+                                if !self.ui_state.read().unwrap().lock_camera_up {
+                                    if let Some(pos) = self.last_cursor_position {
+                                        Self::toggle_spacecraft_steer_anchor(
+                                            window,
+                                            &self.ui_state,
+                                            pos,
+                                        );
+                                    }
+                                }
                                 self.left_button(state);
                             }
                             MouseButton::Right => {
@@ -662,10 +672,11 @@ impl ApplicationHandler for App {
                 } else {
                     match button {
                         MouseButton::Left => {
+                            let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
                             let is_scene_click =
                                 matches!(self.drag_owner, DragOwner::PendingSceneLeft);
                             self.left_button(state);
-                            if is_scene_click {
+                            if is_scene_click && lock_camera_up {
                                 self.try_pick_particle();
                             }
                         }
@@ -687,20 +698,13 @@ impl ApplicationHandler for App {
                     }
                     self.drag_owner = new_owner;
                 }
+                let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
                 if let Some((lx, ly)) = self.last_cursor_position {
-                    let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
                     match self.drag_owner {
-                        DragOwner::SceneLeft => {
-                            if lock_camera_up {
-                                pipeline.revolve_camera(x - lx, y - ly);
-                            } else {
-                                apply_spacecraft_mouse_left(
-                                    pipeline.camera_mut(),
-                                    (x - lx) as f32,
-                                    (y - ly) as f32,
-                                );
-                            }
+                        DragOwner::SceneLeft if lock_camera_up => {
+                            pipeline.revolve_camera(x - lx, y - ly);
                         }
+                        DragOwner::SceneLeft => {}
                         DragOwner::SceneRight => {
                             if lock_camera_up {
                                 pipeline.look_around(x - lx, y - ly);
@@ -728,22 +732,25 @@ impl ApplicationHandler for App {
                 self.last_cursor_position = Some((x, y));
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                if !ui_wants_pointer && !ui_consumed {
-                    let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
+                let (lock_camera_up, steer_anchor_active) = {
+                    let ui = self.ui_state.read().unwrap();
+                    (ui.lock_camera_up, ui.spacecraft_steer_anchor.is_some())
+                };
+                if spacecraft_scene_wheel_allowed(
+                    lock_camera_up,
+                    steer_anchor_active,
+                    ui_wants_pointer || ui_consumed,
+                ) {
                     match delta {
                         MouseScrollDelta::LineDelta(_, y) => {
-                            if lock_camera_up {
-                                apply_wheel_forward(pipeline.camera_mut(), *y);
-                            } else {
-                                apply_spacecraft_wheel_thrust(pipeline.camera_mut(), *y);
-                            }
+                            apply_camera_mouse_wheel(pipeline.camera_mut(), lock_camera_up, *y);
                         }
                         MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                            if lock_camera_up {
-                                apply_wheel_forward(pipeline.camera_mut(), *y as f32);
-                            } else {
-                                apply_spacecraft_wheel_thrust(pipeline.camera_mut(), *y as f32);
-                            }
+                            apply_camera_mouse_wheel(
+                                pipeline.camera_mut(),
+                                lock_camera_up,
+                                *y as f32,
+                            );
                         }
                     }
                 }
@@ -779,16 +786,21 @@ impl ApplicationHandler for App {
             window.request_redraw();
         }
         self.apply_pending_particle_buffer_reload();
-        if let Some(pipeline) = self.render_pipeline.as_mut() {
-            let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
-            let keyboard_blocked = self
-                .gui
-                .as_ref()
-                .is_some_and(|gui| gui.keyboard_wants_input());
-            if self.last_lock_camera_up != Some(lock_camera_up) {
-                self.last_camera_tick = None;
-                self.last_lock_camera_up = Some(lock_camera_up);
+        let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
+        let keyboard_blocked = self
+            .gui
+            .as_ref()
+            .is_some_and(|gui| gui.keyboard_wants_input());
+        if self.last_lock_camera_up != Some(lock_camera_up) {
+            self.last_camera_tick = None;
+            self.last_lock_camera_up = Some(lock_camera_up);
+            if let Some(window) = self.window.as_ref() {
+                Self::sync_spacecraft_steer_anchor(window, &self.ui_state, None);
+            } else {
+                self.ui_state.write().unwrap().spacecraft_steer_anchor = None;
             }
+        }
+        if let Some(pipeline) = self.render_pipeline.as_mut() {
             if !lock_camera_up {
                 let now = Instant::now();
                 let dt = self
@@ -796,7 +808,11 @@ impl ApplicationHandler for App {
                     .map(|t| now.duration_since(t).as_secs_f32())
                     .unwrap_or(0.0);
                 self.last_camera_tick = Some(now);
-                tick_spacecraft_camera(pipeline.camera_mut(), dt);
+                let steer_offset = {
+                    let uis = self.ui_state.read().unwrap();
+                    spacecraft_steer_offset(uis.spacecraft_steer_anchor, self.last_cursor_position)
+                };
+                tick_spacecraft_steer_and_motion(pipeline.camera_mut(), steer_offset, dt);
             }
             tick_orbit_camera(
                 pipeline.camera_mut(),
@@ -856,6 +872,28 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    fn sync_spacecraft_steer_anchor(
+        window: &Window,
+        ui_state: &Arc<RwLock<UiState>>,
+        anchor: Option<(f64, f64)>,
+    ) {
+        ui_state.write().unwrap().spacecraft_steer_anchor = anchor.map(|(x, y)| [x, y]);
+        window.request_redraw();
+    }
+
+    /// Toggles the spacecraft steer anchor at the given cursor position.
+    fn toggle_spacecraft_steer_anchor(
+        window: &Window,
+        ui_state: &Arc<RwLock<UiState>>,
+        pos: (f64, f64),
+    ) {
+        {
+            let mut uis = ui_state.write().unwrap();
+            toggle_steer_anchor(&mut uis.spacecraft_steer_anchor, pos);
+        }
+        window.request_redraw();
+    }
+
     /// Applies a snapshot-load request by scheduling a full GPU particle upload.
     fn apply_pending_particle_buffer_reload(&mut self) {
         let mut uis = self.ui_state.write().unwrap();

@@ -294,6 +294,12 @@ pub fn draw_ui(
         resolve_selected_particle(&mut uis, &manager, render_pipeline)
     };
     particle_info_window(ctx, &mut uis, selection);
+
+    if !uis.lock_camera_up {
+        if let Some(anchor) = uis.spacecraft_steer_anchor {
+            draw_spacecraft_steer_marker(ctx, anchor);
+        }
+    }
 }
 
 const RESET_LOG_MONO_SIZE: f32 = 12.0;

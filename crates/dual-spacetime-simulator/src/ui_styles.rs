@@ -500,6 +500,34 @@ pub fn button_row_close_abort(
     .inner
 }
 
+const STEER_MARKER_RADIUS: f32 = 70.0;
+const STEER_MARKER_STROKE: f32 = 10.0;
+const STEER_MARKER_LAYER: &str = "spacecraft_steer_marker";
+
+/// Draws the spacecraft-mode steer anchor (⊕) fixed at a screen position.
+pub fn draw_spacecraft_steer_marker(ctx: &egui::Context, anchor: [f64; 2]) {
+    let pixels_per_point = ctx.pixels_per_point();
+    let center = egui::pos2(
+        (anchor[0] as f32) / pixels_per_point,
+        (anchor[1] as f32) / pixels_per_point,
+    );
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new(STEER_MARKER_LAYER),
+    ));
+    let stroke = egui::Stroke::new(STEER_MARKER_STROKE, egui::Color32::from_rgb(220, 220, 220));
+    painter.circle_stroke(center, STEER_MARKER_RADIUS, stroke);
+    let half = STEER_MARKER_RADIUS * 0.55;
+    painter.line_segment(
+        [center - egui::vec2(half, 0.0), center + egui::vec2(half, 0.0)],
+        stroke,
+    );
+    painter.line_segment(
+        [center - egui::vec2(0.0, half), center + egui::vec2(0.0, half)],
+        stroke,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

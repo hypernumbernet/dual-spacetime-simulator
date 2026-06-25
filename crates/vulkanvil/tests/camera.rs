@@ -251,20 +251,45 @@ fn move_target_around_position_y_zero_is_noop() {
 }
 
 use vulkanvil::{
-    apply_spacecraft_mouse_left, apply_spacecraft_mouse_right, apply_spacecraft_wheel_thrust,
-    reset_spacecraft_motion, tick_spacecraft_camera, THRUST_ACCEL, THRUST_DURATION,
-    VELOCITY_STEER_THRESHOLD,
+    apply_spacecraft_mouse_right, apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset,
+    apply_spacecraft_wheel_thrust, reset_spacecraft_motion, tick_spacecraft_camera, THRUST_ACCEL,
+    THRUST_DURATION, VELOCITY_STEER_THRESHOLD,
 };
 
 #[test]
-fn spacecraft_mouse_left_keeps_position_changes_orientation() {
+fn spacecraft_roll_pitch_keeps_position_changes_orientation() {
     let pos = Vec3::new(0.0, 0.0, 5.0);
     let target = Vec3::ZERO;
     let mut cam = OrbitCamera::new(pos, target);
     let before_up = cam.up;
-    apply_spacecraft_mouse_left(&mut cam, 10.0, 10.0);
+    apply_spacecraft_roll_pitch(&mut cam, 0.03, 0.03);
     assert!((cam.position - pos).length() < 1e-5);
     assert!((cam.target - target).length() > 1e-5 || !cam.up.abs_diff_eq(before_up, 1e-5));
+}
+
+#[test]
+fn spacecraft_steer_from_offset_zero_is_noop() {
+    let pos = Vec3::new(0.0, 0.0, 5.0);
+    let target = Vec3::ZERO;
+    let mut cam = OrbitCamera::new(pos, target);
+    let before_up = cam.up;
+    apply_spacecraft_steer_from_offset(&mut cam, 0.0, 0.0, 0.1);
+    assert!((cam.target - target).length() < 1e-5);
+    assert!(cam.up.abs_diff_eq(before_up, 1e-5));
+}
+
+#[test]
+fn spacecraft_steer_from_offset_proportional_to_offset() {
+    let pos = Vec3::new(0.0, 0.0, 5.0);
+    let target = Vec3::ZERO;
+    let mut cam_small = OrbitCamera::new(pos, target);
+    let mut cam_large = OrbitCamera::new(pos, target);
+    let dt = 0.1;
+    apply_spacecraft_steer_from_offset(&mut cam_small, 10.0, 0.0, dt);
+    apply_spacecraft_steer_from_offset(&mut cam_large, 20.0, 0.0, dt);
+    let delta_small = (cam_small.up - Vec3::Y).length();
+    let delta_large = (cam_large.up - Vec3::Y).length();
+    assert!(delta_large > delta_small);
 }
 
 #[test]
@@ -350,7 +375,7 @@ fn spacecraft_mouse_left_vertical_steers_velocity_when_moving() {
     let velocity_before = cam.velocity();
     assert!(velocity_before.length() > VELOCITY_STEER_THRESHOLD);
     let position_before = cam.position;
-    apply_spacecraft_mouse_left(&mut cam, 0.0, 50.0);
+    apply_spacecraft_steer_from_offset(&mut cam, 0.0, 50.0, 0.05);
     assert!((cam.position - position_before).length() < 1e-5);
     assert!(cam.velocity().length() > 1e-5);
     assert!(
@@ -366,19 +391,26 @@ fn spacecraft_mouse_left_vertical_steers_velocity_when_moving() {
 }
 
 #[test]
-fn spacecraft_mouse_left_vertical_turns_in_place_when_slow() {
+fn spacecraft_steer_from_offset_vertical_turns_in_place_when_slow() {
     let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
-    apply_spacecraft_wheel_thrust(&mut cam, 1.0);
-    tick_spacecraft_camera(&mut cam, 0.01);
     assert!(cam.velocity().length() < VELOCITY_STEER_THRESHOLD);
     let forward_before = (cam.target - cam.position).normalize();
-    apply_spacecraft_mouse_left(&mut cam, 0.0, 50.0);
+    apply_spacecraft_steer_from_offset(&mut cam, 0.0, 50.0, 0.05);
     assert_eq!(cam.velocity(), Vec3::ZERO);
     let forward_after = (cam.target - cam.position).normalize();
     assert!(
         (forward_after - forward_before).length() > 1e-3,
         "view direction unchanged"
     );
+}
+
+#[test]
+fn spacecraft_steer_from_offset_allows_thrust_while_pitched() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    apply_spacecraft_wheel_thrust(&mut cam, 1.0);
+    apply_spacecraft_steer_from_offset(&mut cam, 0.0, 50.0, 0.05);
+    tick_spacecraft_camera(&mut cam, 0.05);
+    assert!(cam.velocity().length() > 1e-4);
 }
 
 #[test]
@@ -406,8 +438,6 @@ fn spacecraft_mouse_right_horizontal_steers_velocity_when_moving() {
 #[test]
 fn spacecraft_mouse_right_horizontal_turns_in_place_when_slow() {
     let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
-    apply_spacecraft_wheel_thrust(&mut cam, 1.0);
-    tick_spacecraft_camera(&mut cam, 0.01);
     assert!(cam.velocity().length() < VELOCITY_STEER_THRESHOLD);
     let forward_before = (cam.target - cam.position).normalize();
     apply_spacecraft_mouse_right(&mut cam, 50.0);

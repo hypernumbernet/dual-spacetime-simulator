@@ -3,8 +3,10 @@ mod spacecraft;
 
 pub use orbit::OrbitCamera;
 pub use spacecraft::{
-    apply_spacecraft_mouse_left, apply_spacecraft_mouse_right, apply_spacecraft_wheel_thrust,
-    reset_spacecraft_motion, tick_spacecraft_camera, THRUST_ACCEL, THRUST_DURATION,
+    apply_spacecraft_mouse_right, apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset,
+    apply_spacecraft_wheel_thrust, reset_spacecraft_motion, spacecraft_scene_wheel_allowed,
+    spacecraft_steer_offset, tick_spacecraft_camera, tick_spacecraft_steer_and_motion,
+    toggle_spacecraft_steer_anchor, STEER_RATE_PER_PX, THRUST_ACCEL, THRUST_DURATION,
     VELOCITY_STEER_THRESHOLD,
 };
 
@@ -111,6 +113,15 @@ pub fn apply_orbit_keyboard(
     }
 
     true
+}
+
+/// Routes mouse-wheel input to orbit zoom or spacecraft thrust.
+pub fn apply_camera_mouse_wheel(camera: &mut OrbitCamera, lock_camera_up: bool, scroll_y: f32) {
+    if lock_camera_up {
+        apply_wheel_forward(camera, scroll_y);
+    } else {
+        apply_spacecraft_wheel_thrust(camera, scroll_y);
+    }
 }
 
 /// Moves the camera along the view direction by a wheel delta scaled to orbit distance.

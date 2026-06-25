@@ -123,6 +123,12 @@ pub fn draw_ui(
             ui.add(Slider::new(&mut uis.graph_sample_count, 1..=5000).drag_value_speed(1.0));
         },
     );
+
+    if !uis.lock_camera_up {
+        if let Some(anchor) = uis.spacecraft_steer_anchor {
+            draw_spacecraft_steer_marker(ctx, anchor);
+        }
+    }
 }
 
 fn combobox_particle_display_mode(ui: &mut egui::Ui, uis: &mut UiState) {

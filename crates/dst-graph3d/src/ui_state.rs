@@ -120,6 +120,8 @@ pub struct UiState {
     pub is_settings_panel_open: bool,
     pub start_maximized: bool,
     pub lock_camera_up: bool,
+    /// Screen position of the spacecraft steer anchor (⊕ marker), when active.
+    pub spacecraft_steer_anchor: Option<[f64; 2]>,
     pub mailbox_present_mode: bool,
     pub show_grid: bool,
     pub particle_display_mode: ParticleDisplayMode,
@@ -141,6 +143,7 @@ impl Default for UiState {
             is_settings_panel_open: false,
             start_maximized: false,
             lock_camera_up: true,
+            spacecraft_steer_anchor: None,
             mailbox_present_mode: false,
             show_grid: true,
             particle_display_mode: ParticleDisplayMode::default(),

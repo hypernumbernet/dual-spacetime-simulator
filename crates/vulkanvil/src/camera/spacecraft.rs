@@ -3,9 +3,10 @@ use glam::{Quat, Vec3};
 use std::f32::EPSILON;
 
 pub const THRUST_DURATION: f32 = 0.4;
-pub const THRUST_ACCEL: f32 = 2.0;
-pub const MOUSE_LEFT_DRAG_SENS: f32 = 0.003;
+pub const THRUST_ACCEL: f32 = 0.5;
 pub const MOUSE_RIGHT_DRAG_SENS: f32 = 0.001;
+/// Roll/pitch rate (rad/s) per pixel of offset from the steer anchor.
+pub const STEER_RATE_PER_PX: f32 = 0.005;
 /// Below this speed, mouse steering zeros velocity and turns view in place.
 pub const VELOCITY_STEER_THRESHOLD: f32 = 0.08;
 
@@ -61,9 +62,11 @@ fn steer_spacecraft(camera: &mut OrbitCamera, axis: Vec3, angle: f32) {
     let axis = axis.normalize();
     let rotation = Quat::from_axis_angle(axis, angle);
 
-    if camera.velocity.length_squared() <= VELOCITY_STEER_THRESHOLD_SQ {
+    if camera.thrust_remaining <= 0.0
+        && camera.velocity.length_squared() <= VELOCITY_STEER_THRESHOLD_SQ
+    {
         camera.velocity = Vec3::ZERO;
-    } else {
+    } else if camera.velocity.length_squared() > EPSILON {
         camera.velocity = rotation.mul_vec3(camera.velocity);
     }
 
@@ -76,10 +79,8 @@ fn steer_spacecraft(camera: &mut OrbitCamera, axis: Vec3, angle: f32) {
     camera.up = rotation.mul_vec3(camera.up);
 }
 
-/// Applies roll (horizontal drag) and steers velocity pitch (vertical drag).
-pub fn apply_spacecraft_mouse_left(camera: &mut OrbitCamera, dx: f32, dy: f32) {
-    let roll = -dx * MOUSE_LEFT_DRAG_SENS;
-    let pitch = -dy * MOUSE_LEFT_DRAG_SENS;
+/// Applies roll around the view axis and pitch around the view-right axis.
+pub fn apply_spacecraft_roll_pitch(camera: &mut OrbitCamera, roll: f32, pitch: f32) {
     if roll.abs() <= EPSILON && pitch.abs() <= EPSILON {
         return;
     }
@@ -103,6 +104,65 @@ pub fn apply_spacecraft_mouse_left(camera: &mut OrbitCamera, dx: f32, dy: f32) {
         }
         right = right.normalize();
         steer_spacecraft(camera, right, pitch);
+    }
+}
+
+/// Applies roll/pitch from offset (pixels) from a screen-fixed steer anchor.
+pub fn apply_spacecraft_steer_from_offset(
+    camera: &mut OrbitCamera,
+    offset_x: f32,
+    offset_y: f32,
+    dt: f32,
+) {
+    if dt <= EPSILON || (offset_x.abs() <= EPSILON && offset_y.abs() <= EPSILON) {
+        return;
+    }
+    let roll = -offset_x * STEER_RATE_PER_PX * dt;
+    let pitch = -offset_y * STEER_RATE_PER_PX * dt;
+    apply_spacecraft_roll_pitch(camera, roll, pitch);
+}
+
+/// Screen-space offset from a steer anchor to the cursor, in pixels.
+pub fn spacecraft_steer_offset(
+    anchor: Option<[f64; 2]>,
+    cursor: Option<(f64, f64)>,
+) -> Option<(f32, f32)> {
+    let [ax, ay] = anchor?;
+    let (cx, cy) = cursor?;
+    Some(((cx - ax) as f32, (cy - ay) as f32))
+}
+
+/// Toggles steer-anchor presence at `pos`.
+pub fn toggle_spacecraft_steer_anchor(anchor: &mut Option<[f64; 2]>, pos: (f64, f64)) {
+    if anchor.is_some() {
+        *anchor = None;
+    } else {
+        *anchor = Some([pos.0, pos.1]);
+    }
+}
+
+/// Applies anchor steering then integrates spacecraft motion for one frame.
+pub fn tick_spacecraft_steer_and_motion(
+    camera: &mut OrbitCamera,
+    steer_offset: Option<(f32, f32)>,
+    dt: f32,
+) {
+    if let Some((offset_x, offset_y)) = steer_offset {
+        apply_spacecraft_steer_from_offset(camera, offset_x, offset_y, dt);
+    }
+    tick_spacecraft_camera(camera, dt);
+}
+
+/// Returns whether mouse wheel should affect the 3D scene camera.
+pub fn spacecraft_scene_wheel_allowed(
+    lock_camera_up: bool,
+    steer_anchor_active: bool,
+    ui_blocks_pointer: bool,
+) -> bool {
+    if lock_camera_up {
+        !ui_blocks_pointer
+    } else {
+        steer_anchor_active || !ui_blocks_pointer
     }
 }
 
