@@ -25,5 +25,5 @@ gpu-allocator.workspace = true
 raw-window-handle.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-vulkanvil.workspace = true
+vulkanvil = { workspace = true, features = ["egui"] }
 winit.workspace = true

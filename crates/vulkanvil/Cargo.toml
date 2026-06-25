@@ -15,3 +15,8 @@ bytemuck.workspace = true
 gpu-allocator.workspace = true
 raw-window-handle.workspace = true
 winit.workspace = true
+egui = { version = "0.33", optional = true }
+
+[features]
+default = []
+egui = ["dep:egui"]

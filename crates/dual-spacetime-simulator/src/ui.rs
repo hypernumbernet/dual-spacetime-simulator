@@ -296,13 +296,13 @@ pub fn draw_ui(
     particle_info_window(ctx, &mut uis, selection);
 
     if !uis.lock_camera_up {
-        if uis.spacecraft_yaw_steer_anchor.is_none() {
-            if let Some(anchor) = uis.spacecraft_steer_anchor {
-                draw_spacecraft_steer_marker(ctx, anchor);
+        match uis.spacecraft_yaw_steer_anchor {
+            Some(anchor) => draw_spacecraft_yaw_steer_marker(ctx, anchor),
+            None => {
+                if let Some(anchor) = uis.spacecraft_steer_anchor {
+                    draw_spacecraft_steer_marker(ctx, anchor);
+                }
             }
-        }
-        if let Some(anchor) = uis.spacecraft_yaw_steer_anchor {
-            draw_spacecraft_yaw_steer_marker(ctx, anchor);
         }
     }
 }

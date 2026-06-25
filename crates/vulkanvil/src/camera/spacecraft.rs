@@ -112,10 +112,6 @@ pub fn apply_spacecraft_yaw_from_offset(camera: &mut OrbitCamera, offset_x: f32,
         return;
     }
     let yaw = -offset_x * STEER_RATE_PER_PX * dt;
-    let relative = camera.view_relative();
-    if relative.length_squared() <= EPSILON {
-        return;
-    }
     steer_spacecraft(camera, camera.up, yaw);
 }
 
@@ -144,6 +140,19 @@ pub fn spacecraft_steer_offset(
     Some(((cx - ax) as f32, (cy - ay) as f32))
 }
 
+/// Resolves yaw (⇔) and ⊕ steer inputs; yaw anchor takes priority over ⊕ anchor.
+pub fn spacecraft_steer_inputs(
+    yaw_anchor: Option<[f64; 2]>,
+    plus_anchor: Option<[f64; 2]>,
+    cursor: Option<(f64, f64)>,
+) -> (Option<f32>, Option<(f32, f32)>) {
+    if let Some((offset_x, _)) = spacecraft_steer_offset(yaw_anchor, cursor) {
+        (Some(offset_x), None)
+    } else {
+        (None, spacecraft_steer_offset(plus_anchor, cursor))
+    }
+}
+
 /// Toggles steer-anchor presence at `pos`.
 pub fn toggle_spacecraft_steer_anchor(anchor: &mut Option<[f64; 2]>, pos: (f64, f64)) {
     if anchor.is_some() {
@@ -169,6 +178,19 @@ pub fn tick_spacecraft_steer_and_motion(
         apply_spacecraft_steer_from_offset(camera, offset_x, offset_y, dt);
     }
     tick_spacecraft_camera(camera, dt);
+}
+
+/// Like [`tick_spacecraft_steer_and_motion`], resolving offsets from screen anchors.
+pub fn tick_spacecraft_steer_and_motion_from_anchors(
+    camera: &mut OrbitCamera,
+    yaw_anchor: Option<[f64; 2]>,
+    plus_anchor: Option<[f64; 2]>,
+    cursor: Option<(f64, f64)>,
+    dt: f32,
+) {
+    let (yaw_steer_offset_x, anchor_steer_offset) =
+        spacecraft_steer_inputs(yaw_anchor, plus_anchor, cursor);
+    tick_spacecraft_steer_and_motion(camera, yaw_steer_offset_x, anchor_steer_offset, dt);
 }
 
 /// Returns whether mouse wheel should affect the 3D scene camera.

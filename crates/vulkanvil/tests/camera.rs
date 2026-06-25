@@ -252,8 +252,9 @@ fn move_target_around_position_y_zero_is_noop() {
 
 use vulkanvil::{
     apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset, apply_spacecraft_wheel_thrust,
-    apply_spacecraft_yaw_from_offset, reset_spacecraft_motion, tick_spacecraft_camera,
-    tick_spacecraft_steer_and_motion, THRUST_ACCEL, THRUST_DURATION, VELOCITY_STEER_THRESHOLD,
+    apply_spacecraft_yaw_from_offset, reset_spacecraft_motion, spacecraft_steer_inputs,
+    tick_spacecraft_camera, tick_spacecraft_steer_and_motion_from_anchors, THRUST_ACCEL, THRUST_DURATION,
+    VELOCITY_STEER_THRESHOLD,
 };
 
 #[test]
@@ -455,12 +456,35 @@ fn spacecraft_yaw_from_offset_horizontal_turns_in_place_when_slow() {
 }
 
 #[test]
+fn spacecraft_steer_inputs_prioritizes_yaw_anchor() {
+    let yaw_anchor = Some([0.0, 0.0]);
+    let plus_anchor = Some([0.0, 0.0]);
+    let cursor = Some((50.0, 50.0));
+    let (yaw_x, plus_offset) = spacecraft_steer_inputs(yaw_anchor, plus_anchor, cursor);
+    assert_eq!(yaw_x, Some(50.0));
+    assert_eq!(plus_offset, None);
+}
+
+#[test]
 fn spacecraft_yaw_steer_priority_over_anchor() {
     let mut cam_yaw_only = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
     let mut cam_pitch_only = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
     let dt = 0.05;
-    tick_spacecraft_steer_and_motion(&mut cam_yaw_only, Some(50.0), Some((0.0, 50.0)), dt);
-    tick_spacecraft_steer_and_motion(&mut cam_pitch_only, None, Some((0.0, 50.0)), dt);
+    let cursor = Some((50.0, 50.0));
+    tick_spacecraft_steer_and_motion_from_anchors(
+        &mut cam_yaw_only,
+        Some([0.0, 0.0]),
+        Some([0.0, 0.0]),
+        cursor,
+        dt,
+    );
+    tick_spacecraft_steer_and_motion_from_anchors(
+        &mut cam_pitch_only,
+        None,
+        Some([0.0, 0.0]),
+        cursor,
+        dt,
+    );
     assert!(
         (cam_yaw_only.target.y - cam_pitch_only.target.y).abs() > 1e-3,
         "yaw priority should ignore anchor pitch"

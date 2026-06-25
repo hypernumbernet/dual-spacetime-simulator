@@ -22,7 +22,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use vulkanvil::{
     InputState, VulkanBase, apply_camera_mouse_wheel, spacecraft_scene_wheel_allowed,
-    spacecraft_steer_offset, tick_orbit_camera, tick_spacecraft_steer_and_motion,
+    tick_orbit_camera, tick_spacecraft_steer_and_motion_from_anchors,
     toggle_spacecraft_steer_anchor as toggle_steer_anchor,
 };
 use winit::{
@@ -402,7 +402,6 @@ impl ApplicationHandler for App {
                         DragOwner::SceneRight if lock_camera_up => {
                             pipeline.look_around(x - lx, y - ly);
                         }
-                        DragOwner::SceneRight => {}
                         DragOwner::SceneMiddle if lock_camera_up => {
                             let window_size = window.inner_size();
                             let center_x = window_size.width as f64 / 2.0;
@@ -412,6 +411,7 @@ impl ApplicationHandler for App {
                         DragOwner::None
                         | DragOwner::Ui
                         | DragOwner::SceneMiddle
+                        | DragOwner::SceneRight
                         | DragOwner::PendingSceneLeft
                         | DragOwner::PendingSceneRight
                         | DragOwner::PendingSceneMiddle => {}
@@ -481,8 +481,7 @@ impl ApplicationHandler for App {
             self.last_camera_tick = None;
             self.last_lock_camera_up = Some(lock_camera_up);
             if let Some(window) = self.window.as_ref() {
-                Self::sync_spacecraft_steer_anchor(window, &self.ui_state, None);
-                Self::sync_spacecraft_yaw_steer_anchor(window, &self.ui_state, None);
+                Self::clear_spacecraft_steer_anchors(window, &self.ui_state);
             } else {
                 let mut uis = self.ui_state.write().unwrap();
                 uis.spacecraft_steer_anchor = None;
@@ -497,23 +496,15 @@ impl ApplicationHandler for App {
                     .map(|t| now.duration_since(t).as_secs_f32())
                     .unwrap_or(0.0);
                 self.last_camera_tick = Some(now);
-                let (yaw_steer_offset_x, anchor_steer_offset) = {
+                let (yaw_anchor, plus_anchor) = {
                     let uis = self.ui_state.read().unwrap();
-                    let yaw_steer_offset_x = spacecraft_steer_offset(
-                        uis.spacecraft_yaw_steer_anchor,
-                        self.last_cursor_position,
-                    )
-                    .map(|(x, _)| x);
-                    let anchor_steer_offset = spacecraft_steer_offset(
-                        uis.spacecraft_steer_anchor,
-                        self.last_cursor_position,
-                    );
-                    (yaw_steer_offset_x, anchor_steer_offset)
+                    (uis.spacecraft_yaw_steer_anchor, uis.spacecraft_steer_anchor)
                 };
-                tick_spacecraft_steer_and_motion(
+                tick_spacecraft_steer_and_motion_from_anchors(
                     pipeline.camera_mut(),
-                    yaw_steer_offset_x,
-                    anchor_steer_offset,
+                    yaw_anchor,
+                    plus_anchor,
+                    self.last_cursor_position,
                     dt,
                 );
             }
@@ -575,21 +566,21 @@ impl ApplicationHandler for App {
 }
 
 impl App {
-    fn sync_spacecraft_steer_anchor(
-        window: &Window,
-        ui_state: &Arc<RwLock<UiState>>,
-        anchor: Option<(f64, f64)>,
-    ) {
-        ui_state.write().unwrap().spacecraft_steer_anchor = anchor.map(|(x, y)| [x, y]);
-        window.request_redraw();
-    }
-
     fn sync_spacecraft_yaw_steer_anchor(
         window: &Window,
         ui_state: &Arc<RwLock<UiState>>,
         anchor: Option<(f64, f64)>,
     ) {
         ui_state.write().unwrap().spacecraft_yaw_steer_anchor = anchor.map(|(x, y)| [x, y]);
+        window.request_redraw();
+    }
+
+    fn clear_spacecraft_steer_anchors(window: &Window, ui_state: &Arc<RwLock<UiState>>) {
+        {
+            let mut uis = ui_state.write().unwrap();
+            uis.spacecraft_steer_anchor = None;
+            uis.spacecraft_yaw_steer_anchor = None;
+        }
         window.request_redraw();
     }
 
