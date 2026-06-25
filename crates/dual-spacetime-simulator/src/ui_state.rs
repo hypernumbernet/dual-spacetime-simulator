@@ -405,6 +405,8 @@ pub struct UiState {
     pub lock_camera_up: bool,
     /// Screen position of the spacecraft steer anchor (⊕ marker), when active.
     pub spacecraft_steer_anchor: Option<[f64; 2]>,
+    /// Screen position of the spacecraft yaw steer anchor (⇔ marker), while RMB is held.
+    pub spacecraft_yaw_steer_anchor: Option<[f64; 2]>,
     pub mailbox_present_mode: bool,
     pub show_grid: bool,
     pub particle_display_mode: ParticleDisplayMode,
@@ -465,6 +467,7 @@ impl Default for UiState {
             link_point_size_to_scale: true,
             lock_camera_up: true,
             spacecraft_steer_anchor: None,
+            spacecraft_yaw_steer_anchor: None,
             mailbox_present_mode: false,
             show_grid: true,
             particle_display_mode: ParticleDisplayMode::default(),

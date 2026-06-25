@@ -4,8 +4,7 @@ use std::f32::EPSILON;
 
 pub const THRUST_DURATION: f32 = 0.4;
 pub const THRUST_ACCEL: f32 = 0.5;
-pub const MOUSE_RIGHT_DRAG_SENS: f32 = 0.001;
-/// Roll/pitch rate (rad/s) per pixel of offset from the steer anchor.
+/// Roll/pitch/yaw rate (rad/s) per pixel of offset from the steer anchor.
 pub const STEER_RATE_PER_PX: f32 = 0.005;
 /// Below this speed, mouse steering zeros velocity and turns view in place.
 pub const VELOCITY_STEER_THRESHOLD: f32 = 0.08;
@@ -107,6 +106,19 @@ pub fn apply_spacecraft_roll_pitch(camera: &mut OrbitCamera, roll: f32, pitch: f
     }
 }
 
+/// Applies yaw from horizontal offset (pixels) from a screen-fixed yaw anchor.
+pub fn apply_spacecraft_yaw_from_offset(camera: &mut OrbitCamera, offset_x: f32, dt: f32) {
+    if dt <= EPSILON || offset_x.abs() <= EPSILON {
+        return;
+    }
+    let yaw = -offset_x * STEER_RATE_PER_PX * dt;
+    let relative = camera.view_relative();
+    if relative.length_squared() <= EPSILON {
+        return;
+    }
+    steer_spacecraft(camera, camera.up, yaw);
+}
+
 /// Applies roll/pitch from offset (pixels) from a screen-fixed steer anchor.
 pub fn apply_spacecraft_steer_from_offset(
     camera: &mut OrbitCamera,
@@ -142,12 +154,18 @@ pub fn toggle_spacecraft_steer_anchor(anchor: &mut Option<[f64; 2]>, pos: (f64, 
 }
 
 /// Applies anchor steering then integrates spacecraft motion for one frame.
+///
+/// When `yaw_steer_offset_x` is set (⇔ anchor), yaw steering takes priority and
+/// `anchor_steer_offset` (⊕ anchor) is ignored.
 pub fn tick_spacecraft_steer_and_motion(
     camera: &mut OrbitCamera,
-    steer_offset: Option<(f32, f32)>,
+    yaw_steer_offset_x: Option<f32>,
+    anchor_steer_offset: Option<(f32, f32)>,
     dt: f32,
 ) {
-    if let Some((offset_x, offset_y)) = steer_offset {
+    if let Some(offset_x) = yaw_steer_offset_x {
+        apply_spacecraft_yaw_from_offset(camera, offset_x, dt);
+    } else if let Some((offset_x, offset_y)) = anchor_steer_offset {
         apply_spacecraft_steer_from_offset(camera, offset_x, offset_y, dt);
     }
     tick_spacecraft_camera(camera, dt);
@@ -166,17 +184,3 @@ pub fn spacecraft_scene_wheel_allowed(
     }
 }
 
-/// Steers velocity yaw from horizontal drag; vertical movement is ignored.
-pub fn apply_spacecraft_mouse_right(camera: &mut OrbitCamera, dx: f32) {
-    let yaw = -dx * MOUSE_RIGHT_DRAG_SENS;
-    if yaw.abs() <= EPSILON {
-        return;
-    }
-
-    let relative = camera.view_relative();
-    if relative.length_squared() <= EPSILON {
-        return;
-    }
-
-    steer_spacecraft(camera, camera.up, yaw);
-}

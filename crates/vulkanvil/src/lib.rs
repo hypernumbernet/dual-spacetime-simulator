@@ -16,8 +16,8 @@ pub use buffer::{
 pub use camera::{
     OrbitCamera, KEYBOARD_ORBIT_YAW_SPEED, KEYBOARD_PAN_SPEED, THRUST_ACCEL, THRUST_DURATION,
     VELOCITY_STEER_THRESHOLD, WHEEL_FORWARD_SPEED, apply_orbit_keyboard,
-    apply_spacecraft_mouse_right, apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset,
-    apply_spacecraft_wheel_thrust, apply_camera_mouse_wheel, apply_wheel_forward,
+    apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset, apply_spacecraft_wheel_thrust,
+    apply_spacecraft_yaw_from_offset, apply_camera_mouse_wheel, apply_wheel_forward,
     reset_spacecraft_motion, spacecraft_scene_wheel_allowed, spacecraft_steer_offset,
     tick_orbit_camera, tick_spacecraft_camera, tick_spacecraft_steer_and_motion,
     toggle_spacecraft_steer_anchor, STEER_RATE_PER_PX,

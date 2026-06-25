@@ -251,9 +251,9 @@ fn move_target_around_position_y_zero_is_noop() {
 }
 
 use vulkanvil::{
-    apply_spacecraft_mouse_right, apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset,
-    apply_spacecraft_wheel_thrust, reset_spacecraft_motion, tick_spacecraft_camera, THRUST_ACCEL,
-    THRUST_DURATION, VELOCITY_STEER_THRESHOLD,
+    apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset, apply_spacecraft_wheel_thrust,
+    apply_spacecraft_yaw_from_offset, reset_spacecraft_motion, tick_spacecraft_camera,
+    tick_spacecraft_steer_and_motion, THRUST_ACCEL, THRUST_DURATION, VELOCITY_STEER_THRESHOLD,
 };
 
 #[test]
@@ -293,17 +293,22 @@ fn spacecraft_steer_from_offset_proportional_to_offset() {
 }
 
 #[test]
-fn spacecraft_mouse_right_ignores_vertical_drag() {
+fn spacecraft_yaw_from_offset_zero_is_noop() {
     let pos = Vec3::new(0.0, 0.0, 5.0);
     let target = Vec3::ZERO;
     let mut cam = OrbitCamera::new(pos, target);
     let before_target = cam.target;
-    let before_up = cam.up;
-    apply_spacecraft_mouse_right(&mut cam, 0.0);
+    apply_spacecraft_yaw_from_offset(&mut cam, 0.0, 0.1);
     assert!((cam.target - before_target).length() < 1e-5);
-    assert!(cam.up.abs_diff_eq(before_up, 1e-5));
+}
 
-    apply_spacecraft_mouse_right(&mut cam, 20.0);
+#[test]
+fn spacecraft_yaw_from_offset_changes_view() {
+    let pos = Vec3::new(0.0, 0.0, 5.0);
+    let target = Vec3::ZERO;
+    let mut cam = OrbitCamera::new(pos, target);
+    let before_target = cam.target;
+    apply_spacecraft_yaw_from_offset(&mut cam, 20.0, 0.05);
     assert!((cam.target - before_target).length() > 1e-5);
 }
 
@@ -414,7 +419,7 @@ fn spacecraft_steer_from_offset_allows_thrust_while_pitched() {
 }
 
 #[test]
-fn spacecraft_mouse_right_horizontal_steers_velocity_when_moving() {
+fn spacecraft_yaw_from_offset_horizontal_steers_velocity_when_moving() {
     let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
     apply_spacecraft_wheel_thrust(&mut cam, 1.0);
     for _ in 0..5 {
@@ -423,7 +428,7 @@ fn spacecraft_mouse_right_horizontal_steers_velocity_when_moving() {
     let velocity_before = cam.velocity();
     assert!(velocity_before.length() > VELOCITY_STEER_THRESHOLD);
     let position_before = cam.position;
-    apply_spacecraft_mouse_right(&mut cam, 50.0);
+    apply_spacecraft_yaw_from_offset(&mut cam, 50.0, 0.05);
     assert!((cam.position - position_before).length() < 1e-5);
     assert!(
         (cam.velocity().length() - velocity_before.length()).abs() < 1e-4,
@@ -436,15 +441,32 @@ fn spacecraft_mouse_right_horizontal_steers_velocity_when_moving() {
 }
 
 #[test]
-fn spacecraft_mouse_right_horizontal_turns_in_place_when_slow() {
+fn spacecraft_yaw_from_offset_horizontal_turns_in_place_when_slow() {
     let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
     assert!(cam.velocity().length() < VELOCITY_STEER_THRESHOLD);
     let forward_before = (cam.target - cam.position).normalize();
-    apply_spacecraft_mouse_right(&mut cam, 50.0);
+    apply_spacecraft_yaw_from_offset(&mut cam, 50.0, 0.05);
     assert_eq!(cam.velocity(), Vec3::ZERO);
     let forward_after = (cam.target - cam.position).normalize();
     assert!(
         (forward_after - forward_before).length() > 1e-3,
         "view direction unchanged"
+    );
+}
+
+#[test]
+fn spacecraft_yaw_steer_priority_over_anchor() {
+    let mut cam_yaw_only = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    let mut cam_pitch_only = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    let dt = 0.05;
+    tick_spacecraft_steer_and_motion(&mut cam_yaw_only, Some(50.0), Some((0.0, 50.0)), dt);
+    tick_spacecraft_steer_and_motion(&mut cam_pitch_only, None, Some((0.0, 50.0)), dt);
+    assert!(
+        (cam_yaw_only.target.y - cam_pitch_only.target.y).abs() > 1e-3,
+        "yaw priority should ignore anchor pitch"
+    );
+    assert!(
+        (cam_yaw_only.target - cam_pitch_only.target).length() > 1e-3,
+        "yaw-only and pitch-only should differ"
     );
 }

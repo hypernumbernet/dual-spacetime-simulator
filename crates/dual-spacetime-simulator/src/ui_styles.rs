@@ -1,6 +1,6 @@
 use crate::ui_state::trim_trailing_zeros;
 use egui::Response;
-use egui::{Align, Color32, FontId, Frame, Layout, Margin, RichText, Stroke, TextStyle, Ui};
+use egui::{Align, Color32, FontId, Frame, Layout, Margin, RichText, Shape, Stroke, TextStyle, Ui};
 use egui::{Button, Slider, vec2};
 
 #[derive(Default, Clone)]
@@ -526,6 +526,64 @@ pub fn draw_spacecraft_steer_marker(ctx: &egui::Context, anchor: [f64; 2]) {
         [center - egui::vec2(0.0, half), center + egui::vec2(0.0, half)],
         stroke,
     );
+}
+
+const YAW_STEER_MARKER_LAYER: &str = "spacecraft_yaw_steer_marker";
+const YAW_MARKER_HALF_WIDTH: f32 = 96.0;
+const YAW_MARKER_HEAD_LENGTH: f32 = 30.0;
+const YAW_MARKER_HEAD_HALF_HEIGHT: f32 = 24.0;
+
+fn draw_yaw_steer_glyph(painter: &egui::Painter, center: egui::Pos2, stroke: egui::Stroke) {
+    let color = stroke.color;
+    let half_shaft = stroke.width * 0.5;
+    let left_tip = center - egui::vec2(YAW_MARKER_HALF_WIDTH, 0.0);
+    let right_tip = center + egui::vec2(YAW_MARKER_HALF_WIDTH, 0.0);
+    let left_base_x = left_tip.x + YAW_MARKER_HEAD_LENGTH;
+    let right_base_x = right_tip.x - YAW_MARKER_HEAD_LENGTH;
+
+    painter.add(Shape::convex_polygon(
+        vec![
+            left_tip,
+            egui::pos2(left_base_x, center.y - YAW_MARKER_HEAD_HALF_HEIGHT),
+            egui::pos2(left_base_x, center.y + YAW_MARKER_HEAD_HALF_HEIGHT),
+        ],
+        color,
+        Stroke::NONE,
+    ));
+    painter.add(Shape::convex_polygon(
+        vec![
+            right_tip,
+            egui::pos2(right_base_x, center.y - YAW_MARKER_HEAD_HALF_HEIGHT),
+            egui::pos2(right_base_x, center.y + YAW_MARKER_HEAD_HALF_HEIGHT),
+        ],
+        color,
+        Stroke::NONE,
+    ));
+    painter.add(Shape::convex_polygon(
+        vec![
+            egui::pos2(left_base_x, center.y - half_shaft),
+            egui::pos2(right_base_x, center.y - half_shaft),
+            egui::pos2(right_base_x, center.y + half_shaft),
+            egui::pos2(left_base_x, center.y + half_shaft),
+        ],
+        color,
+        Stroke::NONE,
+    ));
+}
+
+/// Draws the spacecraft-mode yaw steer anchor (↔) fixed at a screen position.
+pub fn draw_spacecraft_yaw_steer_marker(ctx: &egui::Context, anchor: [f64; 2]) {
+    let pixels_per_point = ctx.pixels_per_point();
+    let center = egui::pos2(
+        (anchor[0] as f32) / pixels_per_point,
+        (anchor[1] as f32) / pixels_per_point,
+    );
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new(YAW_STEER_MARKER_LAYER),
+    ));
+    let stroke = egui::Stroke::new(STEER_MARKER_STROKE, egui::Color32::from_rgb(220, 220, 220));
+    draw_yaw_steer_glyph(&painter, center, stroke);
 }
 
 #[cfg(test)]

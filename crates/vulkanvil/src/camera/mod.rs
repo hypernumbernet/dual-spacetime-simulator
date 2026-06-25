@@ -3,11 +3,11 @@ mod spacecraft;
 
 pub use orbit::OrbitCamera;
 pub use spacecraft::{
-    apply_spacecraft_mouse_right, apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset,
-    apply_spacecraft_wheel_thrust, reset_spacecraft_motion, spacecraft_scene_wheel_allowed,
-    spacecraft_steer_offset, tick_spacecraft_camera, tick_spacecraft_steer_and_motion,
-    toggle_spacecraft_steer_anchor, STEER_RATE_PER_PX, THRUST_ACCEL, THRUST_DURATION,
-    VELOCITY_STEER_THRESHOLD,
+    apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset,
+    apply_spacecraft_wheel_thrust, apply_spacecraft_yaw_from_offset, reset_spacecraft_motion,
+    spacecraft_scene_wheel_allowed, spacecraft_steer_offset, tick_spacecraft_camera,
+    tick_spacecraft_steer_and_motion, toggle_spacecraft_steer_anchor, STEER_RATE_PER_PX,
+    THRUST_ACCEL, THRUST_DURATION, VELOCITY_STEER_THRESHOLD,
 };
 
 use crate::input::InputState;
