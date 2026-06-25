@@ -24,7 +24,10 @@ use ash::vk;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use vulkanvil::{InputState, VulkanBase, apply_wheel_forward, tick_orbit_camera};
+use vulkanvil::{
+    InputState, VulkanBase, apply_spacecraft_mouse_left, apply_spacecraft_mouse_right,
+    apply_spacecraft_wheel_thrust, apply_wheel_forward, tick_orbit_camera, tick_spacecraft_camera,
+};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalPosition,
@@ -343,6 +346,8 @@ pub struct App {
     settings: AppSettings,
     drag_owner: DragOwner,
     input: InputState,
+    last_camera_tick: Option<Instant>,
+    last_lock_camera_up: Option<bool>,
 }
 
 impl Drop for App {
@@ -395,6 +400,8 @@ impl Default for App {
             settings,
             drag_owner: DragOwner::None,
             input: InputState::default(),
+            last_camera_tick: None,
+            last_lock_camera_up: None,
         }
     }
 }
@@ -681,10 +688,30 @@ impl ApplicationHandler for App {
                     self.drag_owner = new_owner;
                 }
                 if let Some((lx, ly)) = self.last_cursor_position {
+                    let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
                     match self.drag_owner {
-                        DragOwner::SceneLeft => pipeline.revolve_camera(x - lx, y - ly),
-                        DragOwner::SceneRight => pipeline.look_around(x - lx, y - ly),
-                        DragOwner::SceneMiddle => {
+                        DragOwner::SceneLeft => {
+                            if lock_camera_up {
+                                pipeline.revolve_camera(x - lx, y - ly);
+                            } else {
+                                apply_spacecraft_mouse_left(
+                                    pipeline.camera_mut(),
+                                    (x - lx) as f32,
+                                    (y - ly) as f32,
+                                );
+                            }
+                        }
+                        DragOwner::SceneRight => {
+                            if lock_camera_up {
+                                pipeline.look_around(x - lx, y - ly);
+                            } else {
+                                apply_spacecraft_mouse_right(
+                                    pipeline.camera_mut(),
+                                    (x - lx) as f32,
+                                );
+                            }
+                        }
+                        DragOwner::SceneMiddle if lock_camera_up => {
                             let window_size = window.inner_size();
                             let center_x = window_size.width as f64 / 2.0;
                             let center_y = window_size.height as f64 / 2.0;
@@ -692,6 +719,7 @@ impl ApplicationHandler for App {
                         }
                         DragOwner::None
                         | DragOwner::Ui
+                        | DragOwner::SceneMiddle
                         | DragOwner::PendingSceneLeft
                         | DragOwner::PendingSceneRight
                         | DragOwner::PendingSceneMiddle => {}
@@ -701,12 +729,21 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if !ui_wants_pointer && !ui_consumed {
+                    let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
                     match delta {
                         MouseScrollDelta::LineDelta(_, y) => {
-                            apply_wheel_forward(pipeline.camera_mut(), *y);
+                            if lock_camera_up {
+                                apply_wheel_forward(pipeline.camera_mut(), *y);
+                            } else {
+                                apply_spacecraft_wheel_thrust(pipeline.camera_mut(), *y);
+                            }
                         }
                         MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                            apply_wheel_forward(pipeline.camera_mut(), *y as f32);
+                            if lock_camera_up {
+                                apply_wheel_forward(pipeline.camera_mut(), *y as f32);
+                            } else {
+                                apply_spacecraft_wheel_thrust(pipeline.camera_mut(), *y as f32);
+                            }
                         }
                     }
                 }
@@ -748,6 +785,19 @@ impl ApplicationHandler for App {
                 .gui
                 .as_ref()
                 .is_some_and(|gui| gui.keyboard_wants_input());
+            if self.last_lock_camera_up != Some(lock_camera_up) {
+                self.last_camera_tick = None;
+                self.last_lock_camera_up = Some(lock_camera_up);
+            }
+            if !lock_camera_up {
+                let now = Instant::now();
+                let dt = self
+                    .last_camera_tick
+                    .map(|t| now.duration_since(t).as_secs_f32())
+                    .unwrap_or(0.0);
+                self.last_camera_tick = Some(now);
+                tick_spacecraft_camera(pipeline.camera_mut(), dt);
+            }
             tick_orbit_camera(
                 pipeline.camera_mut(),
                 &self.input,
@@ -866,18 +916,20 @@ impl App {
         let pressed = *state == ElementState::Pressed;
         self.mouse_left_down = pressed;
         if pressed {
-            let now = Instant::now();
-            let Some(click_pos) = self.last_cursor_position else {
-                return;
-            };
-            if Self::try_consume_double_click(
-                click_pos,
-                now,
-                &mut self.last_left_click_time,
-                &mut self.last_left_click_pos,
-            ) && let Some(pipeline) = self.render_pipeline.as_mut()
-            {
-                pipeline.y_top();
+            if self.ui_state.read().unwrap().lock_camera_up {
+                let now = Instant::now();
+                let Some(click_pos) = self.last_cursor_position else {
+                    return;
+                };
+                if Self::try_consume_double_click(
+                    click_pos,
+                    now,
+                    &mut self.last_left_click_time,
+                    &mut self.last_left_click_pos,
+                ) && let Some(pipeline) = self.render_pipeline.as_mut()
+                {
+                    pipeline.y_top();
+                }
             }
         }
     }
@@ -887,18 +939,20 @@ impl App {
         let pressed = *state == ElementState::Pressed;
         self.mouse_right_down = pressed;
         if pressed {
-            let now = Instant::now();
-            let Some(click_pos) = self.last_cursor_position else {
-                return;
-            };
-            if Self::try_consume_double_click(
-                click_pos,
-                now,
-                &mut self.last_right_click_time,
-                &mut self.last_right_click_pos,
-            ) && let Some(pipeline) = self.render_pipeline.as_mut()
-            {
-                pipeline.center_target_on_origin();
+            if self.ui_state.read().unwrap().lock_camera_up {
+                let now = Instant::now();
+                let Some(click_pos) = self.last_cursor_position else {
+                    return;
+                };
+                if Self::try_consume_double_click(
+                    click_pos,
+                    now,
+                    &mut self.last_right_click_time,
+                    &mut self.last_right_click_pos,
+                ) && let Some(pipeline) = self.render_pipeline.as_mut()
+                {
+                    pipeline.center_target_on_origin();
+                }
             }
         }
     }

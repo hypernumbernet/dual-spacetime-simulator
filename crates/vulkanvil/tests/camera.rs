@@ -249,3 +249,172 @@ fn move_target_around_position_y_zero_is_noop() {
     cam.move_target_around_position_y(0.0);
     assert!((cam.target - before_t).length() < 1e-5);
 }
+
+use vulkanvil::{
+    apply_spacecraft_mouse_left, apply_spacecraft_mouse_right, apply_spacecraft_wheel_thrust,
+    reset_spacecraft_motion, tick_spacecraft_camera, THRUST_ACCEL, THRUST_DURATION,
+    VELOCITY_STEER_THRESHOLD,
+};
+
+#[test]
+fn spacecraft_mouse_left_keeps_position_changes_orientation() {
+    let pos = Vec3::new(0.0, 0.0, 5.0);
+    let target = Vec3::ZERO;
+    let mut cam = OrbitCamera::new(pos, target);
+    let before_up = cam.up;
+    apply_spacecraft_mouse_left(&mut cam, 10.0, 10.0);
+    assert!((cam.position - pos).length() < 1e-5);
+    assert!((cam.target - target).length() > 1e-5 || !cam.up.abs_diff_eq(before_up, 1e-5));
+}
+
+#[test]
+fn spacecraft_mouse_right_ignores_vertical_drag() {
+    let pos = Vec3::new(0.0, 0.0, 5.0);
+    let target = Vec3::ZERO;
+    let mut cam = OrbitCamera::new(pos, target);
+    let before_target = cam.target;
+    let before_up = cam.up;
+    apply_spacecraft_mouse_right(&mut cam, 0.0);
+    assert!((cam.target - before_target).length() < 1e-5);
+    assert!(cam.up.abs_diff_eq(before_up, 1e-5));
+
+    apply_spacecraft_mouse_right(&mut cam, 20.0);
+    assert!((cam.target - before_target).length() > 1e-5);
+}
+
+#[test]
+fn spacecraft_wheel_thrust_builds_velocity_and_moves_camera() {
+    let pos = Vec3::new(0.0, 0.0, 5.0);
+    let target = Vec3::ZERO;
+    let mut cam = OrbitCamera::new(pos, target);
+    apply_spacecraft_wheel_thrust(&mut cam, 1.0);
+
+    let dt = 0.05;
+    tick_spacecraft_camera(&mut cam, dt);
+
+    assert!(cam.velocity().length() > 0.0);
+    let relative_before = target - pos;
+    let relative_after = cam.target - cam.position;
+    assert!((relative_before - relative_after).length() < 1e-5);
+    assert!((cam.position - pos).length() > 0.0);
+    assert!((cam.target - target).length() > 0.0);
+}
+
+#[test]
+fn spacecraft_coasts_after_thrust_ends() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    apply_spacecraft_wheel_thrust(&mut cam, 1.0);
+    let tick_dt = 0.05;
+    let thrust_ticks = (THRUST_DURATION / tick_dt).ceil() as u32 + 1;
+    for _ in 0..thrust_ticks {
+        tick_spacecraft_camera(&mut cam, tick_dt);
+    }
+    let velocity_after_thrust = cam.velocity();
+    assert!(velocity_after_thrust.length() > 0.0);
+
+    let pos_after_thrust = cam.position;
+    tick_spacecraft_camera(&mut cam, tick_dt);
+    assert!((cam.velocity() - velocity_after_thrust).length() < 1e-5);
+    assert!((cam.position - pos_after_thrust).length() > 0.0);
+}
+
+#[test]
+fn reset_spacecraft_motion_clears_velocity() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    apply_spacecraft_wheel_thrust(&mut cam, 1.0);
+    tick_spacecraft_camera(&mut cam, 0.1);
+    assert!(cam.velocity().length() > 0.0);
+    reset_spacecraft_motion(&mut cam);
+    assert_eq!(cam.velocity(), Vec3::ZERO);
+}
+
+#[test]
+fn spacecraft_thrust_applies_expected_acceleration() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    apply_spacecraft_wheel_thrust(&mut cam, 1.0);
+    let dt = 0.1;
+    tick_spacecraft_camera(&mut cam, dt);
+    let forward = (cam.target - cam.position).normalize();
+    let expected_speed = THRUST_ACCEL * dt;
+    assert!((cam.velocity().length() - expected_speed).abs() < 1e-4);
+    assert!((cam.velocity().normalize() - forward).length() < 1e-4);
+}
+
+#[test]
+fn spacecraft_mouse_left_vertical_steers_velocity_when_moving() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    apply_spacecraft_wheel_thrust(&mut cam, 1.0);
+    for _ in 0..5 {
+        tick_spacecraft_camera(&mut cam, 0.1);
+    }
+    let velocity_before = cam.velocity();
+    assert!(velocity_before.length() > VELOCITY_STEER_THRESHOLD);
+    let position_before = cam.position;
+    apply_spacecraft_mouse_left(&mut cam, 0.0, 50.0);
+    assert!((cam.position - position_before).length() < 1e-5);
+    assert!(cam.velocity().length() > 1e-5);
+    assert!(
+        (cam.velocity().length() - velocity_before.length()).abs() < 1e-4,
+        "speed changed: {} -> {}",
+        velocity_before.length(),
+        cam.velocity().length()
+    );
+    assert!(
+        (cam.velocity().normalize() - velocity_before.normalize()).length() > 1e-3,
+        "velocity direction unchanged"
+    );
+}
+
+#[test]
+fn spacecraft_mouse_left_vertical_turns_in_place_when_slow() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    apply_spacecraft_wheel_thrust(&mut cam, 1.0);
+    tick_spacecraft_camera(&mut cam, 0.01);
+    assert!(cam.velocity().length() < VELOCITY_STEER_THRESHOLD);
+    let forward_before = (cam.target - cam.position).normalize();
+    apply_spacecraft_mouse_left(&mut cam, 0.0, 50.0);
+    assert_eq!(cam.velocity(), Vec3::ZERO);
+    let forward_after = (cam.target - cam.position).normalize();
+    assert!(
+        (forward_after - forward_before).length() > 1e-3,
+        "view direction unchanged"
+    );
+}
+
+#[test]
+fn spacecraft_mouse_right_horizontal_steers_velocity_when_moving() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    apply_spacecraft_wheel_thrust(&mut cam, 1.0);
+    for _ in 0..5 {
+        tick_spacecraft_camera(&mut cam, 0.1);
+    }
+    let velocity_before = cam.velocity();
+    assert!(velocity_before.length() > VELOCITY_STEER_THRESHOLD);
+    let position_before = cam.position;
+    apply_spacecraft_mouse_right(&mut cam, 50.0);
+    assert!((cam.position - position_before).length() < 1e-5);
+    assert!(
+        (cam.velocity().length() - velocity_before.length()).abs() < 1e-4,
+        "speed changed"
+    );
+    assert!(
+        (cam.velocity().normalize() - velocity_before.normalize()).length() > 1e-3,
+        "velocity direction unchanged"
+    );
+}
+
+#[test]
+fn spacecraft_mouse_right_horizontal_turns_in_place_when_slow() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    apply_spacecraft_wheel_thrust(&mut cam, 1.0);
+    tick_spacecraft_camera(&mut cam, 0.01);
+    assert!(cam.velocity().length() < VELOCITY_STEER_THRESHOLD);
+    let forward_before = (cam.target - cam.position).normalize();
+    apply_spacecraft_mouse_right(&mut cam, 50.0);
+    assert_eq!(cam.velocity(), Vec3::ZERO);
+    let forward_after = (cam.target - cam.position).normalize();
+    assert!(
+        (forward_after - forward_before).length() > 1e-3,
+        "view direction unchanged"
+    );
+}

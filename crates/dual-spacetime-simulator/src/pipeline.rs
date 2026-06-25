@@ -8,7 +8,7 @@ use gpu_allocator::vulkan::Allocator;
 use std::sync::{Arc, Mutex};
 use vulkanvil::{
     AllocatedBuffer, AllocatedImage, OrbitCamera, VulkanBase, create_buffer_with_data,
-    create_depth_image, create_shader_module, select_depth_format,
+    create_depth_image, create_shader_module, reset_spacecraft_motion, select_depth_format,
 };
 
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
@@ -89,6 +89,7 @@ pub struct ParticleRenderPipeline {
     use_gpu_sim: bool,
     retired_buffers: Vec<AllocatedBuffer>,
 
+    applied_lock_camera_up: Option<bool>,
     camera: OrbitCamera,
 }
 
@@ -150,6 +151,7 @@ impl ParticleRenderPipeline {
             gpu_sim,
             use_gpu_sim: false,
             retired_buffers: Vec::new(),
+            applied_lock_camera_up: None,
             camera,
         }
     }
@@ -449,12 +451,18 @@ impl ParticleRenderPipeline {
 
     /// Triggers camera target-centering animation toward world origin.
     pub fn center_target_on_origin(&mut self) {
+        reset_spacecraft_motion(&mut self.camera);
         self.camera.center_target_on_origin();
     }
 
     /// Enables or disables camera up-lock behavior.
     pub fn set_lock_camera_up(&mut self, lock: bool) {
+        if self.applied_lock_camera_up == Some(lock) {
+            return;
+        }
+        self.applied_lock_camera_up = Some(lock);
         self.camera.set_lock_up(lock);
+        reset_spacecraft_motion(&mut self.camera);
     }
 
     /// Finds the particle whose screen-projected position is closest to the click.

@@ -1,6 +1,12 @@
 mod orbit;
+mod spacecraft;
 
 pub use orbit::OrbitCamera;
+pub use spacecraft::{
+    apply_spacecraft_mouse_left, apply_spacecraft_mouse_right, apply_spacecraft_wheel_thrust,
+    reset_spacecraft_motion, tick_spacecraft_camera, THRUST_ACCEL, THRUST_DURATION,
+    VELOCITY_STEER_THRESHOLD,
+};
 
 use crate::input::InputState;
 use glam::Vec3;

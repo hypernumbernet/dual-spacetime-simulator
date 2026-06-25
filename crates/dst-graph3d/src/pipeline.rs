@@ -7,7 +7,7 @@ use gpu_allocator::vulkan::Allocator;
 use std::sync::{Arc, Mutex};
 use vulkanvil::{
     AllocatedBuffer, AllocatedImage, OrbitCamera, VulkanBase, create_buffer_with_data,
-    create_depth_image, create_shader_module, select_depth_format,
+    create_depth_image, create_shader_module, reset_spacecraft_motion, select_depth_format,
 };
 
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
@@ -325,6 +325,7 @@ impl ParticleRenderPipeline {
 
     /// Triggers camera target-centering animation toward world origin.
     pub fn center_target_on_origin(&mut self) {
+        reset_spacecraft_motion(&mut self.camera);
         self.camera.center_target_on_origin();
     }
 
@@ -335,6 +336,7 @@ impl ParticleRenderPipeline {
         }
         self.applied_lock_camera_up = Some(lock);
         self.camera.set_lock_up(lock);
+        reset_spacecraft_motion(&mut self.camera);
     }
 
     // --- Draw helpers ---

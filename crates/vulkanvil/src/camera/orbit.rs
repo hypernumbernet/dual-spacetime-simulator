@@ -15,6 +15,9 @@ pub struct OrbitCamera {
     pub position: Vec3,
     pub target: Vec3,
     pub up: Vec3,
+    pub(crate) velocity: Vec3,
+    pub(crate) thrust_remaining: f32,
+    pub(crate) thrust_sign: f32,
     lock_up: bool,
     animating_y_top: u32,
     animating_to_origin: u32,
@@ -29,11 +32,19 @@ impl OrbitCamera {
             position,
             target,
             up,
+            velocity: Vec3::ZERO,
+            thrust_remaining: 0.0,
+            thrust_sign: 0.0,
             lock_up: false,
             animating_y_top: 0,
             animating_to_origin: 0,
             start_time: None,
         }
+    }
+
+    /// Returns the current spacecraft-mode velocity.
+    pub fn velocity(&self) -> Vec3 {
+        self.velocity
     }
 
     /// Orbits the camera around the target using yaw and pitch deltas.

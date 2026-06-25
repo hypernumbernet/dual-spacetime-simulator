@@ -14,8 +14,10 @@ pub use buffer::{
     select_depth_format,
 };
 pub use camera::{
-    OrbitCamera, KEYBOARD_ORBIT_YAW_SPEED, KEYBOARD_PAN_SPEED, WHEEL_FORWARD_SPEED,
-    apply_orbit_keyboard, apply_wheel_forward, tick_orbit_camera,
+    OrbitCamera, KEYBOARD_ORBIT_YAW_SPEED, KEYBOARD_PAN_SPEED, THRUST_ACCEL, THRUST_DURATION,
+    VELOCITY_STEER_THRESHOLD, WHEEL_FORWARD_SPEED, apply_orbit_keyboard,
+    apply_spacecraft_mouse_left, apply_spacecraft_mouse_right, apply_spacecraft_wheel_thrust,
+    apply_wheel_forward, reset_spacecraft_motion, tick_orbit_camera, tick_spacecraft_camera,
 };
 pub use input::InputState;
 pub use shader::create_shader_module;
