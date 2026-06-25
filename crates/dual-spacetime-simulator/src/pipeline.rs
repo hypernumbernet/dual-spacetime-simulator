@@ -203,11 +203,7 @@ impl ParticleRenderPipeline {
     /// GPU positions back and overlays them onto the leading entries of
     /// `all_particles` (existing + newly appended) before re-uploading the buffer.
     pub fn add_particles_preserving_simulated(&mut self, all_particles: &[Particle]) {
-        unsafe {
-            if let Err(err) = self.device.device_wait_idle() {
-                eprintln!("add_particles_preserving_simulated device_wait_idle failed: {err:?}");
-            }
-        }
+        self.wait_device_idle("add_particles_preserving_simulated");
         let simulated = self.gpu_sim.readback_to_cpu();
         let mut combined = all_particles.to_vec();
         let preserved = simulated.len().min(combined.len());
@@ -217,22 +213,19 @@ impl ParticleRenderPipeline {
 
     /// Removes one particle while keeping simulated positions of the rest.
     ///
-    /// In GPU mode the CPU `SimulationManager` holds stale initial positions, so a
-    /// plain re-upload resets the simulation. This reads the current GPU state,
-    /// removes the entry at `index`, and re-uploads the shortened buffer.
+    /// Shifts the mapped SSBO in place after the GPU queue is idle, avoiding a full
+    /// CPU readback and re-upload roundtrip.
     pub fn remove_particle_preserving_simulated(&mut self, index: usize) -> bool {
+        self.wait_device_idle("remove_particle_preserving_simulated");
+        self.gpu_sim.remove_particle_at(index)
+    }
+
+    fn wait_device_idle(&self, context: &str) {
         unsafe {
             if let Err(err) = self.device.device_wait_idle() {
-                eprintln!("remove_particle_preserving_simulated device_wait_idle failed: {err:?}");
+                eprintln!("{context} device_wait_idle failed: {err:?}");
             }
         }
-        let mut simulated = self.gpu_sim.readback_to_cpu();
-        if index >= simulated.len() {
-            return false;
-        }
-        simulated.remove(index);
-        self.gpu_sim.upload_from_cpu(&simulated);
-        true
     }
 
     /// Returns shared allocator used for dynamic GPU buffer management.

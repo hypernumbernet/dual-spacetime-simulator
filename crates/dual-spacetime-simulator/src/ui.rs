@@ -876,20 +876,24 @@ pub(crate) fn process_pending_particle_delete(
     gpu_particle_sync: &crate::GpuParticleSync,
     need_redraw: &Arc<RwLock<bool>>,
 ) {
-    let index = ui_state.write().unwrap().pending_delete_particle_index.take();
-    let Some(index) = index else {
-        return;
+    let (index, uses_gpu) = {
+        let mut uis = ui_state.write().unwrap();
+        let Some(index) = uis.pending_delete_particle_index.take() else {
+            return;
+        };
+        (index, uis.uses_gpu_simulation())
     };
     if !simulation_manager.write().unwrap().remove_particle_at(index) {
         return;
     }
-    let mut uis = ui_state.write().unwrap();
-    uis.clear_selected_particle();
-    if uis.uses_gpu_simulation() {
-        gpu_particle_sync.request_remove_preserving(index);
+    {
+        let mut uis = ui_state.write().unwrap();
+        uis.clear_selected_particle();
+        if uses_gpu {
+            gpu_particle_sync.request_remove_preserving(index);
+        }
     }
-    drop(uis);
-    need_redraw.write().unwrap().clone_from(&true);
+    *need_redraw.write().unwrap() = true;
 }
 
 /// Opens a deferred save/load dialog after the UI frame completes.

@@ -156,6 +156,24 @@ impl GpuParticleSimulation {
         self.write_cpu_particles(particles);
     }
 
+    /// Removes the particle at `index` in the mapped SSBO without a CPU roundtrip.
+    pub fn remove_particle_at(&mut self, index: usize) -> bool {
+        let count = self.particle_count as usize;
+        if index >= count {
+            return false;
+        }
+        if count == 1 {
+            self.particle_count = 0;
+            return true;
+        }
+        let Some(slice) = mapped_particle_slice_mut(&self.particle_buffer, count) else {
+            return false;
+        };
+        slice.copy_within(index + 1..count, index);
+        self.particle_count = (count - 1) as u32;
+        true
+    }
+
     /// Records compute dispatches that advance `steps` simulation steps on the GPU.
     ///
     /// Each step runs phase 0 (position integration) then phase 1 (velocity update),

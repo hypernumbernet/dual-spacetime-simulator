@@ -65,28 +65,36 @@ impl GpuParticleSync {
         }
     }
 
-    fn request_full_upload(&self) {
+    fn reset_advance_steps(&self) {
         self.advance_steps.store(0, Ordering::Release);
+    }
+
+    fn clear_pending_remove(&self) {
+        self.remove_index.store(GPU_REMOVE_NONE, Ordering::Release);
+    }
+
+    fn request_full_upload(&self) {
+        self.reset_advance_steps();
         self.upload_pending.store(true, Ordering::Release);
         self.append_pending.store(false, Ordering::Release);
-        self.remove_index.store(GPU_REMOVE_NONE, Ordering::Release);
+        self.clear_pending_remove();
     }
 
     fn request_append_preserving(&self) {
-        self.advance_steps.store(0, Ordering::Release);
+        self.reset_advance_steps();
         self.append_pending.store(true, Ordering::Release);
-        self.remove_index.store(GPU_REMOVE_NONE, Ordering::Release);
+        self.clear_pending_remove();
     }
 
     pub(crate) fn request_remove_preserving(&self, index: usize) {
-        self.advance_steps.store(0, Ordering::Release);
+        self.reset_advance_steps();
         self.upload_pending.store(false, Ordering::Release);
         self.append_pending.store(false, Ordering::Release);
         self.remove_index.store(index, Ordering::Release);
     }
 
     fn request_cpu_mode_upload(&self) {
-        self.advance_steps.store(0, Ordering::Release);
+        self.reset_advance_steps();
         self.upload_pending.store(true, Ordering::Release);
     }
 
