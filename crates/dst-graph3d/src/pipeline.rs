@@ -6,9 +6,8 @@ use glam::{Mat4, Vec3};
 use gpu_allocator::vulkan::Allocator;
 use std::sync::{Arc, Mutex};
 use vulkanvil::{
-    AllocatedBuffer, AllocatedImage, InputState, OrbitCamera, VulkanBase, apply_orbit_keyboard,
-    apply_wheel_forward, create_buffer_with_data, create_depth_image, create_shader_module,
-    select_depth_format,
+    AllocatedBuffer, AllocatedImage, OrbitCamera, VulkanBase, create_buffer_with_data,
+    create_depth_image, create_shader_module, select_depth_format,
 };
 
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
@@ -282,6 +281,11 @@ impl ParticleRenderPipeline {
 
     // --- Camera methods ---
 
+    /// Returns mutable access to the orbit camera.
+    pub fn camera_mut(&mut self) -> &mut OrbitCamera {
+        &mut self.camera
+    }
+
     /// Rotates camera around target using viewport-relative yaw and pitch deltas.
     pub fn revolve_camera(&mut self, delta_yaw: f64, delta_pitch: f64) {
         self.camera.revolve(
@@ -296,31 +300,6 @@ impl ParticleRenderPipeline {
             dx as f32 * MOUSE_RIGHT_DRAG_SENS,
             dy as f32 * MOUSE_RIGHT_DRAG_SENS,
         );
-    }
-
-    /// Applies camera zoom toward or away from target.
-    pub fn zoom_camera(&mut self, zoom_factor: f32) {
-        self.camera.zoom(zoom_factor);
-    }
-
-    /// Moves position and target together along the view direction.
-    pub fn move_camera_forward(&mut self, forward: f32) {
-        apply_wheel_forward(&mut self.camera, forward);
-    }
-
-    /// Applies keyboard orbit camera controls from held keys.
-    pub fn apply_keyboard_controls(
-        &mut self,
-        input: &InputState,
-        lock_camera_up: bool,
-        keyboard_blocked: bool,
-    ) -> bool {
-        apply_orbit_keyboard(
-            &mut self.camera,
-            input,
-            lock_camera_up,
-            keyboard_blocked,
-        )
     }
 
     /// Rotates camera roll around screen-center-aware gesture input.
@@ -347,16 +326,6 @@ impl ParticleRenderPipeline {
     /// Triggers camera target-centering animation toward world origin.
     pub fn center_target_on_origin(&mut self) {
         self.camera.center_target_on_origin();
-    }
-
-    /// Advances camera animation state.
-    pub fn update_animation(&mut self) {
-        self.camera.update_animation();
-    }
-
-    /// Returns whether the camera is still running an alignment animation.
-    pub fn is_animating(&self) -> bool {
-        self.camera.is_animating()
     }
 
     /// Enables or disables camera up-lock behavior.

@@ -20,7 +20,7 @@ use ash::vk;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use vulkanvil::{InputState, VulkanBase};
+use vulkanvil::{InputState, VulkanBase, apply_wheel_forward, tick_orbit_camera};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalPosition,
@@ -383,10 +383,10 @@ impl ApplicationHandler for App {
                 if !ui_wants_pointer && !ui_consumed {
                     match delta {
                         MouseScrollDelta::LineDelta(_, y) => {
-                            pipeline.move_camera_forward(*y);
+                            apply_wheel_forward(pipeline.camera_mut(), *y);
                         }
                         MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                            pipeline.move_camera_forward(*y as f32);
+                            apply_wheel_forward(pipeline.camera_mut(), *y as f32);
                         }
                     }
                 }
@@ -409,24 +409,30 @@ impl ApplicationHandler for App {
 
     /// Performs per-frame updates before the event loop waits for new events.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
+        let (lock_camera_up, params) = {
+            let uis = self.ui_state.read().unwrap();
+            (
+                uis.lock_camera_up,
+                (
+                    uis.graph_type,
+                    uis.graph_sample_count,
+                    uis.graph_radius,
+                    uis.graph_velocity_scale,
+                ),
+            )
+        };
         let keyboard_blocked = self
             .gui
             .as_ref()
             .is_some_and(|gui| gui.keyboard_wants_input());
         if let Some(pipeline) = self.render_pipeline.as_mut() {
-            pipeline.update_animation();
-            pipeline.apply_keyboard_controls(&self.input, lock_camera_up, keyboard_blocked);
+            tick_orbit_camera(
+                pipeline.camera_mut(),
+                &self.input,
+                lock_camera_up,
+                keyboard_blocked,
+            );
         }
-
-        let uis = self.ui_state.read().unwrap();
-        let params = (
-            uis.graph_type,
-            uis.graph_sample_count,
-            uis.graph_radius,
-            uis.graph_velocity_scale,
-        );
-        drop(uis);
 
         let fp = self.graph_params_fingerprint(params);
 

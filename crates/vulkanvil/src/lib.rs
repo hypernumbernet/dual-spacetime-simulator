@@ -15,7 +15,7 @@ pub use buffer::{
 };
 pub use camera::{
     OrbitCamera, KEYBOARD_ORBIT_YAW_SPEED, KEYBOARD_PAN_SPEED, WHEEL_FORWARD_SPEED,
-    apply_orbit_keyboard, apply_wheel_forward,
+    apply_orbit_keyboard, apply_wheel_forward, tick_orbit_camera,
 };
 pub use input::InputState;
 pub use shader::create_shader_module;

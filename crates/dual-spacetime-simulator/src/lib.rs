@@ -24,7 +24,7 @@ use ash::vk;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use vulkanvil::{InputState, VulkanBase};
+use vulkanvil::{InputState, VulkanBase, apply_wheel_forward, tick_orbit_camera};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalPosition,
@@ -703,10 +703,10 @@ impl ApplicationHandler for App {
                 if !ui_wants_pointer && !ui_consumed {
                     match delta {
                         MouseScrollDelta::LineDelta(_, y) => {
-                            pipeline.move_camera_forward(*y);
+                            apply_wheel_forward(pipeline.camera_mut(), *y);
                         }
                         MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                            pipeline.move_camera_forward(*y as f32);
+                            apply_wheel_forward(pipeline.camera_mut(), *y as f32);
                         }
                     }
                 }
@@ -743,9 +743,18 @@ impl ApplicationHandler for App {
         }
         self.apply_pending_particle_buffer_reload();
         if let Some(pipeline) = self.render_pipeline.as_mut() {
-            pipeline.update_animation();
+            let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
+            let keyboard_blocked = self
+                .gui
+                .as_ref()
+                .is_some_and(|gui| gui.keyboard_wants_input());
+            tick_orbit_camera(
+                pipeline.camera_mut(),
+                &self.input,
+                lock_camera_up,
+                keyboard_blocked,
+            );
         }
-        self.apply_keyboard_camera_controls();
         if *self.need_redraw.read().unwrap() == false && !self.gpu_particle_sync.has_pending_sync()
         {
             return;
@@ -805,19 +814,6 @@ impl App {
         drop(uis);
         if reload_requested && uses_gpu {
             self.gpu_particle_sync.request_full_upload();
-        }
-    }
-
-    /// Applies WASD pan, Q/E yaw, Space/Shift vertical move, Arrow Up/Down target pitch,
-    /// and Arrow Left/Right target yaw when Lock Camera Up/Down is enabled.
-    fn apply_keyboard_camera_controls(&mut self) {
-        let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
-        let keyboard_blocked = self
-            .gui
-            .as_ref()
-            .is_some_and(|gui| gui.keyboard_wants_input());
-        if let Some(pipeline) = self.render_pipeline.as_mut() {
-            pipeline.apply_keyboard_controls(&self.input, lock_camera_up, keyboard_blocked);
         }
     }
 

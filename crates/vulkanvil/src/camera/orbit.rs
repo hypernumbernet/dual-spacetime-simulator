@@ -81,6 +81,18 @@ impl OrbitCamera {
         }
     }
 
+    /// Returns the vector from camera position to target.
+    #[inline]
+    pub fn view_relative(&self) -> Vec3 {
+        self.target - self.position
+    }
+
+    /// Returns the distance between camera position and target.
+    #[inline]
+    pub fn orbit_distance(&self) -> f32 {
+        self.view_relative().length()
+    }
+
     /// Translates target and position together on the XZ plane, preserving orbit distance.
     pub fn pan_xz(&mut self, delta: Vec3) {
         let offset = Vec3::new(delta.x, 0.0, delta.z);
