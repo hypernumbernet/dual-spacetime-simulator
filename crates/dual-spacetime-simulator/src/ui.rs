@@ -870,9 +870,10 @@ fn button_reset(ui: &mut egui::Ui, uis: &mut UiState) {
 }
 
 /// Removes a particle scheduled for deletion from the Particle Info panel.
-pub fn process_pending_particle_delete(
+pub(crate) fn process_pending_particle_delete(
     ui_state: &Arc<RwLock<UiState>>,
     simulation_manager: &Arc<RwLock<SimulationManager>>,
+    gpu_particle_sync: &crate::GpuParticleSync,
     need_redraw: &Arc<RwLock<bool>>,
 ) {
     let index = ui_state.write().unwrap().pending_delete_particle_index.take();
@@ -885,7 +886,7 @@ pub fn process_pending_particle_delete(
     let mut uis = ui_state.write().unwrap();
     uis.clear_selected_particle();
     if uis.uses_gpu_simulation() {
-        uis.request_particle_buffer_reload();
+        gpu_particle_sync.request_remove_preserving(index);
     }
     drop(uis);
     need_redraw.write().unwrap().clone_from(&true);

@@ -21,7 +21,7 @@ use crate::simulation::SimulationManager;
 use crate::ui::{draw_ui, process_pending_particle_delete, process_pending_snapshot_dialog};
 use crate::ui_state::{DragOwner, PlacementMode, UiState};
 use ash::vk;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use vulkanvil::{
@@ -45,10 +45,13 @@ const DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
 
 /// Coordinates CPU→GPU particle buffer synchronization between the UI, worker, and render loop.
+const GPU_REMOVE_NONE: usize = usize::MAX;
+
 #[derive(Clone)]
-struct GpuParticleSync {
+pub(crate) struct GpuParticleSync {
     upload_pending: Arc<AtomicBool>,
     append_pending: Arc<AtomicBool>,
+    remove_index: Arc<AtomicUsize>,
     advance_steps: Arc<AtomicU32>,
 }
 
@@ -57,6 +60,7 @@ impl GpuParticleSync {
         Self {
             upload_pending: Arc::new(AtomicBool::new(initial_upload)),
             append_pending: Arc::new(AtomicBool::new(false)),
+            remove_index: Arc::new(AtomicUsize::new(GPU_REMOVE_NONE)),
             advance_steps: Arc::new(AtomicU32::new(0)),
         }
     }
@@ -65,11 +69,20 @@ impl GpuParticleSync {
         self.advance_steps.store(0, Ordering::Release);
         self.upload_pending.store(true, Ordering::Release);
         self.append_pending.store(false, Ordering::Release);
+        self.remove_index.store(GPU_REMOVE_NONE, Ordering::Release);
     }
 
     fn request_append_preserving(&self) {
         self.advance_steps.store(0, Ordering::Release);
         self.append_pending.store(true, Ordering::Release);
+        self.remove_index.store(GPU_REMOVE_NONE, Ordering::Release);
+    }
+
+    pub(crate) fn request_remove_preserving(&self, index: usize) {
+        self.advance_steps.store(0, Ordering::Release);
+        self.upload_pending.store(false, Ordering::Release);
+        self.append_pending.store(false, Ordering::Release);
+        self.remove_index.store(index, Ordering::Release);
     }
 
     fn request_cpu_mode_upload(&self) {
@@ -78,11 +91,22 @@ impl GpuParticleSync {
     }
 
     fn has_pending_sync(&self) -> bool {
-        self.upload_pending.load(Ordering::Acquire) || self.append_pending.load(Ordering::Acquire)
+        self.upload_pending.load(Ordering::Acquire)
+            || self.append_pending.load(Ordering::Acquire)
+            || self.remove_index.load(Ordering::Acquire) != GPU_REMOVE_NONE
     }
 
     fn take_upload_pending(&self) -> bool {
         self.upload_pending.swap(false, Ordering::AcqRel)
+    }
+
+    fn take_remove_index(&self) -> Option<usize> {
+        let index = self.remove_index.swap(GPU_REMOVE_NONE, Ordering::AcqRel);
+        if index == GPU_REMOVE_NONE {
+            None
+        } else {
+            Some(index)
+        }
     }
 
     fn append_pending(&self) -> bool {
@@ -794,6 +818,7 @@ impl ApplicationHandler for App {
             process_pending_particle_delete(
                 &self.ui_state,
                 &self.simulation_manager,
+                &self.gpu_particle_sync,
                 &self.need_redraw,
             );
             window.request_redraw();
@@ -874,6 +899,12 @@ impl ApplicationHandler for App {
                 pipeline.add_particles_preserving_simulated(&particles);
             }
             self.gpu_particle_sync.clear_append_pending();
+        }
+
+        if let Some(index) = self.gpu_particle_sync.take_remove_index() {
+            if let Some(pipeline) = self.render_pipeline.as_mut() {
+                pipeline.remove_particle_preserving_simulated(index);
+            }
         }
 
         if uses_gpu {

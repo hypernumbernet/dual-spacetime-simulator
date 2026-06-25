@@ -215,6 +215,26 @@ impl ParticleRenderPipeline {
         self.gpu_sim.upload_from_cpu(&combined);
     }
 
+    /// Removes one particle while keeping simulated positions of the rest.
+    ///
+    /// In GPU mode the CPU `SimulationManager` holds stale initial positions, so a
+    /// plain re-upload resets the simulation. This reads the current GPU state,
+    /// removes the entry at `index`, and re-uploads the shortened buffer.
+    pub fn remove_particle_preserving_simulated(&mut self, index: usize) -> bool {
+        unsafe {
+            if let Err(err) = self.device.device_wait_idle() {
+                eprintln!("remove_particle_preserving_simulated device_wait_idle failed: {err:?}");
+            }
+        }
+        let mut simulated = self.gpu_sim.readback_to_cpu();
+        if index >= simulated.len() {
+            return false;
+        }
+        simulated.remove(index);
+        self.gpu_sim.upload_from_cpu(&simulated);
+        true
+    }
+
     /// Returns shared allocator used for dynamic GPU buffer management.
     fn allocator(&self) -> &Mutex<Allocator> {
         &self.allocator

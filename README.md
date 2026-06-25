@@ -156,6 +156,7 @@ N 体計算をコンピュートシェーダ（`particles_compute.comp`）で回
 - `record_gpu_advance` / `dispatch` で更新ステップをコマンドバッファに記録し、`upload_from_cpu` / `readback_to_cpu` で CPU と往復
 - **同じ SSBO をコンピュートの書き込み先と頂点シェーダの入力に共用**するため、計算結果を描画へ転送するコストがない
 - `add_particles_preserving_simulated`: 走行中の GPU 状態を読み戻してから追加・再アップロードし、既存粒子の位置を保ったまま粒子を足せる
+- `remove_particle_preserving_simulated`: 走行中の GPU 状態を読み戻してから指定粒子を削除・再アップロードし、残り粒子の位置を保ったまま粒子を減らせる
 
 ### egui 統合 `Gui`（`src/integration.rs`）
 
