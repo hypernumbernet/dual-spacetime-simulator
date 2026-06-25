@@ -9,7 +9,6 @@ fn app_settings_json_roundtrip() {
         window_min_height: 384.0,
         start_maximized: true,
         link_point_size_to_scale: false,
-        lock_camera_up: false,
         mailbox_present_mode: true,
         particle_display_mode: ParticleDisplayMode::Sphere,
     };

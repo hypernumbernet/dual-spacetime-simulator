@@ -173,7 +173,6 @@ impl UiState {
         self.min_window_width = settings.window_min_width;
         self.min_window_height = settings.window_min_height;
         self.start_maximized = settings.start_maximized;
-        self.lock_camera_up = settings.lock_camera_up;
         self.mailbox_present_mode = settings.mailbox_present_mode;
         self.particle_display_mode = settings.particle_display_mode;
     }

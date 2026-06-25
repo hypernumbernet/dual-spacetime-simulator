@@ -157,6 +157,15 @@ pub fn draw_ui(
             });
             ui.separator();
             ui.horizontal(|ui| {
+                let mut v = uis.lock_camera_up;
+                if ui
+                    .add(Checkbox::new(&mut v, "Lock Camera Up/Down"))
+                    .changed()
+                {
+                    uis.lock_camera_up = v;
+                }
+            });
+            ui.horizontal(|ui| {
                 let mut v = uis.show_grid;
                 if ui.add(Checkbox::new(&mut v, "Show Grid")).changed() {
                     uis.show_grid = v;
@@ -201,15 +210,6 @@ pub fn draw_ui(
                 }
             });
             ui.horizontal(|ui| {
-                let mut v = uis.lock_camera_up;
-                if ui
-                    .add(Checkbox::new(&mut v, "Lock Camera Up/Down"))
-                    .changed()
-                {
-                    uis.lock_camera_up = v;
-                }
-            });
-            ui.horizontal(|ui| {
                 let mut v = uis.mailbox_present_mode;
                 if ui
                     .add(Checkbox::new(&mut v, "Mailbox Present Mode"))
@@ -225,7 +225,6 @@ pub fn draw_ui(
                 settings.max_particle_count = uis.max_particle_count;
                 settings.start_maximized = uis.start_maximized;
                 settings.link_point_size_to_scale = uis.link_point_size_to_scale;
-                settings.lock_camera_up = uis.lock_camera_up;
                 settings.mailbox_present_mode = uis.mailbox_present_mode;
                 settings.particle_display_mode = uis.particle_display_mode;
                 if let Err(e) = settings.save() {

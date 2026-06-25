@@ -70,14 +70,12 @@ pub fn draw_ui(
             combobox_particle_display_mode(ui, &mut uis);
             ui.separator();
             ui.checkbox(&mut uis.start_maximized, "Start Maximized");
-            ui.checkbox(&mut uis.lock_camera_up, "Lock Camera Up/Down");
             ui.checkbox(&mut uis.mailbox_present_mode, "Mailbox Present Mode");
             ui.separator();
             if button_normal(ui, "Save Settings", false).clicked() {
                 settings.window_min_width = uis.min_window_width;
                 settings.window_min_height = uis.min_window_height;
                 settings.start_maximized = uis.start_maximized;
-                settings.lock_camera_up = uis.lock_camera_up;
                 settings.mailbox_present_mode = uis.mailbox_present_mode;
                 settings.particle_display_mode = uis.particle_display_mode;
                 if let Err(e) = settings.save() {
@@ -121,6 +119,8 @@ pub fn draw_ui(
             ui.separator();
             label_normal(ui, "Sample Count");
             ui.add(Slider::new(&mut uis.graph_sample_count, 1..=5000).drag_value_speed(1.0));
+            ui.separator();
+            ui.checkbox(&mut uis.lock_camera_up, "Lock Camera Up/Down");
         },
     );
 
