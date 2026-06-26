@@ -864,6 +864,7 @@ impl ApplicationHandler for App {
             }
         }
         if let Some(pipeline) = self.render_pipeline.as_mut() {
+            pipeline.set_lock_camera_up(lock_camera_up);
             if !lock_camera_up {
                 let now = Instant::now();
                 let dt = self

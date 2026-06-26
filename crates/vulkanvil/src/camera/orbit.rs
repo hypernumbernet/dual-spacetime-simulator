@@ -20,6 +20,8 @@ pub struct OrbitCamera {
     pub(crate) thrust_sign: f32,
     pub(crate) thrust_accel: f32,
     lock_up: bool,
+    reference_orbit_distance: f32,
+    origin_center_lock_up: Option<bool>,
     animating_y_top: u32,
     animating_to_origin: u32,
     start_time: Option<Instant>,
@@ -29,6 +31,7 @@ impl OrbitCamera {
     /// Creates an orbit camera with an up vector consistent with the current view direction.
     pub fn new(position: Vec3, target: Vec3) -> Self {
         let up = get_closest_perp_unit_to_y(position, target);
+        let reference_orbit_distance = (target - position).length();
         Self {
             position,
             target,
@@ -38,6 +41,8 @@ impl OrbitCamera {
             thrust_sign: 0.0,
             thrust_accel: 0.0,
             lock_up: false,
+            reference_orbit_distance,
+            origin_center_lock_up: None,
             animating_y_top: 0,
             animating_to_origin: 0,
             start_time: None,
@@ -203,8 +208,14 @@ impl OrbitCamera {
 
     /// Starts a short animation that shifts the camera target toward the world origin.
     pub fn center_target_on_origin(&mut self) {
+        self.origin_center_lock_up = Some(self.lock_up);
         self.animating_to_origin = ORIGIN_CENTER_MAX_STEPS;
         self.start_time = Some(Instant::now());
+    }
+
+    fn finish_origin_center_animation(&mut self) {
+        self.animating_to_origin = 0;
+        self.origin_center_lock_up = None;
     }
 
     /// Returns whether a camera alignment or recentering animation is still running.
@@ -222,7 +233,9 @@ impl OrbitCamera {
             let dt = start.elapsed().as_secs_f32();
             if dt >= ANIMATION_DURATION {
                 if self.animating_to_origin > 0 {
-                    if self.lock_up {
+                    let origin_center_lock_up =
+                        self.origin_center_lock_up.unwrap_or(self.lock_up);
+                    if origin_center_lock_up {
                         if lock_up_origin_center_complete(self.position, self.target) {
                             if let Some((new_position, new_target, new_up)) =
                                 snap_lock_up_center_on_origin(self.position, self.target)
@@ -231,7 +244,7 @@ impl OrbitCamera {
                                 self.target = new_target;
                                 self.up = new_up;
                             }
-                            self.animating_to_origin = 0;
+                            self.finish_origin_center_animation();
                         } else if let Some((new_position, new_target, new_up)) =
                             step_lock_up_center_on_origin(self.position, self.target)
                         {
@@ -246,17 +259,17 @@ impl OrbitCamera {
                                     self.target = new_target;
                                     self.up = new_up;
                                 }
-                                self.animating_to_origin = 0;
+                                self.finish_origin_center_animation();
                             } else {
                                 self.animating_to_origin -= 1;
                                 self.start_time = Some(Instant::now());
                             }
                         } else {
-                            self.animating_to_origin = 0;
+                            self.finish_origin_center_animation();
                         }
                     } else if origin_center_target_reached(self.target) {
                         self.target = Vec3::ZERO;
-                        self.animating_to_origin = 0;
+                        self.finish_origin_center_animation();
                     } else if let Some(end) =
                         get_up_center_origin(self.position, self.target, self.up)
                     {
@@ -266,7 +279,7 @@ impl OrbitCamera {
                         self.animating_to_origin -= 1;
                         self.start_time = Some(Instant::now());
                     } else {
-                        self.animating_to_origin = 0;
+                        self.finish_origin_center_animation();
                     }
                 } else if self.animating_y_top > 0 {
                     let end = get_closest_perp_unit_to_y(self.position, self.target);
@@ -287,10 +300,24 @@ impl OrbitCamera {
 
     /// Enables or disables up-lock and reprojects the up vector when locking.
     pub fn set_lock_up(&mut self, lock: bool) {
-        self.lock_up = lock;
-        if self.lock_up {
-            self.up = get_closest_perp_unit_to_y(self.position, self.target);
+        if self.lock_up && !lock {
+            self.reference_orbit_distance = self.orbit_distance();
         }
+        self.lock_up = lock;
+        if lock {
+            self.restore_lock_orbit_invariants();
+        }
+    }
+
+    /// Snaps position to the reference orbit distance along the current view direction.
+    fn restore_lock_orbit_invariants(&mut self) {
+        let relative = self.view_relative();
+        if relative.length_squared() <= EPSILON {
+            return;
+        }
+        let new_relative = clamp_pitch(relative.normalize() * self.reference_orbit_distance);
+        self.position = self.target - new_relative;
+        self.up = get_closest_perp_unit_to_y(self.position, self.target);
     }
 }
 

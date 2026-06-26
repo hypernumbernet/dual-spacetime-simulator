@@ -60,6 +60,95 @@ fn center_target_on_origin_lock_up_off_keeps_position_moves_target() {
 }
 
 #[test]
+fn center_target_on_origin_lock_up_pinned_when_mode_toggles_mid_animation() {
+    let pos = Vec3::new(4.0, 2.0, 6.0);
+    let target = Vec3::new(1.5, -0.5, 2.0);
+    let mut cam = OrbitCamera::new(pos, target);
+    cam.set_lock_up(true);
+    let reference_distance = cam.orbit_distance();
+
+    cam.center_target_on_origin();
+    for _ in 0..5 {
+        thread::sleep(Duration::from_millis(10));
+        cam.update_animation();
+    }
+    cam.set_lock_up(false);
+    for _ in 0..55 {
+        thread::sleep(Duration::from_millis(10));
+        cam.update_animation();
+    }
+
+    let final_distance = cam.orbit_distance();
+    assert!(
+        (reference_distance - final_distance).abs() < 1e-3,
+        "distance changed: {reference_distance} -> {final_distance}"
+    );
+    assert!(
+        (cam.position - pos).length() > 0.1,
+        "lock path should move position, not freeze it: {:?}",
+        cam.position
+    );
+    assert!(
+        cam.target.length() < 0.06,
+        "target not at origin: {:?}",
+        cam.target
+    );
+}
+
+#[test]
+fn center_target_on_origin_lock_up_off_then_lock_on_restores_reference_distance() {
+    let pos = Vec3::new(4.0, 2.0, 6.0);
+    let target = Vec3::new(1.5, -0.5, 2.0);
+    let mut cam = OrbitCamera::new(pos, target);
+    cam.set_lock_up(true);
+    let reference_distance = cam.orbit_distance();
+    cam.set_lock_up(false);
+
+    run_origin_center_animation(&mut cam, 60);
+
+    let view_dir_before = cam.view_relative().normalize();
+    cam.set_lock_up(true);
+
+    assert!(
+        (cam.orbit_distance() - reference_distance).abs() < 1e-3,
+        "distance not restored: reference={reference_distance} actual={}",
+        cam.orbit_distance()
+    );
+    let view_dir_after = cam.view_relative().normalize();
+    assert!(
+        view_dir_after.dot(view_dir_before) > 0.99,
+        "view direction changed: before={view_dir_before:?} after={view_dir_after:?}"
+    );
+}
+
+#[test]
+fn lock_mode_toggle_during_lock_home_animation_restores_invariants() {
+    let pos = Vec3::new(4.0, 2.0, 6.0);
+    let target = Vec3::new(1.5, -0.5, 2.0);
+    let mut cam = OrbitCamera::new(pos, target);
+    cam.set_lock_up(true);
+    let reference_distance = cam.orbit_distance();
+
+    cam.center_target_on_origin();
+    for _ in 0..10 {
+        thread::sleep(Duration::from_millis(10));
+        cam.update_animation();
+    }
+    cam.set_lock_up(false);
+    for _ in 0..10 {
+        thread::sleep(Duration::from_millis(10));
+        cam.update_animation();
+    }
+    cam.set_lock_up(true);
+
+    assert!(
+        (cam.orbit_distance() - reference_distance).abs() < 1e-3,
+        "distance not restored after mode toggles: reference={reference_distance} actual={}",
+        cam.orbit_distance()
+    );
+}
+
+#[test]
 fn initial_up_orthogonal_to_view_ray() {
     let pos = Vec3::new(1.6, -1.6, 3.0);
     let target = Vec3::ZERO;
@@ -265,6 +354,30 @@ fn input_holding(keys: &[KeyCode]) -> InputState {
         input.key_event(key, ElementState::Pressed);
     }
     input
+}
+
+#[test]
+fn spacecraft_motion_then_lock_on_preserves_reference_distance() {
+    let pos = Vec3::new(0.0, 0.0, 5.0);
+    let target = Vec3::ZERO;
+    let mut cam = OrbitCamera::new(pos, target);
+    cam.set_lock_up(true);
+    let reference_distance = cam.orbit_distance();
+    cam.set_lock_up(false);
+
+    apply_spacecraft_wheel_thrust(&mut cam, 1.0);
+    for _ in 0..5 {
+        tick_spacecraft_camera(&mut cam, 0.1);
+    }
+    apply_spacecraft_steer_from_offset(&mut cam, 0.0, 50.0, 0.05);
+    apply_spacecraft_yaw_from_offset(&mut cam, 30.0, 0.05);
+
+    cam.set_lock_up(true);
+    assert!(
+        (cam.orbit_distance() - reference_distance).abs() < 1e-3,
+        "distance changed: {reference_distance} -> {}",
+        cam.orbit_distance()
+    );
 }
 
 #[test]
