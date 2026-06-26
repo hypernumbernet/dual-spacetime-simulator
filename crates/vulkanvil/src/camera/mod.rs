@@ -4,11 +4,11 @@ mod spacecraft;
 pub use orbit::OrbitCamera;
 pub use spacecraft::{
     apply_spacecraft_keyboard, apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset,
-    apply_spacecraft_wheel_thrust, apply_spacecraft_yaw_angle, apply_spacecraft_yaw_from_offset,
-    reset_spacecraft_motion, spacecraft_scene_wheel_allowed, spacecraft_steer_inputs,
-    spacecraft_steer_offset, tick_spacecraft_camera, tick_spacecraft_steer_and_motion,
+    apply_spacecraft_wheel_thrust, apply_spacecraft_yaw_from_offset, reset_spacecraft_motion,
+    spacecraft_scene_wheel_allowed, spacecraft_steer_inputs, spacecraft_steer_offset,
+    tick_spacecraft_camera, tick_spacecraft_steer_and_motion,
     tick_spacecraft_steer_and_motion_from_anchors, toggle_spacecraft_steer_anchor,
-    KEYBOARD_STEER_EQUIV_PX, KEYBOARD_THRUST_ACCEL, STEER_RATE_PER_PX, THRUST_ACCEL, THRUST_DURATION,
+    KEYBOARD_STEER_EQUIV_PX, KEYBOARD_STEER_RATE, STEER_RATE_PER_PX, THRUST_ACCEL, THRUST_DURATION,
     VELOCITY_STEER_THRESHOLD,
 };
 
@@ -44,15 +44,13 @@ impl OrbitKeyboardAxes {
 
 fn gather_orbit_keyboard_axes(input: &InputState) -> OrbitKeyboardAxes {
     OrbitKeyboardAxes {
-        forward: (input.held(KeyCode::KeyW) as i32 - input.held(KeyCode::KeyS) as i32) as f32,
-        right: (input.held(KeyCode::KeyD) as i32 - input.held(KeyCode::KeyA) as i32) as f32,
-        yaw: (input.held(KeyCode::KeyE) as i32 - input.held(KeyCode::KeyQ) as i32) as f32,
+        forward: input.axis(KeyCode::KeyW, KeyCode::KeyS),
+        right: input.axis(KeyCode::KeyD, KeyCode::KeyA),
+        yaw: input.axis(KeyCode::KeyE, KeyCode::KeyQ),
         vertical: (input.held(KeyCode::ShiftLeft) || input.held(KeyCode::ShiftRight)) as i32 as f32
             - input.held(KeyCode::Space) as i32 as f32,
-        target_vertical: (input.held(KeyCode::ArrowDown) as i32
-            - input.held(KeyCode::ArrowUp) as i32) as f32,
-        target_horizontal: (input.held(KeyCode::ArrowLeft) as i32
-            - input.held(KeyCode::ArrowRight) as i32) as f32,
+        target_vertical: input.axis(KeyCode::ArrowDown, KeyCode::ArrowUp),
+        target_horizontal: input.axis(KeyCode::ArrowLeft, KeyCode::ArrowRight),
     }
 }
 

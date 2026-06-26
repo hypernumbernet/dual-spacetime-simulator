@@ -37,6 +37,12 @@ impl InputState {
         self.just_pressed.contains(&code)
     }
 
+    /// Returns `+1`, `0`, or `-1` from a positive/negative key pair (both held => `0`).
+    #[inline]
+    pub fn axis(&self, positive: KeyCode, negative: KeyCode) -> f32 {
+        (self.held(positive) as i32 - self.held(negative) as i32) as f32
+    }
+
     /// Clears per-frame edge state and consumed mouse delta. Call at end of each frame.
     pub fn end_frame(&mut self) {
         self.just_pressed.clear();

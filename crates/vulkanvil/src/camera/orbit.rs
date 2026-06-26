@@ -36,7 +36,7 @@ impl OrbitCamera {
             velocity: Vec3::ZERO,
             thrust_remaining: 0.0,
             thrust_sign: 0.0,
-            thrust_accel: super::spacecraft::THRUST_ACCEL,
+            thrust_accel: 0.0,
             lock_up: false,
             animating_y_top: 0,
             animating_to_origin: 0,
