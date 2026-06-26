@@ -520,6 +520,8 @@ impl ApplicationHandler for App {
                     plus_anchor,
                     self.last_cursor_position,
                     dt,
+                    &self.input,
+                    keyboard_blocked,
                 );
             }
             tick_orbit_camera(

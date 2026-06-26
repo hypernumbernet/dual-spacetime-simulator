@@ -251,11 +251,21 @@ fn move_target_around_position_y_zero_is_noop() {
 }
 
 use vulkanvil::{
-    apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset, apply_spacecraft_wheel_thrust,
-    apply_spacecraft_yaw_from_offset, reset_spacecraft_motion, spacecraft_steer_inputs,
-    tick_spacecraft_camera, tick_spacecraft_steer_and_motion_from_anchors, THRUST_ACCEL, THRUST_DURATION,
-    VELOCITY_STEER_THRESHOLD,
+    apply_spacecraft_keyboard, apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset,
+    apply_spacecraft_wheel_thrust, apply_spacecraft_yaw_from_offset, reset_spacecraft_motion,
+    spacecraft_steer_inputs, tick_spacecraft_camera, tick_spacecraft_steer_and_motion_from_anchors,
+    InputState, KEYBOARD_STEER_EQUIV_PX, THRUST_ACCEL, THRUST_DURATION, VELOCITY_STEER_THRESHOLD,
 };
+use winit::event::ElementState;
+use winit::keyboard::KeyCode;
+
+fn input_holding(keys: &[KeyCode]) -> InputState {
+    let mut input = InputState::default();
+    for &key in keys {
+        input.key_event(key, ElementState::Pressed);
+    }
+    input
+}
 
 #[test]
 fn spacecraft_roll_pitch_keeps_position_changes_orientation() {
@@ -477,6 +487,8 @@ fn spacecraft_yaw_steer_priority_over_anchor() {
         Some([0.0, 0.0]),
         cursor,
         dt,
+        &InputState::default(),
+        false,
     );
     tick_spacecraft_steer_and_motion_from_anchors(
         &mut cam_pitch_only,
@@ -484,6 +496,8 @@ fn spacecraft_yaw_steer_priority_over_anchor() {
         Some([0.0, 0.0]),
         cursor,
         dt,
+        &InputState::default(),
+        false,
     );
     assert!(
         (cam_yaw_only.target.y - cam_pitch_only.target.y).abs() > 1e-3,
@@ -493,4 +507,93 @@ fn spacecraft_yaw_steer_priority_over_anchor() {
         (cam_yaw_only.target - cam_pitch_only.target).length() > 1e-3,
         "yaw-only and pitch-only should differ"
     );
+}
+
+#[test]
+fn spacecraft_keyboard_pitch_w_changes_view() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    let forward_before = (cam.target - cam.position).normalize();
+    let input = input_holding(&[KeyCode::KeyW]);
+    apply_spacecraft_keyboard(&mut cam, &input, 0.05, false);
+    let forward_after = (cam.target - cam.position).normalize();
+    assert!(
+        (forward_after - forward_before).length() > 1e-3,
+        "W should pitch view down like cursor above anchor"
+    );
+}
+
+#[test]
+fn spacecraft_keyboard_pitch_w_matches_mouse_up_offset() {
+    let dt = 0.05;
+    let offset_y = -KEYBOARD_STEER_EQUIV_PX;
+    let mut cam_keyboard = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    let mut cam_mouse = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    apply_spacecraft_keyboard(
+        &mut cam_keyboard,
+        &input_holding(&[KeyCode::KeyW]),
+        dt,
+        false,
+    );
+    apply_spacecraft_steer_from_offset(&mut cam_mouse, 0.0, offset_y, dt);
+    assert!(
+        (cam_keyboard.target - cam_mouse.target).length() < 1e-4,
+        "keyboard W should match mouse-up pitch steer"
+    );
+}
+
+#[test]
+fn spacecraft_keyboard_roll_a_matches_mouse_left_offset() {
+    let dt = 0.05;
+    let offset_x = -KEYBOARD_STEER_EQUIV_PX;
+    let mut cam_keyboard = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    let mut cam_mouse = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    apply_spacecraft_keyboard(
+        &mut cam_keyboard,
+        &input_holding(&[KeyCode::KeyA]),
+        dt,
+        false,
+    );
+    apply_spacecraft_steer_from_offset(&mut cam_mouse, offset_x, 0.0, dt);
+    assert!(
+        (cam_keyboard.up - cam_mouse.up).length() < 1e-4,
+        "keyboard A should match mouse-left roll steer"
+    );
+}
+
+#[test]
+fn spacecraft_keyboard_yaw_q_matches_mouse_left_offset() {
+    let dt = 0.05;
+    let offset_x = -KEYBOARD_STEER_EQUIV_PX;
+    let mut cam_keyboard = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    let mut cam_mouse = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    apply_spacecraft_keyboard(
+        &mut cam_keyboard,
+        &input_holding(&[KeyCode::KeyQ]),
+        dt,
+        false,
+    );
+    apply_spacecraft_yaw_from_offset(&mut cam_mouse, offset_x, dt);
+    assert!(
+        (cam_keyboard.target - cam_mouse.target).length() < 1e-4,
+        "keyboard Q should match mouse-left yaw steer"
+    );
+}
+
+#[test]
+fn spacecraft_keyboard_space_builds_velocity() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    let input = input_holding(&[KeyCode::Space]);
+    apply_spacecraft_keyboard(&mut cam, &input, 0.05, false);
+    tick_spacecraft_camera(&mut cam, 0.05);
+    assert!(cam.velocity().length() > 0.0);
+}
+
+#[test]
+fn spacecraft_keyboard_blocked_is_noop() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    let before_target = cam.target;
+    let input = input_holding(&[KeyCode::KeyW, KeyCode::Space]);
+    assert!(!apply_spacecraft_keyboard(&mut cam, &input, 0.05, true));
+    assert!((cam.target - before_target).length() < 1e-5);
+    assert_eq!(cam.velocity(), Vec3::ZERO);
 }

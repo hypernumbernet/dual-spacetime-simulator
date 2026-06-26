@@ -1,11 +1,19 @@
 use super::orbit::OrbitCamera;
+use crate::input::InputState;
 use glam::{Quat, Vec3};
 use std::f32::EPSILON;
+use winit::keyboard::KeyCode;
 
 pub const THRUST_DURATION: f32 = 0.4;
 pub const THRUST_ACCEL: f32 = 0.5;
 /// Roll/pitch/yaw rate (rad/s) per pixel of offset from the steer anchor.
 pub const STEER_RATE_PER_PX: f32 = 0.005;
+/// Keyboard input uses this multiplier relative to mouse anchor / wheel defaults.
+pub const KEYBOARD_INPUT_SPEED_SCALE: f32 = 2.0;
+/// Keyboard steer rate matches holding the cursor this many pixels from an anchor.
+pub const KEYBOARD_STEER_EQUIV_PX: f32 = 100.0 * KEYBOARD_INPUT_SPEED_SCALE;
+/// Forward/back thrust acceleration while Space/Shift are held.
+pub const KEYBOARD_THRUST_ACCEL: f32 = THRUST_ACCEL * KEYBOARD_INPUT_SPEED_SCALE;
 /// Below this speed, mouse steering zeros velocity and turns view in place.
 pub const VELOCITY_STEER_THRESHOLD: f32 = 0.08;
 
@@ -17,6 +25,7 @@ pub fn reset_spacecraft_motion(camera: &mut OrbitCamera) {
     camera.velocity = Vec3::ZERO;
     camera.thrust_remaining = 0.0;
     camera.thrust_sign = 0.0;
+    camera.thrust_accel = THRUST_ACCEL;
 }
 
 /// Starts or restarts a timed forward/backward thrust from mouse wheel input.
@@ -26,6 +35,7 @@ pub fn apply_spacecraft_wheel_thrust(camera: &mut OrbitCamera, direction: f32) {
     }
     camera.thrust_sign = direction.signum();
     camera.thrust_remaining = THRUST_DURATION;
+    camera.thrust_accel = THRUST_ACCEL;
 }
 
 /// Integrates thrust, velocity, and inertial translation for spacecraft mode.
@@ -42,7 +52,7 @@ pub fn tick_spacecraft_camera(camera: &mut OrbitCamera, dt: f32) {
 
     if camera.thrust_remaining > 0.0 {
         let thrust_dt = dt.min(camera.thrust_remaining);
-        camera.velocity += forward * camera.thrust_sign * THRUST_ACCEL * thrust_dt;
+        camera.velocity += forward * camera.thrust_sign * camera.thrust_accel * thrust_dt;
         camera.thrust_remaining -= thrust_dt;
     }
 
@@ -112,6 +122,11 @@ pub fn apply_spacecraft_yaw_from_offset(camera: &mut OrbitCamera, offset_x: f32,
         return;
     }
     let yaw = -offset_x * STEER_RATE_PER_PX * dt;
+    apply_spacecraft_yaw_angle(camera, yaw);
+}
+
+/// Applies yaw by a direct angle (radians).
+pub fn apply_spacecraft_yaw_angle(camera: &mut OrbitCamera, yaw: f32) {
     steer_spacecraft(camera, camera.up, yaw);
 }
 
@@ -153,6 +168,74 @@ pub fn spacecraft_steer_inputs(
     }
 }
 
+/// Normalized keyboard axis values for spacecraft mode controls.
+#[derive(Clone, Copy, Default)]
+struct SpacecraftKeyboardAxes {
+    pitch: f32,
+    roll: f32,
+    yaw: f32,
+}
+
+impl SpacecraftKeyboardAxes {
+    fn is_zero(self) -> bool {
+        self.pitch == 0.0 && self.roll == 0.0 && self.yaw == 0.0
+    }
+}
+
+fn gather_spacecraft_keyboard_axes(input: &InputState) -> SpacecraftKeyboardAxes {
+    SpacecraftKeyboardAxes {
+        pitch: (input.held(KeyCode::KeyW) as i32 - input.held(KeyCode::KeyS) as i32) as f32,
+        roll: (input.held(KeyCode::KeyA) as i32 - input.held(KeyCode::KeyD) as i32) as f32,
+        yaw: (input.held(KeyCode::KeyQ) as i32 - input.held(KeyCode::KeyE) as i32) as f32,
+    }
+}
+
+fn gather_spacecraft_keyboard_thrust(input: &InputState) -> f32 {
+    let forward = input.held(KeyCode::Space) as i32;
+    let backward =
+        (input.held(KeyCode::ShiftLeft) || input.held(KeyCode::ShiftRight)) as i32;
+    (forward - backward) as f32
+}
+
+fn keyboard_steer_rate(dt: f32) -> f32 {
+    STEER_RATE_PER_PX * KEYBOARD_STEER_EQUIV_PX * dt
+}
+
+/// Applies spacecraft keyboard steering and thrust when input is not blocked by the GUI.
+///
+/// Returns `true` when any steering or thrust input was applied.
+pub fn apply_spacecraft_keyboard(
+    camera: &mut OrbitCamera,
+    input: &InputState,
+    dt: f32,
+    keyboard_blocked: bool,
+) -> bool {
+    if keyboard_blocked || dt <= EPSILON {
+        return false;
+    }
+
+    let axes = gather_spacecraft_keyboard_axes(input);
+    let thrust = gather_spacecraft_keyboard_thrust(input);
+    if axes.is_zero() && thrust == 0.0 {
+        return false;
+    }
+
+    if thrust != 0.0 {
+        apply_spacecraft_wheel_thrust(camera, thrust);
+        camera.thrust_accel = KEYBOARD_THRUST_ACCEL;
+    }
+
+    let rate = keyboard_steer_rate(dt);
+    if axes.yaw != 0.0 {
+        apply_spacecraft_yaw_angle(camera, axes.yaw * rate);
+    }
+    if axes.roll != 0.0 || axes.pitch != 0.0 {
+        apply_spacecraft_roll_pitch(camera, axes.roll * rate, axes.pitch * rate);
+    }
+
+    true
+}
+
 /// Toggles steer-anchor presence at `pos`.
 pub fn toggle_spacecraft_steer_anchor(anchor: &mut Option<[f64; 2]>, pos: (f64, f64)) {
     if anchor.is_some() {
@@ -171,7 +254,10 @@ pub fn tick_spacecraft_steer_and_motion(
     yaw_steer_offset_x: Option<f32>,
     anchor_steer_offset: Option<(f32, f32)>,
     dt: f32,
+    input: &InputState,
+    keyboard_blocked: bool,
 ) {
+    apply_spacecraft_keyboard(camera, input, dt, keyboard_blocked);
     if let Some(offset_x) = yaw_steer_offset_x {
         apply_spacecraft_yaw_from_offset(camera, offset_x, dt);
     } else if let Some((offset_x, offset_y)) = anchor_steer_offset {
@@ -187,10 +273,19 @@ pub fn tick_spacecraft_steer_and_motion_from_anchors(
     plus_anchor: Option<[f64; 2]>,
     cursor: Option<(f64, f64)>,
     dt: f32,
+    input: &InputState,
+    keyboard_blocked: bool,
 ) {
     let (yaw_steer_offset_x, anchor_steer_offset) =
         spacecraft_steer_inputs(yaw_anchor, plus_anchor, cursor);
-    tick_spacecraft_steer_and_motion(camera, yaw_steer_offset_x, anchor_steer_offset, dt);
+    tick_spacecraft_steer_and_motion(
+        camera,
+        yaw_steer_offset_x,
+        anchor_steer_offset,
+        dt,
+        input,
+        keyboard_blocked,
+    );
 }
 
 /// Returns whether mouse wheel should affect the 3D scene camera.
