@@ -732,7 +732,15 @@ impl ApplicationHandler for App {
                             }
                             self.right_button(state);
                         }
-                        MouseButton::Middle => self.middle_button(state),
+                        MouseButton::Middle => {
+                            let is_scene_click =
+                                matches!(self.drag_owner, DragOwner::PendingSceneMiddle);
+                            self.middle_button(state);
+                            if is_scene_click {
+                                let mut ui = self.ui_state.write().unwrap();
+                                ui.lock_camera_up = !ui.lock_camera_up;
+                            }
+                        }
                         _ => {}
                     }
                     self.drag_owner = DragOwner::None;
@@ -801,12 +809,19 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if let PhysicalKey::Code(KeyCode::Home) = event.physical_key
+                if let PhysicalKey::Code(key) = event.physical_key
                     && event.state == ElementState::Pressed
                     && !event.repeat
                     && !gui.keyboard_wants_input()
                 {
-                    pipeline.center_target_on_origin();
+                    match key {
+                        KeyCode::Home => pipeline.center_target_on_origin(),
+                        KeyCode::End => {
+                            let mut ui = self.ui_state.write().unwrap();
+                            ui.lock_camera_up = !ui.lock_camera_up;
+                        }
+                        _ => {}
+                    }
                 }
             }
             _ => {}
