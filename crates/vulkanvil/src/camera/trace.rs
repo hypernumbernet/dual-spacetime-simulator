@@ -7,9 +7,10 @@ const MIN_TRACE_VELOCITY_SQ: f32 = 1e-12;
 
 fn trace_forward(camera: &OrbitCamera, particle_velocity: Vec3) -> Vec3 {
     if particle_velocity.length_squared() > MIN_TRACE_VELOCITY_SQ {
-        return particle_velocity.normalize();
+        particle_velocity.normalize()
+    } else {
+        camera.view_relative().normalize_or_zero()
     }
-    camera.view_relative().normalize_or_zero()
 }
 
 fn up_perpendicular_to_forward(forward: Vec3, prior_up: Vec3) -> Vec3 {
@@ -37,21 +38,24 @@ pub fn trace_particle_from_behind(
     particle_position: Vec3,
     particle_velocity: Vec3,
 ) {
-    let distance = camera.orbit_distance().max(0.1);
     let forward = trace_forward(camera, particle_velocity);
     if forward == Vec3::ZERO {
         return;
     }
 
+    let distance = camera.orbit_distance().max(0.1);
+    let relative = forward * distance;
+    let lock_up = camera.lock_up();
     camera.target = particle_position;
-    let mut relative = forward * distance;
+    camera.position = if lock_up {
+        particle_position - clamp_pitch(relative)
+    } else {
+        particle_position - relative
+    };
 
-    if camera.lock_up() {
-        relative = clamp_pitch(relative);
-        camera.position = camera.target - relative;
+    if lock_up {
         camera.up = get_closest_perp_unit_to_y(camera.position, camera.target);
     } else {
-        camera.position = camera.target - relative;
         camera.up = up_perpendicular_to_forward(forward, camera.up);
         camera.velocity = particle_velocity;
         camera.thrust_remaining = 0.0;

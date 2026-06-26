@@ -389,6 +389,25 @@ pub(crate) fn resolve_selected_particle_live(
     Some((index, particle))
 }
 
+/// Resolves the selected particle for camera trace follow.
+///
+/// Returns the live particle and whether trace mode remains active this frame.
+pub(crate) fn resolve_trace_particle_for_camera(
+    ui_state: &Arc<RwLock<UiState>>,
+    simulation_manager: &Arc<RwLock<SimulationManager>>,
+    render_pipeline: Option<&ParticleRenderPipeline>,
+) -> (Option<Particle>, bool) {
+    let mut uis = ui_state.write().unwrap();
+    if !uis.is_trace_enabled {
+        return (None, false);
+    }
+    let manager = simulation_manager.read().unwrap();
+    match resolve_selected_particle_live(&mut uis, &manager, render_pipeline) {
+        Some((_, particle)) => (Some(particle), true),
+        None => (None, false),
+    }
+}
+
 /// Renders the picked particle's info as a closable, draggable window.
 ///
 /// Displays live position and velocity resolved each frame from simulation state.

@@ -189,15 +189,7 @@ pub fn apply_spacecraft_keyboard(
     let pitch = input.axis(KeyCode::KeyW, KeyCode::KeyS);
     let roll = input.axis(KeyCode::KeyA, KeyCode::KeyD);
     let yaw = input.axis(KeyCode::KeyQ, KeyCode::KeyE);
-    let thrust = if suppress_space_shift {
-        0.0
-    } else if input.held(KeyCode::Space) {
-        1.0
-    } else if input.held(KeyCode::ShiftLeft) || input.held(KeyCode::ShiftRight) {
-        -1.0
-    } else {
-        0.0
-    };
+    let thrust = input.space_shift_thrust(suppress_space_shift);
 
     if pitch == 0.0 && roll == 0.0 && yaw == 0.0 && thrust == 0.0 {
         return false;

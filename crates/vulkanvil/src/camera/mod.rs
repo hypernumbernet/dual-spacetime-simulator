@@ -44,18 +44,12 @@ impl OrbitKeyboardAxes {
     }
 }
 
-fn gather_orbit_keyboard_axes(input: &InputState, suppress_space_shift: bool) -> OrbitKeyboardAxes {
-    let vertical = if suppress_space_shift {
-        0.0
-    } else {
-        (input.held(KeyCode::ShiftLeft) || input.held(KeyCode::ShiftRight)) as i32 as f32
-            - input.held(KeyCode::Space) as i32 as f32
-    };
+fn gather_orbit_keyboard_axes(input: &InputState, trace_active: bool) -> OrbitKeyboardAxes {
     OrbitKeyboardAxes {
         forward: input.axis(KeyCode::KeyW, KeyCode::KeyS),
         right: input.axis(KeyCode::KeyD, KeyCode::KeyA),
         yaw: input.axis(KeyCode::KeyE, KeyCode::KeyQ),
-        vertical,
+        vertical: input.space_shift_vertical_axis(trace_active),
         target_vertical: input.axis(KeyCode::ArrowDown, KeyCode::ArrowUp),
         target_horizontal: input.axis(KeyCode::ArrowLeft, KeyCode::ArrowRight),
     }
@@ -81,6 +75,8 @@ pub fn tick_orbit_camera(
 
 /// Applies WASD pan, Q/E yaw, Space/Shift vertical move, and arrow-key target controls
 /// when `lock_camera_up` is enabled and keyboard input is not blocked.
+///
+/// When `suppress_space_shift` is true (Trace On), Space and Shift are ignored.
 ///
 /// Returns `true` when any camera motion was applied.
 pub fn apply_orbit_keyboard(

@@ -43,6 +43,32 @@ impl InputState {
         (self.held(positive) as i32 - self.held(negative) as i32) as f32
     }
 
+    /// Returns `+1` (Space), `-1` (Shift), or `0` for forward/back camera thrust.
+    #[inline]
+    pub fn space_shift_thrust(&self, suppressed: bool) -> f32 {
+        if suppressed {
+            return 0.0;
+        }
+        if self.held(KeyCode::Space) {
+            1.0
+        } else if self.held(KeyCode::ShiftLeft) || self.held(KeyCode::ShiftRight) {
+            -1.0
+        } else {
+            0.0
+        }
+    }
+
+    /// Returns `+1` (Shift), `-1` (Space), or `0` for orbit-mode vertical motion.
+    #[inline]
+    pub fn space_shift_vertical_axis(&self, suppressed: bool) -> f32 {
+        if suppressed {
+            0.0
+        } else {
+            (self.held(KeyCode::ShiftLeft) || self.held(KeyCode::ShiftRight)) as i32 as f32
+                - self.held(KeyCode::Space) as i32 as f32
+        }
+    }
+
     /// Clears per-frame edge state and consumed mouse delta. Call at end of each frame.
     pub fn end_frame(&mut self) {
         self.just_pressed.clear();
