@@ -1,7 +1,9 @@
 mod orbit;
 mod spacecraft;
+mod trace;
 
 pub use orbit::OrbitCamera;
+pub use trace::trace_particle_from_behind;
 pub use spacecraft::{
     apply_spacecraft_keyboard, apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset,
     apply_spacecraft_wheel_thrust, apply_spacecraft_yaw_from_offset, reset_spacecraft_motion,
@@ -42,13 +44,18 @@ impl OrbitKeyboardAxes {
     }
 }
 
-fn gather_orbit_keyboard_axes(input: &InputState) -> OrbitKeyboardAxes {
+fn gather_orbit_keyboard_axes(input: &InputState, suppress_space_shift: bool) -> OrbitKeyboardAxes {
+    let vertical = if suppress_space_shift {
+        0.0
+    } else {
+        (input.held(KeyCode::ShiftLeft) || input.held(KeyCode::ShiftRight)) as i32 as f32
+            - input.held(KeyCode::Space) as i32 as f32
+    };
     OrbitKeyboardAxes {
         forward: input.axis(KeyCode::KeyW, KeyCode::KeyS),
         right: input.axis(KeyCode::KeyD, KeyCode::KeyA),
         yaw: input.axis(KeyCode::KeyE, KeyCode::KeyQ),
-        vertical: (input.held(KeyCode::ShiftLeft) || input.held(KeyCode::ShiftRight)) as i32 as f32
-            - input.held(KeyCode::Space) as i32 as f32,
+        vertical,
         target_vertical: input.axis(KeyCode::ArrowDown, KeyCode::ArrowUp),
         target_horizontal: input.axis(KeyCode::ArrowLeft, KeyCode::ArrowRight),
     }
@@ -60,9 +67,16 @@ pub fn tick_orbit_camera(
     input: &InputState,
     lock_camera_up: bool,
     keyboard_blocked: bool,
+    suppress_space_shift: bool,
 ) {
     camera.update_animation();
-    apply_orbit_keyboard(camera, input, lock_camera_up, keyboard_blocked);
+    apply_orbit_keyboard(
+        camera,
+        input,
+        lock_camera_up,
+        keyboard_blocked,
+        suppress_space_shift,
+    );
 }
 
 /// Applies WASD pan, Q/E yaw, Space/Shift vertical move, and arrow-key target controls
@@ -74,12 +88,13 @@ pub fn apply_orbit_keyboard(
     input: &InputState,
     lock_camera_up: bool,
     keyboard_blocked: bool,
+    suppress_space_shift: bool,
 ) -> bool {
     if !lock_camera_up || keyboard_blocked {
         return false;
     }
 
-    let axes = gather_orbit_keyboard_axes(input);
+    let axes = gather_orbit_keyboard_axes(input, suppress_space_shift);
     if axes.is_zero() {
         return false;
     }

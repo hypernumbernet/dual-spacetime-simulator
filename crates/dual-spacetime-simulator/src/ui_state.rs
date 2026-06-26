@@ -400,6 +400,8 @@ pub struct UiState {
     pub is_settings_panel_open: bool,
     pub is_particle_info_panel_open: bool,
     pub selected_particle: Option<SelectedParticleInfo>,
+    /// When true, the camera follows the selected particle from behind each frame.
+    pub is_trace_enabled: bool,
     pub start_maximized: bool,
     pub link_point_size_to_scale: bool,
     pub lock_camera_up: bool,
@@ -463,6 +465,7 @@ impl Default for UiState {
             is_settings_panel_open: false,
             is_particle_info_panel_open: false,
             selected_particle: None,
+            is_trace_enabled: false,
             start_maximized: false,
             link_point_size_to_scale: true,
             lock_camera_up: true,
@@ -658,6 +661,7 @@ impl UiState {
     pub fn clear_selected_particle(&mut self) {
         self.selected_particle = None;
         self.is_particle_info_panel_open = false;
+        self.is_trace_enabled = false;
     }
 
     /// Schedules a GPU particle-buffer reload after CPU-side particles were replaced.

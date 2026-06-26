@@ -23,7 +23,7 @@ pub use camera::{
     apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset, apply_spacecraft_wheel_thrust,
     apply_spacecraft_yaw_from_offset, apply_camera_mouse_wheel, apply_wheel_forward,
     reset_spacecraft_motion, spacecraft_scene_wheel_allowed, spacecraft_steer_inputs,
-    spacecraft_steer_offset, tick_orbit_camera, tick_spacecraft_camera,
+    trace_particle_from_behind, spacecraft_steer_offset, tick_orbit_camera, tick_spacecraft_camera,
     tick_spacecraft_steer_and_motion, tick_spacecraft_steer_and_motion_from_anchors,
     toggle_spacecraft_steer_anchor, STEER_RATE_PER_PX,
 };

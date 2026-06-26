@@ -288,6 +288,11 @@ impl OrbitCamera {
         }
     }
 
+    /// Returns whether camera up is locked to world Y.
+    pub fn lock_up(&self) -> bool {
+        self.lock_up
+    }
+
     /// Enables or disables up-lock and reprojects the up vector when locking.
     pub fn set_lock_up(&mut self, lock: bool) {
         if lock == self.lock_up {
@@ -319,7 +324,7 @@ impl OrbitCamera {
 }
 
 /// Clamps view pitch to avoid near-vertical singularities during camera motion.
-fn clamp_pitch(relative: Vec3) -> Vec3 {
+pub(crate) fn clamp_pitch(relative: Vec3) -> Vec3 {
     if relative.length_squared() <= EPSILON {
         return relative;
     }
@@ -357,7 +362,7 @@ fn clamp_pitch(relative: Vec3) -> Vec3 {
 }
 
 /// Returns a unit up vector perpendicular to view direction and closest to world-up.
-fn get_closest_perp_unit_to_y(position: Vec3, target: Vec3) -> Vec3 {
+pub(crate) fn get_closest_perp_unit_to_y(position: Vec3, target: Vec3) -> Vec3 {
     let dir = (target - position).normalize_or_zero();
     if dir == Vec3::ZERO {
         return Vec3::Y;

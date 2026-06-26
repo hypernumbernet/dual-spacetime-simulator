@@ -290,7 +290,7 @@ pub fn draw_ui(
 
     let selection = {
         let manager = simulation_manager.read().unwrap();
-        resolve_selected_particle(&mut uis, &manager, render_pipeline)
+        resolve_selected_particle_live(&mut uis, &manager, render_pipeline)
     };
     particle_info_window(ctx, &mut uis, selection);
 
@@ -358,7 +358,7 @@ fn solar_system_reset_log_window(ctx: &egui::Context, uis: &mut UiState) {
 }
 
 /// Resolves the currently selected particle from live simulation state.
-fn resolve_selected_particle(
+pub(crate) fn resolve_selected_particle_live(
     uis: &mut UiState,
     simulation_manager: &SimulationManager,
     render_pipeline: Option<&ParticleRenderPipeline>,
@@ -473,6 +473,19 @@ fn particle_info_window(ctx: &egui::Context, uis: &mut UiState, selection: Optio
             ui.separator();
             if button_normal(ui, "Delete", false).clicked() {
                 uis.pending_delete_particle_index = Some(index);
+            }
+            if button_normal(
+                ui,
+                if uis.is_trace_enabled {
+                    "Trace On"
+                } else {
+                    "Trace"
+                },
+                uis.is_trace_enabled,
+            )
+            .clicked()
+            {
+                uis.is_trace_enabled = !uis.is_trace_enabled;
             }
         },
     );

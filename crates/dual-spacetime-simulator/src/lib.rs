@@ -19,7 +19,7 @@ use crate::object_input::{ObjectInput, SolarSystemBuildError, build_solar_system
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
-use crate::ui::{draw_ui, process_pending_particle_delete, process_pending_snapshot_dialog};
+use crate::ui::{draw_ui, process_pending_particle_delete, process_pending_snapshot_dialog, resolve_selected_particle_live};
 use crate::ui_state::{DragOwner, PlacementMode, UiState};
 use ash::vk;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
@@ -861,6 +861,25 @@ impl ApplicationHandler for App {
                 uis.spacecraft_yaw_steer_anchor = None;
             }
         }
+        let trace_particle = {
+            let mut uis = self.ui_state.write().unwrap();
+            if !uis.is_trace_enabled {
+                None
+            } else {
+                match resolve_selected_particle_live(
+                    &mut uis,
+                    &self.simulation_manager.read().unwrap(),
+                    self.render_pipeline.as_ref(),
+                ) {
+                    Some((_, particle)) => Some(particle),
+                    None => {
+                        uis.is_trace_enabled = false;
+                        None
+                    }
+                }
+            }
+        };
+        let suppress_space_shift = self.ui_state.read().unwrap().is_trace_enabled;
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.set_lock_camera_up(lock_camera_up);
             if !lock_camera_up {
@@ -882,6 +901,7 @@ impl ApplicationHandler for App {
                     dt,
                     &self.input,
                     keyboard_blocked,
+                    suppress_space_shift,
                 );
             }
             tick_orbit_camera(
@@ -889,7 +909,11 @@ impl ApplicationHandler for App {
                 &self.input,
                 lock_camera_up,
                 keyboard_blocked,
+                suppress_space_shift,
             );
+            if let Some(particle) = trace_particle {
+                pipeline.trace_selected_particle(particle.position, particle.velocity);
+            }
         }
         if *self.need_redraw.read().unwrap() == false && !self.gpu_particle_sync.has_pending_sync()
         {

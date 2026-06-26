@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use vulkanvil::{
     AllocatedBuffer, AllocatedImage, OrbitCamera, VulkanBase, create_buffer_with_data,
     create_depth_image, create_shader_module, reset_spacecraft_motion, select_depth_format,
+    trace_particle_from_behind,
 };
 
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
@@ -518,6 +519,15 @@ impl ParticleRenderPipeline {
     pub fn center_target_on_origin(&mut self) {
         reset_spacecraft_motion(&mut self.camera);
         self.camera.center_target_on_origin();
+    }
+
+    /// Follows a particle from behind, preserving the current orbit distance.
+    pub fn trace_selected_particle(&mut self, position: glam::DVec3, velocity: glam::DVec3) {
+        trace_particle_from_behind(
+            &mut self.camera,
+            position.as_vec3(),
+            velocity.as_vec3(),
+        );
     }
 
     /// Enables or disables camera up-lock behavior.

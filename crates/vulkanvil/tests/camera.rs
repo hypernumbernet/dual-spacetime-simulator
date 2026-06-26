@@ -602,6 +602,7 @@ fn spacecraft_yaw_steer_priority_over_anchor() {
         dt,
         &InputState::default(),
         false,
+        false,
     );
     tick_spacecraft_steer_and_motion_from_anchors(
         &mut cam_pitch_only,
@@ -610,6 +611,7 @@ fn spacecraft_yaw_steer_priority_over_anchor() {
         cursor,
         dt,
         &InputState::default(),
+        false,
         false,
     );
     assert!(
@@ -627,7 +629,7 @@ fn spacecraft_keyboard_pitch_w_changes_view() {
     let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
     let forward_before = (cam.target - cam.position).normalize();
     let input = input_holding(&[KeyCode::KeyW]);
-    apply_spacecraft_keyboard(&mut cam, &input, 0.05, false);
+    apply_spacecraft_keyboard(&mut cam, &input, 0.05, false, false);
     let forward_after = (cam.target - cam.position).normalize();
     assert!(
         (forward_after - forward_before).length() > 1e-3,
@@ -645,6 +647,7 @@ fn spacecraft_keyboard_pitch_w_matches_mouse_up_offset() {
         &mut cam_keyboard,
         &input_holding(&[KeyCode::KeyW]),
         dt,
+        false,
         false,
     );
     apply_spacecraft_steer_from_offset(&mut cam_mouse, 0.0, offset_y, dt);
@@ -665,6 +668,7 @@ fn spacecraft_keyboard_roll_a_matches_mouse_left_offset() {
         &input_holding(&[KeyCode::KeyA]),
         dt,
         false,
+        false,
     );
     apply_spacecraft_steer_from_offset(&mut cam_mouse, offset_x, 0.0, dt);
     assert!(
@@ -684,6 +688,7 @@ fn spacecraft_keyboard_yaw_q_matches_mouse_left_offset() {
         &input_holding(&[KeyCode::KeyQ]),
         dt,
         false,
+        false,
     );
     apply_spacecraft_yaw_from_offset(&mut cam_mouse, offset_x, dt);
     assert!(
@@ -696,7 +701,7 @@ fn spacecraft_keyboard_yaw_q_matches_mouse_left_offset() {
 fn spacecraft_keyboard_space_builds_velocity() {
     let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
     let input = input_holding(&[KeyCode::Space]);
-    apply_spacecraft_keyboard(&mut cam, &input, 0.05, false);
+    apply_spacecraft_keyboard(&mut cam, &input, 0.05, false, false);
     tick_spacecraft_camera(&mut cam, 0.05);
     assert!(cam.velocity().length() > 0.0);
 }
@@ -706,7 +711,91 @@ fn spacecraft_keyboard_blocked_is_noop() {
     let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
     let before_target = cam.target;
     let input = input_holding(&[KeyCode::KeyW, KeyCode::Space]);
-    assert!(!apply_spacecraft_keyboard(&mut cam, &input, 0.05, true));
+    assert!(!apply_spacecraft_keyboard(&mut cam, &input, 0.05, true, false));
     assert!((cam.target - before_target).length() < 1e-5);
     assert_eq!(cam.velocity(), Vec3::ZERO);
+}
+
+#[test]
+fn spacecraft_keyboard_space_suppressed_during_trace() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    let input = input_holding(&[KeyCode::Space]);
+    assert!(!apply_spacecraft_keyboard(&mut cam, &input, 0.05, false, true));
+    tick_spacecraft_camera(&mut cam, 0.05);
+    assert_eq!(cam.velocity(), Vec3::ZERO);
+}
+
+use vulkanvil::trace_particle_from_behind;
+
+#[test]
+fn trace_lock_up_places_camera_behind_velocity() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    cam.set_lock_up(true);
+    let distance = cam.orbit_distance();
+    let particle_pos = Vec3::new(10.0, 0.0, 0.0);
+    let particle_vel = Vec3::new(1.0, 0.0, 0.0);
+
+    trace_particle_from_behind(&mut cam, particle_pos, particle_vel);
+
+    assert!((cam.target - particle_pos).length() < 1e-5);
+    let view = (cam.target - cam.position).normalize();
+    assert!(view.dot(particle_vel.normalize()) > 0.99);
+    assert!((cam.position - (particle_pos - particle_vel.normalize() * distance)).length() < 1e-3);
+}
+
+#[test]
+fn trace_lock_up_preserves_distance() {
+    let mut cam = OrbitCamera::new(Vec3::new(1.0, 2.0, 6.0), Vec3::new(0.5, -1.0, 1.0));
+    cam.set_lock_up(true);
+    let before = cam.orbit_distance();
+
+    trace_particle_from_behind(&mut cam, Vec3::new(3.0, 1.0, -2.0), Vec3::new(0.0, 0.0, 2.0));
+
+    assert!((cam.orbit_distance() - before).abs() < 1e-5);
+}
+
+#[test]
+fn trace_lock_up_zero_velocity_uses_view() {
+    let pos = Vec3::new(0.0, 0.0, 5.0);
+    let target = Vec3::ZERO;
+    let mut cam = OrbitCamera::new(pos, target);
+    cam.set_lock_up(true);
+    let view_before = cam.view_relative().normalize();
+
+    trace_particle_from_behind(&mut cam, Vec3::new(4.0, 1.0, 2.0), Vec3::ZERO);
+
+    let view_after = cam.view_relative().normalize();
+    assert!(view_after.dot(view_before) > 0.99);
+}
+
+#[test]
+fn trace_free_mode_syncs_velocity() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    cam.set_lock_up(false);
+    let particle_vel = Vec3::new(0.3, -0.1, 0.2);
+
+    trace_particle_from_behind(&mut cam, Vec3::new(1.0, 2.0, 3.0), particle_vel);
+
+    assert!((cam.velocity() - particle_vel).length() < 1e-5);
+}
+
+#[test]
+fn trace_free_mode_no_pitch_clamp() {
+    let mut cam_locked = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    cam_locked.set_lock_up(true);
+    let mut cam_free = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    cam_free.set_lock_up(false);
+    let steep_velocity = Vec3::new(0.01, 1.0, 0.01);
+    let particle_pos = Vec3::new(2.0, 5.0, 1.0);
+
+    trace_particle_from_behind(&mut cam_locked, particle_pos, steep_velocity);
+    trace_particle_from_behind(&mut cam_free, particle_pos, steep_velocity);
+
+    let locked_horiz = (cam_locked.view_relative().x.powi(2) + cam_locked.view_relative().z.powi(2))
+        .sqrt();
+    let free_horiz = (cam_free.view_relative().x.powi(2) + cam_free.view_relative().z.powi(2)).sqrt();
+    assert!(
+        locked_horiz > free_horiz,
+        "lock-up should clamp steep pitch: locked={locked_horiz} free={free_horiz}"
+    );
 }

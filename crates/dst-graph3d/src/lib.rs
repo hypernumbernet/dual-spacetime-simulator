@@ -517,6 +517,7 @@ impl ApplicationHandler for App {
                     dt,
                     &self.input,
                     keyboard_blocked,
+                    false,
                 );
             }
             tick_orbit_camera(
@@ -524,6 +525,7 @@ impl ApplicationHandler for App {
                 &self.input,
                 lock_camera_up,
                 keyboard_blocked,
+                false,
             );
         }
 

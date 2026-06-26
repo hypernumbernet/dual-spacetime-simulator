@@ -180,6 +180,7 @@ pub fn apply_spacecraft_keyboard(
     input: &InputState,
     dt: f32,
     keyboard_blocked: bool,
+    suppress_space_shift: bool,
 ) -> bool {
     if keyboard_blocked || dt <= EPSILON {
         return false;
@@ -188,7 +189,9 @@ pub fn apply_spacecraft_keyboard(
     let pitch = input.axis(KeyCode::KeyW, KeyCode::KeyS);
     let roll = input.axis(KeyCode::KeyA, KeyCode::KeyD);
     let yaw = input.axis(KeyCode::KeyQ, KeyCode::KeyE);
-    let thrust = if input.held(KeyCode::Space) {
+    let thrust = if suppress_space_shift {
+        0.0
+    } else if input.held(KeyCode::Space) {
         1.0
     } else if input.held(KeyCode::ShiftLeft) || input.held(KeyCode::ShiftRight) {
         -1.0
@@ -235,8 +238,15 @@ pub fn tick_spacecraft_steer_and_motion(
     dt: f32,
     input: &InputState,
     keyboard_blocked: bool,
+    suppress_space_shift: bool,
 ) {
-    apply_spacecraft_keyboard(camera, input, dt, keyboard_blocked);
+    apply_spacecraft_keyboard(
+        camera,
+        input,
+        dt,
+        keyboard_blocked,
+        suppress_space_shift,
+    );
     if let Some(offset_x) = yaw_steer_offset_x {
         apply_spacecraft_yaw_from_offset(camera, offset_x, dt);
     } else if let Some((offset_x, offset_y)) = anchor_steer_offset {
@@ -254,6 +264,7 @@ pub fn tick_spacecraft_steer_and_motion_from_anchors(
     dt: f32,
     input: &InputState,
     keyboard_blocked: bool,
+    suppress_space_shift: bool,
 ) {
     let (yaw_steer_offset_x, anchor_steer_offset) =
         spacecraft_steer_inputs(yaw_anchor, plus_anchor, cursor);
@@ -264,6 +275,7 @@ pub fn tick_spacecraft_steer_and_motion_from_anchors(
         dt,
         input,
         keyboard_blocked,
+        suppress_space_shift,
     );
 }
 
