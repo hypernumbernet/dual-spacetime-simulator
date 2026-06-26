@@ -1,5 +1,9 @@
 use crate::gpu_simulation::{GpuParticleSimulation, create_particle_descriptor_set_layout};
 use crate::integration::Gui;
+use crate::particle_selection_marker::{
+    BRACKET_RADIUS_RATIO, MIN_HALF_SIZE_PX, SELECTION_MARKER_VERTEX_COUNT,
+    selection_index_bits,
+};
 use crate::simulation::Particle;
 use crate::ui_state::*;
 use ash::vk;
@@ -65,6 +69,24 @@ struct PushConstants {
     size_scale: f32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct SelectionMarkerPushConstants {
+    proj_view: [[f32; 4]; 4],
+    camera_position: [f32; 4],
+    camera_right: [f32; 4],
+    camera_up: [f32; 4],
+    bracket_params: [f32; 4],
+}
+
+/// Screen-space projection of a particle for UI overlay rendering.
+pub struct ParticleScreenProjection {
+    /// Window pixel coordinates matching picking (`click_x`, `click_y`).
+    pub screen_px: [f32; 2],
+    /// Distance from the camera to the scale-adjusted particle position.
+    pub camera_distance: f32,
+}
+
 pub struct ParticleRenderPipeline {
     device: ash::Device,
     allocator: Arc<Mutex<Allocator>>,
@@ -73,8 +95,10 @@ pub struct ParticleRenderPipeline {
     framebuffers: Vec<vk::Framebuffer>,
 
     pipeline_axes: vk::Pipeline,
+    pipeline_selection: vk::Pipeline,
     particle_pipelines: [vk::Pipeline; ParticleDisplayMode::ALL.len()],
     layout_axes: vk::PipelineLayout,
+    layout_selection: vk::PipelineLayout,
     layout_particles: vk::PipelineLayout,
     depth_format: vk::Format,
     depth_image: AllocatedImage,
@@ -84,6 +108,7 @@ pub struct ParticleRenderPipeline {
     add_center_marker_buffer: Option<AllocatedBuffer>,
     add_center_marker_vertex_count: u32,
     last_add_center_marker_key: Option<(glam::DVec3, u64)>,
+    selection_marker_index: i32,
     particle_descriptor_set_layout: vk::DescriptorSetLayout,
     gpu_sim: GpuParticleSimulation,
     use_gpu_sim: bool,
@@ -118,6 +143,8 @@ impl ParticleRenderPipeline {
 
         let (layout_axes, pipeline_axes) = create_axes_pipeline(&device, render_pass);
         let particle_descriptor_set_layout = create_particle_descriptor_set_layout(&device);
+        let (layout_selection, pipeline_selection) =
+            create_selection_marker_pipeline(&device, render_pass, particle_descriptor_set_layout);
         let (layout_particles, particle_pipelines) =
             create_particles_pipelines(&device, render_pass, particle_descriptor_set_layout);
 
@@ -137,8 +164,10 @@ impl ParticleRenderPipeline {
             render_pass,
             framebuffers,
             pipeline_axes,
+            pipeline_selection,
             particle_pipelines,
             layout_axes,
+            layout_selection,
             layout_particles,
             depth_format,
             depth_image,
@@ -147,6 +176,7 @@ impl ParticleRenderPipeline {
             add_center_marker_buffer: None,
             add_center_marker_vertex_count: 0,
             last_add_center_marker_key: None,
+            selection_marker_index: -1,
             particle_descriptor_set_layout,
             gpu_sim,
             use_gpu_sim: false,
@@ -357,6 +387,38 @@ impl ParticleRenderPipeline {
 
         self.draw_particles(command_buffer, &pc, particle_display_mode);
 
+        if self.selection_marker_index >= 0 {
+            let (camera_position, camera_right, camera_up) = self.camera_basis();
+            let selection_pc = SelectionMarkerPushConstants {
+                proj_view: view_proj_cols,
+                camera_position: [
+                    camera_position.x,
+                    camera_position.y,
+                    camera_position.z,
+                    scale_factor,
+                ],
+                camera_right: [
+                    camera_right.x,
+                    camera_right.y,
+                    camera_right.z,
+                    size_scale,
+                ],
+                camera_up: [
+                    camera_up.x,
+                    camera_up.y,
+                    camera_up.z,
+                    extent.height as f32,
+                ],
+                bracket_params: [
+                    BRACKET_RADIUS_RATIO,
+                    MIN_HALF_SIZE_PX,
+                    extent.width as f32,
+                    selection_index_bits(self.selection_marker_index),
+                ],
+            };
+            self.draw_selection_marker(command_buffer, &selection_pc);
+        }
+
         if self.add_center_marker_vertex_count > 0 {
             if let Some(ref buf) = self.add_center_marker_buffer {
                 self.draw_axes_lines(
@@ -372,6 +434,25 @@ impl ParticleRenderPipeline {
 
         unsafe {
             self.device.cmd_end_render_pass(command_buffer);
+        }
+    }
+
+    /// Updates the selected particle index used by the GPU selection marker.
+    pub fn sync_selection_marker(&mut self, ui_state: &crate::ui_state::UiState) {
+        self.selection_marker_index = if ui_state.is_particle_info_panel_open {
+            ui_state
+                .selected_particle
+                .map(|selected| selected.index as i32)
+                .unwrap_or(-1)
+        } else {
+            -1
+        };
+
+        if self.selection_marker_index >= 0 {
+            let index = self.selection_marker_index as u32;
+            if index >= self.gpu_sim.particle_count() {
+                self.selection_marker_index = -1;
+            }
         }
     }
 
@@ -473,6 +554,33 @@ impl ParticleRenderPipeline {
         reset_spacecraft_motion(&mut self.camera);
     }
 
+    /// Projects a particle to screen pixels for selection marker rendering.
+    ///
+    /// Uses the same MVP transform as the particle pass and picking. Returns
+    /// `None` when the particle is behind the camera or outside the view frustum.
+    pub fn project_particle_to_screen(
+        &self,
+        particle: &Particle,
+        extent: vk::Extent2D,
+        scale_gauge: f64,
+    ) -> Option<ParticleScreenProjection> {
+        if extent.width == 0 || extent.height == 0 {
+            return None;
+        }
+        let aspect_ratio = extent.width as f32 / extent.height as f32;
+        let scale_factor = (scale_gauge / DEFAULT_SCALE_UI).powi(4) as f32;
+        let mvp = self.compute_mvp_particle(aspect_ratio, scale_factor);
+        let width = extent.width as f32;
+        let height = extent.height as f32;
+        let screen_px = project_particle_screen_px(particle, mvp, width, height)?;
+        let camera_distance =
+            particle_camera_distance(particle, self.camera.position, scale_factor);
+        Some(ParticleScreenProjection {
+            screen_px,
+            camera_distance,
+        })
+    }
+
     /// Finds the particle whose screen-projected position is closest to the click.
     ///
     /// Reuses the exact MVP transform used by the particle pass so the picked
@@ -500,34 +608,11 @@ impl ParticleRenderPipeline {
 
         let mut best: Option<(usize, f32)> = None;
         for (i, p) in particles.iter().enumerate() {
-            let pos = Vec4::new(
-                p.position.x as f32,
-                p.position.y as f32,
-                p.position.z as f32,
-                1.0,
-            );
-            let clip = mvp * pos;
-            if !clip.x.is_finite() || !clip.y.is_finite() || !clip.w.is_finite() {
+            let Some(screen_px) = project_particle_screen_px(p, mvp, width, height) else {
                 continue;
-            }
-            if clip.w <= 0.0 {
-                continue;
-            }
-            let ndc_x = clip.x / clip.w;
-            let ndc_y = clip.y / clip.w;
-            let ndc_z = clip.z / clip.w;
-            // Skip particles outside Vulkan's view volume (clip-space x,y in
-            // [-1, 1] and z in [0, 1]).
-            if !(-1.0..=1.0).contains(&ndc_x)
-                || !(-1.0..=1.0).contains(&ndc_y)
-                || !(0.0..=1.0).contains(&ndc_z)
-            {
-                continue;
-            }
-            let screen_x = (ndc_x + 1.0) * 0.5 * width;
-            let screen_y = (ndc_y + 1.0) * 0.5 * height;
-            let dx = screen_x - click_x;
-            let dy = screen_y - click_y;
+            };
+            let dx = screen_px[0] - click_x;
+            let dy = screen_px[1] - click_y;
             let dist_sq = dx * dx + dy * dy;
             if best.is_none_or(|(_, d)| dist_sq < d) {
                 best = Some((i, dist_sq));
@@ -565,6 +650,32 @@ impl ParticleRenderPipeline {
                 bytemuck::bytes_of(pc),
             );
             self.device.cmd_draw(cb, vertex_count, 1, 0, 0);
+        }
+    }
+
+    fn draw_selection_marker(&self, cb: vk::CommandBuffer, pc: &SelectionMarkerPushConstants) {
+        unsafe {
+            self.device.cmd_bind_pipeline(
+                cb,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline_selection,
+            );
+            self.device.cmd_bind_descriptor_sets(
+                cb,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.layout_selection,
+                0,
+                &[self.gpu_sim.descriptor_set()],
+                &[],
+            );
+            self.device.cmd_push_constants(
+                cb,
+                self.layout_selection,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                bytemuck::bytes_of(pc),
+            );
+            self.device.cmd_draw(cb, SELECTION_MARKER_VERTEX_COUNT, 1, 0, 0);
         }
     }
 
@@ -614,6 +725,14 @@ impl ParticleRenderPipeline {
             );
             self.device.cmd_draw(cb, draw_count, 1, 0, 0);
         }
+    }
+
+    /// Returns camera position and a right/up basis for screen-aligned brackets.
+    fn camera_basis(&self) -> (Vec3, Vec3, Vec3) {
+        let forward = (self.camera.target - self.camera.position).normalize();
+        let right = forward.cross(self.camera.up).normalize();
+        let up = right.cross(forward).normalize();
+        (self.camera.position, right, up)
     }
 
     /// Computes model-view-projection transform for axes and helper geometry.
@@ -666,10 +785,12 @@ impl Drop for ParticleRenderPipeline {
             }
             self.depth_image.destroy(&self.device, &self.allocator);
             self.device.destroy_pipeline(self.pipeline_axes, None);
+            self.device.destroy_pipeline(self.pipeline_selection, None);
             for pipeline in &self.particle_pipelines {
                 self.device.destroy_pipeline(*pipeline, None);
             }
             self.device.destroy_pipeline_layout(self.layout_axes, None);
+            self.device.destroy_pipeline_layout(self.layout_selection, None);
             self.device
                 .destroy_pipeline_layout(self.layout_particles, None);
             self.device
@@ -767,6 +888,50 @@ fn write_mapped_axes_vertices(buffer: &AllocatedBuffer, vertices: &[AxesVertex])
 }
 
 // --- Pipeline creation helpers ---
+
+/// Projects a particle through MVP to window pixel coordinates when visible.
+pub fn project_particle_screen_px(
+    particle: &Particle,
+    mvp: Mat4,
+    width: f32,
+    height: f32,
+) -> Option<[f32; 2]> {
+    let pos = Vec4::new(
+        particle.position.x as f32,
+        particle.position.y as f32,
+        particle.position.z as f32,
+        1.0,
+    );
+    let clip = mvp * pos;
+    if !clip.x.is_finite() || !clip.y.is_finite() || !clip.w.is_finite() {
+        return None;
+    }
+    if clip.w <= 0.0 {
+        return None;
+    }
+    let ndc_x = clip.x / clip.w;
+    let ndc_y = clip.y / clip.w;
+    let ndc_z = clip.z / clip.w;
+    if !(-1.0..=1.0).contains(&ndc_x)
+        || !(-1.0..=1.0).contains(&ndc_y)
+        || !(0.0..=1.0).contains(&ndc_z)
+    {
+        return None;
+    }
+    let screen_x = (ndc_x + 1.0) * 0.5 * width;
+    let screen_y = (ndc_y + 1.0) * 0.5 * height;
+    Some([screen_x, screen_y])
+}
+
+/// Returns the distance from the camera to a scale-adjusted particle position.
+pub fn particle_camera_distance(particle: &Particle, camera_position: Vec3, scale_factor: f32) -> f32 {
+    let scaled = Vec3::new(
+        particle.position.x as f32 * scale_factor,
+        particle.position.y as f32 * scale_factor,
+        particle.position.z as f32 * scale_factor,
+    );
+    camera_position.distance(scaled)
+}
 
 /// Computes perspective-correct point sprite size for the active display mode.
 fn compute_particle_size_scale(
@@ -1061,6 +1226,38 @@ fn create_axes_pipeline(
         render_pass,
         layout,
         include_bytes!(concat!(env!("OUT_DIR"), "/shaders/axes_vertex.vert.spv")),
+        include_bytes!(concat!(env!("OUT_DIR"), "/shaders/axes_fragment.frag.spv")),
+        &binding,
+        &attrs,
+        vk::PrimitiveTopology::LINE_LIST,
+        default_blend(),
+        vk::CullModeFlags::NONE,
+        false,
+    );
+    (layout, pipeline)
+}
+
+/// Creates a procedural selection-marker pipeline that reads particle SSBO data.
+fn create_selection_marker_pipeline(
+    device: &ash::Device,
+    render_pass: vk::RenderPass,
+    descriptor_set_layout: vk::DescriptorSetLayout,
+) -> (vk::PipelineLayout, vk::Pipeline) {
+    let layout = create_pipeline_layout(
+        device,
+        std::mem::size_of::<SelectionMarkerPushConstants>() as u32,
+        vk::ShaderStageFlags::VERTEX,
+        Some(descriptor_set_layout),
+    );
+    let (binding, attrs) = particle_vertex_desc();
+    let pipeline = create_graphics_pipeline(
+        device,
+        render_pass,
+        layout,
+        include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/shaders/selection_marker_vertex.vert.spv"
+        )),
         include_bytes!(concat!(env!("OUT_DIR"), "/shaders/axes_fragment.frag.spv")),
         &binding,
         &attrs,

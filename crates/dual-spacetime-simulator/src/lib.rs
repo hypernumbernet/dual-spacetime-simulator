@@ -5,6 +5,7 @@ pub mod gpu_simulation;
 pub mod integration;
 pub mod object_input;
 pub mod particle_snapshot;
+pub mod particle_selection_marker;
 pub mod pipeline;
 pub mod settings;
 pub mod simulation;
@@ -568,6 +569,7 @@ impl ApplicationHandler for App {
                 let desired_mailbox_present_mode = {
                     let ui_state = self.ui_state.read().unwrap();
                     pipeline.sync_add_center_marker(&ui_state);
+                    pipeline.sync_selection_marker(&ui_state);
                     ui_state.mailbox_present_mode
                 };
                 if vb.mailbox_present_mode != desired_mailbox_present_mode {

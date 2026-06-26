@@ -18,6 +18,7 @@ fn main() {
         "particles_compute.comp",
         "egui_vertex.vert",
         "egui_fragment.frag",
+        "selection_marker_vertex.vert",
     ];
 
     for shader in &shaders {
