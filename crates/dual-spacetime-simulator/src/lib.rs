@@ -372,8 +372,6 @@ pub struct App {
     mouse_right_down: bool,
     mouse_middle_down: bool,
     last_cursor_position: Option<(f64, f64)>,
-    last_left_click_time: Option<Instant>,
-    last_left_click_pos: Option<(f64, f64)>,
     last_right_click_time: Option<Instant>,
     last_right_click_pos: Option<(f64, f64)>,
     settings: AppSettings,
@@ -426,8 +424,6 @@ impl Default for App {
             mouse_right_down: false,
             mouse_middle_down: false,
             last_cursor_position: None,
-            last_left_click_time: None,
-            last_left_click_pos: None,
             last_right_click_time: None,
             last_right_click_pos: None,
             settings,
@@ -1036,27 +1032,9 @@ impl App {
         }
     }
 
-    /// Handles left-button press/release and double-click camera-up reset behavior.
+    /// Tracks left-button press/release state for drag gestures.
     fn left_button(&mut self, state: &ElementState) {
-        let pressed = *state == ElementState::Pressed;
-        self.mouse_left_down = pressed;
-        if pressed {
-            if self.ui_state.read().unwrap().lock_camera_up {
-                let now = Instant::now();
-                let Some(click_pos) = self.last_cursor_position else {
-                    return;
-                };
-                if Self::try_consume_double_click(
-                    click_pos,
-                    now,
-                    &mut self.last_left_click_time,
-                    &mut self.last_left_click_pos,
-                ) && let Some(pipeline) = self.render_pipeline.as_mut()
-                {
-                    pipeline.y_top();
-                }
-            }
-        }
+        self.mouse_left_down = *state == ElementState::Pressed;
     }
 
     /// Handles right-button press/release and double-click target-centering behavior.

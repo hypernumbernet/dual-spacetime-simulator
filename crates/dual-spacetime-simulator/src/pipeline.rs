@@ -457,11 +457,6 @@ impl ParticleRenderPipeline {
         self.camera.rotate(delta_roll as f32);
     }
 
-    /// Triggers camera up-vector alignment animation.
-    pub fn y_top(&mut self) {
-        self.camera.y_top();
-    }
-
     /// Triggers camera target-centering animation toward world origin.
     pub fn center_target_on_origin(&mut self) {
         reset_spacecraft_motion(&mut self.camera);

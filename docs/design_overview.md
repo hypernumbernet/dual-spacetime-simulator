@@ -114,7 +114,7 @@
 
 ## 7. レンダリングパイプライン（`crates/dual-spacetime-simulator/src/pipeline.rs`）
 
-- **軌道カメラ**（`camera.rs` とパイプライン経由）：**左ドラッグ**で軌道回転（revolve）、**右ドラッグ**で視線の向き変更（look around）、**中ドラッグ**で画面中心周りの回転、**ホイール**でズーム。**左ダブルクリック**で上方向を整える（`y_top`）、**右ダブルクリック**でターゲットを原点付近へ（`center_target_on_origin`）。`UiState::lock_camera_up` により挙動を制御できます。
+- **軌道カメラ**（`camera.rs` とパイプライン経由）：**左ドラッグ**で軌道回転（revolve）、**右ドラッグ**で視線の向き変更（look around）、**中ドラッグ**で画面中心周りの回転、**ホイール**でズーム。**右ダブルクリック**でターゲットを原点付近へ（`center_target_on_origin`）。`UiState::lock_camera_up` により挙動を制御できます。
 - **座標軸・グリッド**、**粒子（点スプライト風のサイズ定数）**、**補助ライン**、最後に **egui** を同一レンダパス／フレームバッファへ合成
 - シェーダは `build.rs` が `glslc` で **SPIR-V** にコンパイル（`OUT_DIR/shaders/*.spv`）
 

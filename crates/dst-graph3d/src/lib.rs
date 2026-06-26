@@ -82,8 +82,6 @@ pub struct App {
     window: Option<Arc<Window>>,
     ui_state: Arc<RwLock<UiState>>,
     last_cursor_position: Option<(f64, f64)>,
-    last_left_click_time: Option<Instant>,
-    last_left_click_pos: Option<(f64, f64)>,
     last_right_click_time: Option<Instant>,
     last_right_click_pos: Option<(f64, f64)>,
     settings: AppSettings,
@@ -132,8 +130,6 @@ impl Default for App {
             gui: None,
             ui_state: Arc::new(RwLock::new(ui_state)),
             last_cursor_position: None,
-            last_left_click_time: None,
-            last_left_click_pos: None,
             last_right_click_time: None,
             last_right_click_pos: None,
             settings,
@@ -347,7 +343,6 @@ impl ApplicationHandler for App {
                                     );
                                 }
                             }
-                            self.left_button(state);
                         }
                         MouseButton::Right => {
                             self.drag_owner = DragOwner::PendingSceneRight;
@@ -369,7 +364,6 @@ impl ApplicationHandler for App {
                     }
                 } else {
                     match button {
-                        MouseButton::Left => self.left_button(state),
                         MouseButton::Right => {
                             let lock_camera_up = self.ui_state.read().unwrap().lock_camera_up;
                             if !lock_camera_up {
@@ -659,29 +653,6 @@ impl App {
             *last_time = Some(now);
             *last_pos = Some(click_pos);
             false
-        }
-    }
-
-    /// Handles left-button press/release and double-click camera-up reset behavior.
-    fn left_button(&mut self, state: &ElementState) {
-        if *state != ElementState::Pressed {
-            return;
-        }
-        if !self.ui_state.read().unwrap().lock_camera_up {
-            return;
-        }
-        let now = Instant::now();
-        let Some(click_pos) = self.last_cursor_position else {
-            return;
-        };
-        if Self::try_consume_double_click(
-            click_pos,
-            now,
-            &mut self.last_left_click_time,
-            &mut self.last_left_click_pos,
-        ) && let Some(pipeline) = self.render_pipeline.as_mut()
-        {
-            pipeline.y_top();
         }
     }
 
