@@ -72,19 +72,11 @@ struct PushConstants {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SelectionMarkerPushConstants {
-    proj_view: [[f32; 4]; 4],
-    camera_position: [f32; 4],
-    camera_right: [f32; 4],
-    camera_up: [f32; 4],
-    bracket_params: [f32; 4],
-}
-
-/// Screen-space projection of a particle for UI overlay rendering.
-pub struct ParticleScreenProjection {
-    /// Window pixel coordinates matching picking (`click_x`, `click_y`).
-    pub screen_px: [f32; 2],
-    /// Distance from the camera to the scale-adjusted particle position.
-    pub camera_distance: f32,
+    view_proj: [[f32; 4]; 4],
+    /// `x`: `size_scale`, `y`: min half-size px, `z`: bracket radius ratio, `w`: selected index bits
+    sizing: [f32; 4],
+    /// `x`: `2 / viewport_width`, `y`: `2 / viewport_height`
+    viewport: [f32; 4],
 }
 
 pub struct ParticleRenderPipeline {
@@ -388,33 +380,17 @@ impl ParticleRenderPipeline {
         self.draw_particles(command_buffer, &pc, particle_display_mode);
 
         if self.selection_marker_index >= 0 {
-            let (camera_position, camera_right, camera_up) = self.camera_basis();
+            let width = extent.width.max(1) as f32;
+            let height = extent.height.max(1) as f32;
             let selection_pc = SelectionMarkerPushConstants {
-                proj_view: view_proj_cols,
-                camera_position: [
-                    camera_position.x,
-                    camera_position.y,
-                    camera_position.z,
-                    scale_factor,
-                ],
-                camera_right: [
-                    camera_right.x,
-                    camera_right.y,
-                    camera_right.z,
+                view_proj: view_proj_cols,
+                sizing: [
                     size_scale,
-                ],
-                camera_up: [
-                    camera_up.x,
-                    camera_up.y,
-                    camera_up.z,
-                    extent.height as f32,
-                ],
-                bracket_params: [
-                    BRACKET_RADIUS_RATIO,
                     MIN_HALF_SIZE_PX,
-                    extent.width as f32,
+                    BRACKET_RADIUS_RATIO,
                     selection_index_bits(self.selection_marker_index),
                 ],
+                viewport: [2.0 / width, 2.0 / height, 0.0, 0.0],
             };
             self.draw_selection_marker(command_buffer, &selection_pc);
         }
@@ -552,33 +528,6 @@ impl ParticleRenderPipeline {
         self.applied_lock_camera_up = Some(lock);
         self.camera.set_lock_up(lock);
         reset_spacecraft_motion(&mut self.camera);
-    }
-
-    /// Projects a particle to screen pixels for selection marker rendering.
-    ///
-    /// Uses the same MVP transform as the particle pass and picking. Returns
-    /// `None` when the particle is behind the camera or outside the view frustum.
-    pub fn project_particle_to_screen(
-        &self,
-        particle: &Particle,
-        extent: vk::Extent2D,
-        scale_gauge: f64,
-    ) -> Option<ParticleScreenProjection> {
-        if extent.width == 0 || extent.height == 0 {
-            return None;
-        }
-        let aspect_ratio = extent.width as f32 / extent.height as f32;
-        let scale_factor = (scale_gauge / DEFAULT_SCALE_UI).powi(4) as f32;
-        let mvp = self.compute_mvp_particle(aspect_ratio, scale_factor);
-        let width = extent.width as f32;
-        let height = extent.height as f32;
-        let screen_px = project_particle_screen_px(particle, mvp, width, height)?;
-        let camera_distance =
-            particle_camera_distance(particle, self.camera.position, scale_factor);
-        Some(ParticleScreenProjection {
-            screen_px,
-            camera_distance,
-        })
     }
 
     /// Finds the particle whose screen-projected position is closest to the click.
@@ -725,14 +674,6 @@ impl ParticleRenderPipeline {
             );
             self.device.cmd_draw(cb, draw_count, 1, 0, 0);
         }
-    }
-
-    /// Returns camera position and a right/up basis for screen-aligned brackets.
-    fn camera_basis(&self) -> (Vec3, Vec3, Vec3) {
-        let forward = (self.camera.target - self.camera.position).normalize();
-        let right = forward.cross(self.camera.up).normalize();
-        let up = right.cross(forward).normalize();
-        (self.camera.position, right, up)
     }
 
     /// Computes model-view-projection transform for axes and helper geometry.
@@ -921,16 +862,6 @@ pub fn project_particle_screen_px(
     let screen_x = (ndc_x + 1.0) * 0.5 * width;
     let screen_y = (ndc_y + 1.0) * 0.5 * height;
     Some([screen_x, screen_y])
-}
-
-/// Returns the distance from the camera to a scale-adjusted particle position.
-pub fn particle_camera_distance(particle: &Particle, camera_position: Vec3, scale_factor: f32) -> f32 {
-    let scaled = Vec3::new(
-        particle.position.x as f32 * scale_factor,
-        particle.position.y as f32 * scale_factor,
-        particle.position.z as f32 * scale_factor,
-    );
-    camera_position.distance(scaled)
 }
 
 /// Computes perspective-correct point sprite size for the active display mode.
