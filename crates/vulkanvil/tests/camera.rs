@@ -754,7 +754,7 @@ fn trace_visual_scale_places_camera_at_scaled_target() {
     let scaled_pos = world_pos * visual_scale;
     let particle_vel = Vec3::new(1.0, 0.0, 0.0);
 
-    trace_particle_from_behind(&mut cam, scaled_pos, particle_vel, visual_scale);
+    trace_particle_from_behind(&mut cam, world_pos, particle_vel, visual_scale);
 
     assert!((cam.target - scaled_pos).length() < 1e-5);
     assert!((cam.orbit_distance() - world_distance * visual_scale).abs() < 1e-4);

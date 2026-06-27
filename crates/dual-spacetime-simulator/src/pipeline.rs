@@ -528,10 +528,9 @@ impl ParticleRenderPipeline {
         velocity: glam::DVec3,
         visual_scale: f32,
     ) {
-        let scaled_pos = (position * visual_scale as f64).as_vec3();
         trace_particle_from_behind(
             &mut self.camera,
-            scaled_pos,
+            position.as_vec3(),
             velocity.as_vec3(),
             visual_scale,
         );

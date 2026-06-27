@@ -391,20 +391,21 @@ pub(crate) fn resolve_selected_particle_live(
 
 /// Resolves the selected particle for camera trace follow.
 ///
-/// Returns the live particle and whether trace mode remains active this frame.
+/// Returns the live particle, whether trace mode remains active, and the visual scale factor.
 pub(crate) fn resolve_trace_particle_for_camera(
     ui_state: &Arc<RwLock<UiState>>,
     simulation_manager: &Arc<RwLock<SimulationManager>>,
     render_pipeline: Option<&ParticleRenderPipeline>,
-) -> (Option<Particle>, bool) {
+) -> (Option<Particle>, bool, f32) {
     let mut uis = ui_state.write().unwrap();
     if !uis.is_trace_enabled {
-        return (None, false);
+        return (None, false, 1.0);
     }
+    let visual_scale = particle_visual_scale_factor(uis.scale_gauge);
     let manager = simulation_manager.read().unwrap();
     match resolve_selected_particle_live(&mut uis, &manager, render_pipeline) {
-        Some((_, particle)) => (Some(particle), true),
-        None => (None, false),
+        Some((_, particle)) => (Some(particle), true, visual_scale),
+        None => (None, false, visual_scale),
     }
 }
 

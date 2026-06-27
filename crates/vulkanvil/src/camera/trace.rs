@@ -31,8 +31,9 @@ fn up_perpendicular_to_forward(forward: Vec3, prior_up: Vec3) -> Vec3 {
 
 /// Places the camera behind a moving particle, looking toward it along its velocity.
 ///
-/// Lock-up mode preserves orbit distance and pitch limits; free mode also syncs
-/// spacecraft velocity and clears active thrust.
+/// `particle_position` is in simulation world space; `visual_scale` maps it into the
+/// same scaled space used by particle rendering. Lock-up mode preserves orbit distance
+/// and pitch limits; free mode also syncs spacecraft velocity and clears active thrust.
 pub fn trace_particle_from_behind(
     camera: &mut OrbitCamera,
     particle_position: Vec3,
@@ -44,14 +45,15 @@ pub fn trace_particle_from_behind(
         return;
     }
 
+    let scaled_position = particle_position * visual_scale;
     let distance = camera.clamped_trace_follow_distance() * visual_scale;
     let relative = forward * distance;
     let lock_up = camera.lock_up();
-    camera.target = particle_position;
+    camera.target = scaled_position;
     camera.position = if lock_up {
-        particle_position - clamp_pitch(relative)
+        scaled_position - clamp_pitch(relative)
     } else {
-        particle_position - relative
+        scaled_position - relative
     };
 
     if lock_up {

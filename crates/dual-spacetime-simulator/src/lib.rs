@@ -20,7 +20,7 @@ use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
 use crate::ui::{draw_ui, process_pending_particle_delete, process_pending_snapshot_dialog, resolve_trace_particle_for_camera};
-use crate::ui_state::{DragOwner, PlacementMode, UiState, particle_visual_scale_factor};
+use crate::ui_state::{DragOwner, PlacementMode, UiState};
 use ash::vk;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
@@ -886,17 +886,12 @@ impl ApplicationHandler for App {
                 uis.spacecraft_yaw_steer_anchor = None;
             }
         }
-        let (trace_particle, suppress_space_shift, trace_visual_scale) = {
-            let (trace_particle, suppress_space_shift) = resolve_trace_particle_for_camera(
+        let (trace_particle, suppress_space_shift, trace_visual_scale) =
+            resolve_trace_particle_for_camera(
                 &self.ui_state,
                 &self.simulation_manager,
                 self.render_pipeline.as_ref(),
             );
-            let trace_visual_scale = particle_visual_scale_factor(
-                self.ui_state.read().unwrap().scale_gauge,
-            );
-            (trace_particle, suppress_space_shift, trace_visual_scale)
-        };
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.set_lock_camera_up(lock_camera_up);
             if suppress_space_shift {
