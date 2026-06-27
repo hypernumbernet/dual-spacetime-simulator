@@ -898,3 +898,35 @@ fn trace_spacecraft_keyboard_w_adjusts_follow_distance_not_pitch() {
         "W during trace should not pitch the view"
     );
 }
+
+const INITIAL_POSITION: Vec3 = Vec3::new(1.6, -1.6, 3.0);
+const INITIAL_TARGET: Vec3 = Vec3::ZERO;
+
+#[test]
+fn reset_pose_restores_orbit_distance() {
+    let initial = OrbitCamera::new(INITIAL_POSITION, INITIAL_TARGET);
+    let initial_distance = initial.orbit_distance();
+
+    let mut cam = OrbitCamera::new(Vec3::new(10.0, 5.0, 20.0), Vec3::new(3.0, 1.0, 2.0));
+    cam.set_lock_up(true);
+    cam.begin_trace_follow();
+    cam.adjust_trace_follow_distance(5.0);
+
+    cam.reset_pose(INITIAL_POSITION, INITIAL_TARGET);
+
+    assert!((cam.position - INITIAL_POSITION).length() < 1e-5);
+    assert!((cam.target - INITIAL_TARGET).length() < 1e-5);
+    assert!((cam.orbit_distance() - initial_distance).abs() < 1e-5);
+}
+
+#[test]
+fn reset_pose_clears_trace_follow() {
+    let mut cam = OrbitCamera::new(INITIAL_POSITION, INITIAL_TARGET);
+    cam.begin_trace_follow();
+    cam.adjust_trace_follow_distance(2.0);
+    assert!(cam.trace_follow_distance_or_default() != cam.orbit_distance());
+
+    cam.reset_pose(INITIAL_POSITION, INITIAL_TARGET);
+
+    assert_eq!(cam.trace_follow_distance_or_default(), cam.orbit_distance());
+}

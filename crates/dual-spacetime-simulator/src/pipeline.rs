@@ -521,6 +521,13 @@ impl ParticleRenderPipeline {
         self.camera.center_target_on_origin();
     }
 
+    /// Restores the camera to its initial position and rotation center.
+    pub fn reset_camera_to_initial(&mut self) {
+        reset_spacecraft_motion(&mut self.camera);
+        self.camera.reset_pose(INITIAL_POSITION, INITIAL_TARGET);
+        self.applied_lock_camera_up = None;
+    }
+
     /// Follows a particle from behind, preserving the current orbit distance.
     pub fn trace_selected_particle(
         &mut self,

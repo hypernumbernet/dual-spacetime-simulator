@@ -372,6 +372,23 @@ impl OrbitCamera {
         }
     }
 
+    /// Resets position and target, clearing trace follow and origin-center animation state.
+    ///
+    /// Preserves the current up-lock mode. Spacecraft velocity and thrust are cleared.
+    pub fn reset_pose(&mut self, position: Vec3, target: Vec3) {
+        self.position = position;
+        self.target = target;
+        self.up = get_closest_perp_unit_to_y(position, target);
+        self.reference_orbit_distance = self.orbit_distance();
+        self.velocity = Vec3::ZERO;
+        self.thrust_remaining = 0.0;
+        self.thrust_sign = 0.0;
+        self.thrust_accel = 0.0;
+        self.end_trace_follow();
+        self.animating_to_origin = 0;
+        self.start_time = None;
+    }
+
     /// Snaps position to the reference orbit distance along the current view direction.
     fn restore_lock_orbit_invariants(&mut self) {
         let relative = self.view_relative();

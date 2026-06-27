@@ -16,7 +16,7 @@ const PANEL_MENU_OFFSET_Y: f32 = 16.0;
 pub fn draw_ui(
     ui_state: &Arc<RwLock<UiState>>,
     simulation_manager: &Arc<RwLock<SimulationManager>>,
-    render_pipeline: Option<&ParticleRenderPipeline>,
+    mut render_pipeline: Option<&mut ParticleRenderPipeline>,
     settings: &mut AppSettings,
     ctx: &egui::Context,
 ) {
@@ -281,6 +281,10 @@ pub fn draw_ui(
         uis.base_scale = clamp_world_scale(uis.base_scale);
         uis.object_input = uis.build_reset_object_input();
         uis.reset_scale_to_base();
+        uis.is_trace_enabled = false;
+        if let Some(pipeline) = render_pipeline.as_mut() {
+            pipeline.reset_camera_to_initial();
+        }
         uis.apply_reset_timing_defaults();
     }
 
@@ -290,7 +294,7 @@ pub fn draw_ui(
 
     let selection = {
         let manager = simulation_manager.read().unwrap();
-        resolve_selected_particle_live(&mut uis, &manager, render_pipeline)
+        resolve_selected_particle_live(&mut uis, &manager, render_pipeline.as_deref())
     };
     particle_info_window(ctx, &mut uis, selection);
 

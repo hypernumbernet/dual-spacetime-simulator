@@ -569,7 +569,7 @@ impl ApplicationHandler for App {
                     draw_ui(
                         &self.ui_state,
                         &self.simulation_manager,
-                        Some(&*pipeline),
+                        Some(pipeline),
                         &mut self.settings,
                         &ctx,
                     );
