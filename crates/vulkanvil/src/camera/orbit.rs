@@ -22,6 +22,7 @@ pub struct OrbitCamera {
     lock_up: bool,
     reference_orbit_distance: f32,
     trace_follow_distance: Option<f32>,
+    trace_follow_distance_limits: (f32, f32),
     /// Lock-up path for the in-flight origin-center animation (`center_target_on_origin`).
     origin_center_lock_up: bool,
     animating_to_origin: u32,
@@ -44,6 +45,10 @@ impl OrbitCamera {
             lock_up: false,
             reference_orbit_distance,
             trace_follow_distance: None,
+            trace_follow_distance_limits: (
+                super::MIN_TRACE_FOLLOW_DISTANCE,
+                super::MAX_TRACE_FOLLOW_DISTANCE,
+            ),
             origin_center_lock_up: false,
             animating_to_origin: 0,
             start_time: None,
@@ -115,13 +120,30 @@ impl OrbitCamera {
     /// Initializes trace follow distance from the current orbit distance when trace begins.
     pub fn begin_trace_follow(&mut self) {
         if self.trace_follow_distance.is_none() {
-            self.trace_follow_distance = Some(clamp_trace_follow_distance(self.orbit_distance()));
+            self.trace_follow_distance =
+                Some(self.clamp_trace_follow_distance(self.orbit_distance()));
         }
     }
 
     /// Clears trace follow distance when trace ends.
     pub fn end_trace_follow(&mut self) {
         self.trace_follow_distance = None;
+    }
+
+    /// Sets the min/max world-space trace follow distance used for clamping.
+    pub fn set_trace_follow_distance_limits(&mut self, min: f32, max: f32) {
+        self.trace_follow_distance_limits = if min <= max {
+            (min, max)
+        } else {
+            (max, min)
+        };
+    }
+
+    /// Re-clamps the active trace follow distance to the current limits.
+    pub fn reclamp_trace_follow_distance(&mut self) {
+        if let Some(distance) = self.trace_follow_distance {
+            self.trace_follow_distance = Some(self.clamp_trace_follow_distance(distance));
+        }
     }
 
     /// Returns the active trace follow distance, or the current orbit distance when unset.
@@ -132,7 +154,7 @@ impl OrbitCamera {
 
     /// Returns the clamped trace follow distance used for camera placement.
     pub fn clamped_trace_follow_distance(&self) -> f32 {
-        clamp_trace_follow_distance(self.trace_follow_distance_or_default())
+        self.clamp_trace_follow_distance(self.trace_follow_distance_or_default())
     }
 
     /// Adjusts trace follow distance by `delta`, clamped to trace distance limits.
@@ -141,11 +163,16 @@ impl OrbitCamera {
             return;
         }
         let current = self.trace_follow_distance_or_default();
-        let next = clamp_trace_follow_distance(current + delta);
+        let next = self.clamp_trace_follow_distance(current + delta);
         if (next - current).abs() <= EPSILON {
             return;
         }
         self.trace_follow_distance = Some(next);
+    }
+
+    fn clamp_trace_follow_distance(&self, distance: f32) -> f32 {
+        let (min, max) = self.trace_follow_distance_limits;
+        distance.clamp(min, max)
     }
 
     /// Translates target and position together on the XZ plane, preserving orbit distance.
@@ -359,13 +386,6 @@ impl OrbitCamera {
         }
         self.up = get_closest_perp_unit_to_y(self.position, self.target);
     }
-}
-
-fn clamp_trace_follow_distance(distance: f32) -> f32 {
-    distance.clamp(
-        super::MIN_TRACE_FOLLOW_DISTANCE,
-        super::MAX_TRACE_FOLLOW_DISTANCE,
-    )
 }
 
 /// Clamps view pitch to avoid near-vertical singularities during camera motion.

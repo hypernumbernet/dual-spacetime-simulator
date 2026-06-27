@@ -5,6 +5,7 @@ use crate::particle_selection_marker::{
     selection_index_bits,
 };
 use crate::simulation::Particle;
+use crate::trace_follow::PARTICLE_SIZE_RATIO;
 use crate::ui_state::*;
 use ash::vk;
 use glam::{Mat4, Vec3, Vec4};
@@ -18,7 +19,6 @@ use vulkanvil::{
 
 const MOUSE_LEFT_DRAG_SENS: f32 = 0.003f32;
 const MOUSE_RIGHT_DRAG_SENS: f32 = 0.001f32;
-const SIZE_RATIO: f32 = 0.06;
 const INITIAL_POSITION: Vec3 = Vec3::new(1.6, -1.6, 3.0);
 const INITIAL_TARGET: Vec3 = Vec3::new(0.0, 0.0, 0.0);
 const AXIS_XZ_GRID_EXTENT: f32 = 2.0;
@@ -886,7 +886,7 @@ fn compute_particle_size_scale(
     point_scale_factor: f32,
     mode: ParticleDisplayMode,
 ) -> f32 {
-    framebuffer_height * SIZE_RATIO * point_scale_factor * mode.size_scale_factor()
+    framebuffer_height * PARTICLE_SIZE_RATIO * point_scale_factor * mode.size_scale_factor()
 }
 
 /// Creates a render pass compatible with swapchain color and depth attachments.

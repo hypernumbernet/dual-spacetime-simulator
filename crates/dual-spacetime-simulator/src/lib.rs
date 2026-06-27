@@ -10,6 +10,7 @@ pub mod pipeline;
 pub mod settings;
 pub mod simulation;
 pub mod solar_system_data;
+pub mod trace_follow;
 pub mod ui;
 pub mod ui_state;
 pub mod ui_styles;
@@ -20,6 +21,7 @@ use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
 use crate::ui::{draw_ui, process_pending_particle_delete, process_pending_snapshot_dialog, resolve_trace_particle_for_camera};
+use crate::trace_follow::compute_trace_follow_distance_limits;
 use crate::ui_state::{DragOwner, PlacementMode, UiState};
 use ash::vk;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
@@ -892,9 +894,23 @@ impl ApplicationHandler for App {
                 &self.simulation_manager,
                 self.render_pipeline.as_ref(),
             );
+        let trace_distance_limits = if suppress_space_shift {
+            let uis = self.ui_state.read().unwrap();
+            Some(compute_trace_follow_distance_limits(
+                trace_visual_scale,
+                uis.link_point_size_to_scale,
+                uis.particle_display_mode,
+            ))
+        } else {
+            None
+        };
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.set_lock_camera_up(lock_camera_up);
-            if suppress_space_shift {
+            if let Some((min, max)) = trace_distance_limits {
+                pipeline
+                    .camera_mut()
+                    .set_trace_follow_distance_limits(min, max);
+                pipeline.camera_mut().reclamp_trace_follow_distance();
                 pipeline.camera_mut().begin_trace_follow();
             } else {
                 pipeline.camera_mut().end_trace_follow();

@@ -825,6 +825,7 @@ use vulkanvil::{
 #[test]
 fn trace_follow_distance_clamps_to_limits() {
     let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    cam.set_trace_follow_distance_limits(MIN_TRACE_FOLLOW_DISTANCE, MAX_TRACE_FOLLOW_DISTANCE);
     cam.begin_trace_follow();
     cam.adjust_trace_follow_distance(-100.0);
     assert!(
