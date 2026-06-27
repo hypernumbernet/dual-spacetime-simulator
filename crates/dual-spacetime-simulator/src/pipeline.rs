@@ -356,7 +356,7 @@ impl ParticleRenderPipeline {
             self.draw_axes(command_buffer, &pc);
         }
 
-        let scale_factor = (scale / DEFAULT_SCALE_UI).powi(4) as f32;
+        let scale_factor = particle_visual_scale_factor(scale);
         let view_proj = self.compute_mvp_particle(aspect_ratio, scale_factor);
         let point_scale_factor = if link_point_size_to_scale {
             scale_factor
@@ -522,11 +522,18 @@ impl ParticleRenderPipeline {
     }
 
     /// Follows a particle from behind, preserving the current orbit distance.
-    pub fn trace_selected_particle(&mut self, position: glam::DVec3, velocity: glam::DVec3) {
+    pub fn trace_selected_particle(
+        &mut self,
+        position: glam::DVec3,
+        velocity: glam::DVec3,
+        visual_scale: f32,
+    ) {
+        let scaled_pos = (position * visual_scale as f64).as_vec3();
         trace_particle_from_behind(
             &mut self.camera,
-            position.as_vec3(),
+            scaled_pos,
             velocity.as_vec3(),
+            visual_scale,
         );
     }
 
@@ -560,7 +567,7 @@ impl ParticleRenderPipeline {
             return None;
         }
         let aspect_ratio = extent.width as f32 / extent.height as f32;
-        let scale_factor = (scale_gauge / DEFAULT_SCALE_UI).powi(4) as f32;
+        let scale_factor = particle_visual_scale_factor(scale_gauge);
         let mvp = self.compute_mvp_particle(aspect_ratio, scale_factor);
         let width = extent.width as f32;
         let height = extent.height as f32;

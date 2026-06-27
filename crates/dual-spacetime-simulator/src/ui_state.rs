@@ -9,6 +9,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const DEFAULT_SCALE_UI: f64 = 5000.0;
+
+/// Returns the model-matrix scale applied to particle rendering for a UI scale gauge.
+pub fn particle_visual_scale_factor(scale_gauge: f64) -> f32 {
+    (scale_gauge / DEFAULT_SCALE_UI).powi(4) as f32
+}
 pub const DEFAULT_MAX_FPS: u32 = 60;
 pub const DEFAULT_SKIP_DRAWING_FRAMES: u32 = 0;
 pub const DEFAULT_ADD_PARTICLE_COUNT: u32 = 1000;

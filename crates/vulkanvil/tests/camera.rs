@@ -735,7 +735,7 @@ fn trace_lock_up_places_camera_behind_velocity() {
     let particle_pos = Vec3::new(10.0, 0.0, 0.0);
     let particle_vel = Vec3::new(1.0, 0.0, 0.0);
 
-    trace_particle_from_behind(&mut cam, particle_pos, particle_vel);
+    trace_particle_from_behind(&mut cam, particle_pos, particle_vel, 1.0);
 
     assert!((cam.target - particle_pos).length() < 1e-5);
     let view = (cam.target - cam.position).normalize();
@@ -744,12 +744,29 @@ fn trace_lock_up_places_camera_behind_velocity() {
 }
 
 #[test]
+fn trace_visual_scale_places_camera_at_scaled_target() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    cam.set_lock_up(true);
+    cam.begin_trace_follow();
+    let world_distance = cam.trace_follow_distance_or_default();
+    let visual_scale = 2.0;
+    let world_pos = Vec3::new(1.0, 0.0, 0.0);
+    let scaled_pos = world_pos * visual_scale;
+    let particle_vel = Vec3::new(1.0, 0.0, 0.0);
+
+    trace_particle_from_behind(&mut cam, scaled_pos, particle_vel, visual_scale);
+
+    assert!((cam.target - scaled_pos).length() < 1e-5);
+    assert!((cam.orbit_distance() - world_distance * visual_scale).abs() < 1e-4);
+}
+
+#[test]
 fn trace_lock_up_preserves_distance() {
     let mut cam = OrbitCamera::new(Vec3::new(1.0, 2.0, 6.0), Vec3::new(0.5, -1.0, 1.0));
     cam.set_lock_up(true);
     let before = cam.orbit_distance();
 
-    trace_particle_from_behind(&mut cam, Vec3::new(3.0, 1.0, -2.0), Vec3::new(0.0, 0.0, 2.0));
+    trace_particle_from_behind(&mut cam, Vec3::new(3.0, 1.0, -2.0), Vec3::new(0.0, 0.0, 2.0), 1.0);
 
     assert!((cam.orbit_distance() - before).abs() < 1e-5);
 }
@@ -762,7 +779,7 @@ fn trace_lock_up_zero_velocity_uses_view() {
     cam.set_lock_up(true);
     let view_before = cam.view_relative().normalize();
 
-    trace_particle_from_behind(&mut cam, Vec3::new(4.0, 1.0, 2.0), Vec3::ZERO);
+    trace_particle_from_behind(&mut cam, Vec3::new(4.0, 1.0, 2.0), Vec3::ZERO, 1.0);
 
     let view_after = cam.view_relative().normalize();
     assert!(view_after.dot(view_before) > 0.99);
@@ -774,7 +791,7 @@ fn trace_free_mode_syncs_velocity() {
     cam.set_lock_up(false);
     let particle_vel = Vec3::new(0.3, -0.1, 0.2);
 
-    trace_particle_from_behind(&mut cam, Vec3::new(1.0, 2.0, 3.0), particle_vel);
+    trace_particle_from_behind(&mut cam, Vec3::new(1.0, 2.0, 3.0), particle_vel, 1.0);
 
     assert!((cam.velocity() - particle_vel).length() < 1e-5);
 }
@@ -788,8 +805,8 @@ fn trace_free_mode_no_pitch_clamp() {
     let steep_velocity = Vec3::new(0.01, 1.0, 0.01);
     let particle_pos = Vec3::new(2.0, 5.0, 1.0);
 
-    trace_particle_from_behind(&mut cam_locked, particle_pos, steep_velocity);
-    trace_particle_from_behind(&mut cam_free, particle_pos, steep_velocity);
+    trace_particle_from_behind(&mut cam_locked, particle_pos, steep_velocity, 1.0);
+    trace_particle_from_behind(&mut cam_free, particle_pos, steep_velocity, 1.0);
 
     let locked_horiz = (cam_locked.view_relative().x.powi(2) + cam_locked.view_relative().z.powi(2))
         .sqrt();
@@ -834,7 +851,7 @@ fn trace_wheel_adjusts_follow_distance() {
 
     let particle_pos = Vec3::new(3.0, 0.0, 0.0);
     let particle_vel = Vec3::new(1.0, 0.0, 0.0);
-    trace_particle_from_behind(&mut cam, particle_pos, particle_vel);
+    trace_particle_from_behind(&mut cam, particle_pos, particle_vel, 1.0);
     assert!((cam.orbit_distance() - after_wheel).abs() < 1e-4);
 }
 

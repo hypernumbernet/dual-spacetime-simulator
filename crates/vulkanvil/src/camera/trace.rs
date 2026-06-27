@@ -37,13 +37,14 @@ pub fn trace_particle_from_behind(
     camera: &mut OrbitCamera,
     particle_position: Vec3,
     particle_velocity: Vec3,
+    visual_scale: f32,
 ) {
     let forward = trace_forward(camera, particle_velocity);
     if forward == Vec3::ZERO {
         return;
     }
 
-    let distance = camera.clamped_trace_follow_distance();
+    let distance = camera.clamped_trace_follow_distance() * visual_scale;
     let relative = forward * distance;
     let lock_up = camera.lock_up();
     camera.target = particle_position;
