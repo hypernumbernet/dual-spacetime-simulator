@@ -193,6 +193,28 @@ fn request_reset_stops_running_simulation() {
 }
 
 #[test]
+fn apply_escape_shortcut_stops_running_trace_and_clears_steer_anchor() {
+    let mut ui = UiState::default();
+    ui.is_running = true;
+    ui.is_trace_enabled = true;
+    ui.spacecraft_steer_anchor = Some([100.0, 200.0]);
+
+    assert!(ui.apply_escape_shortcut());
+    assert!(!ui.is_running);
+    assert!(!ui.is_trace_enabled);
+    assert!(ui.spacecraft_steer_anchor.is_none());
+}
+
+#[test]
+fn apply_escape_shortcut_is_idempotent_when_already_idle() {
+    let mut ui = UiState::default();
+    assert!(!ui.apply_escape_shortcut());
+    assert!(!ui.is_running);
+    assert!(!ui.is_trace_enabled);
+    assert!(ui.spacecraft_steer_anchor.is_none());
+}
+
+#[test]
 fn reset_repopulates_particles_by_placement_mode() {
     let mut ui = UiState::default();
     assert!(!ui.reset_repopulates_particles());

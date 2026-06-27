@@ -533,12 +533,18 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     self.input.key_event(code, event.state);
-                    // Pause shortcut that stays reachable even when heavy draw-skipping
+                    // Pause/Escape shortcuts stay reachable even when heavy draw-skipping
                     // makes the egui controls hard to click.
-                    if event.state == ElementState::Pressed
-                        && matches!(code, KeyCode::Escape | KeyCode::Pause)
+                    if code == KeyCode::Escape && event.state == ElementState::Pressed {
+                        let cleared_anchor = self.ui_state.write().unwrap().apply_escape_shortcut();
+                        if cleared_anchor {
+                            window.request_redraw();
+                        }
+                    } else if code == KeyCode::Pause
+                        && event.state == ElementState::Pressed
+                        && !event.repeat
                     {
-                        self.ui_state.write().unwrap().is_running = false;
+                        self.ui_state.write().unwrap().is_running ^= true;
                     }
                 }
             }

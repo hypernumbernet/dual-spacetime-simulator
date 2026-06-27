@@ -664,6 +664,15 @@ impl UiState {
         self.is_trace_enabled = false;
     }
 
+    /// Applies the Escape shortcut: stop simulation, disable trace, clear ⊕ steer anchor.
+    ///
+    /// Returns `true` when the ⊕ steer anchor was cleared (caller may request redraw).
+    pub fn apply_escape_shortcut(&mut self) -> bool {
+        self.is_running = false;
+        self.is_trace_enabled = false;
+        self.spacecraft_steer_anchor.take().is_some()
+    }
+
     /// Schedules a GPU particle-buffer reload after CPU-side particles were replaced.
     pub fn request_particle_buffer_reload(&mut self) {
         self.particle_buffer_reload_requested = true;
