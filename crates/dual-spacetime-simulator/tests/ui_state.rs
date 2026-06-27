@@ -92,6 +92,23 @@ fn simulation_type_change_keeps_gpu_computing_unit() {
     ui.apply_simulation_type_change(SimulationType::Normal);
     assert_eq!(ui.computing_unit, ComputingUnit::Gpu);
     assert_eq!(ui.active_computing_unit, ComputingUnit::Gpu);
+    assert_eq!(ui.active_simulation_type(), SimulationType::Normal);
+}
+
+#[test]
+fn simulation_type_change_held_until_reset() {
+    let mut ui = UiState::default();
+    assert_eq!(ui.active_simulation_type(), SimulationType::Normal);
+
+    ui.simulation_type = SimulationType::DstGravity;
+    ui.apply_simulation_type_change(SimulationType::Normal);
+    assert_eq!(ui.simulation_type, SimulationType::DstGravity);
+    assert_eq!(ui.active_simulation_type(), SimulationType::Normal);
+    assert!(!ui.is_add_particles_enabled);
+
+    ui.request_reset();
+    assert_eq!(ui.active_simulation_type(), SimulationType::DstGravity);
+    assert!(ui.is_add_particles_enabled);
 }
 
 #[test]
@@ -243,7 +260,7 @@ fn preset_placement_reset_repopulates_particles() {
     let mgr = SimulationManager::new();
     mgr.reset(
         object_input,
-        ui.simulation_type,
+        ui.active_simulation_type(),
         ui.add_particle_count,
         ui.base_scale,
     );

@@ -425,7 +425,7 @@ fn particle_info_window(ctx: &egui::Context, uis: &mut UiState, selection: Optio
         return;
     }
 
-    let simulation_type = uis.simulation_type;
+    let simulation_type = uis.active_simulation_type();
     let velocity_section_label = match simulation_type {
         SimulationType::LorentzTransformation => "Rapidity",
         _ => "Velocity (Base Scale Units/s)",
@@ -975,7 +975,7 @@ fn save_particles(
     } else {
         simulation_manager.read().unwrap().particles()
     };
-    let snapshot = ParticleSnapshot::new(uis.simulation_type, uis.scale, particles);
+    let snapshot = ParticleSnapshot::new(uis.active_simulation_type(), uis.scale, particles);
     if let Err(e) = snapshot.save(&path) {
         eprintln!("Failed to save particles: {}", e);
     }
@@ -1008,6 +1008,7 @@ fn load_particles(
         return;
     }
     uis.simulation_type = snapshot.simulation_type;
+    uis.active_simulation_type = snapshot.simulation_type;
     let scale = clamp_world_scale(snapshot.scale);
     uis.scale = scale;
     uis.apply_external_base_scale(scale);

@@ -402,6 +402,7 @@ pub struct UiState {
     pub object_input: ObjectInput,
     pub placement_mode: PlacementMode,
     pub simulation_type: SimulationType,
+    pub active_simulation_type: SimulationType,
     pub computing_unit: ComputingUnit,
     pub active_computing_unit: ComputingUnit,
     pub base_scale: f64,
@@ -467,6 +468,7 @@ impl Default for UiState {
             object_input: ObjectInput::default(),
             placement_mode: PlacementMode::default(),
             simulation_type: SimulationType::Normal,
+            active_simulation_type: SimulationType::Normal,
             computing_unit: ComputingUnit::default(),
             active_computing_unit: ComputingUnit::default(),
             base_scale: ObjectInputType::default().default_base_scale(),
@@ -596,6 +598,11 @@ impl UiState {
     /// Returns whether GPU compute should drive the active simulation.
     pub fn uses_gpu_simulation(&self) -> bool {
         self.active_computing_unit == ComputingUnit::Gpu
+    }
+
+    /// Returns the simulation type currently driving CPU/GPU integration.
+    pub fn active_simulation_type(&self) -> SimulationType {
+        self.active_simulation_type
     }
 
     /// Disables particle append when simulation type changes until the next reset.
@@ -746,6 +753,7 @@ impl UiState {
     /// Flags a simulation reset and re-enables particle append.
     pub fn request_reset(&mut self) {
         self.commit_active_computing_unit();
+        self.commit_active_simulation_type();
         self.is_running = false;
         self.is_reset_requested = true;
         self.is_resetting = true;
@@ -763,6 +771,10 @@ impl UiState {
             return;
         }
         self.active_computing_unit = self.computing_unit;
+    }
+
+    fn commit_active_simulation_type(&mut self) {
+        self.active_simulation_type = self.simulation_type;
     }
 
     fn force_cpu_computing_units(&mut self) {

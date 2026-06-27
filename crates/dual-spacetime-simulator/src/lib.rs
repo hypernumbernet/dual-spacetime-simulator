@@ -178,7 +178,7 @@ pub(crate) fn spawn_simulation_worker(
                 let is_add_particles_requested = ui_state.is_add_particles_requested;
                 if is_reset_requested || is_add_particles_requested {
                     let selected_object_input = ui_state.object_input.clone();
-                    let simulation_type = ui_state.simulation_type;
+                    let simulation_type = ui_state.active_simulation_type();
                     let skip = ui_state.skip;
                     let add_particle_count = ui_state.add_particle_count;
                     let scale = ui_state.scale;
@@ -487,7 +487,7 @@ impl ApplicationHandler for App {
         let object_input = ObjectInput::default();
         let add_particle_count = ui_state.add_particle_count;
         let scale = ui_state.scale;
-        let sim_type = ui_state.simulation_type;
+        let sim_type = ui_state.active_simulation_type();
         self.simulation_manager.write().unwrap().reset(
             object_input,
             sim_type,
@@ -618,7 +618,7 @@ impl ApplicationHandler for App {
                 let particle_display_mode = ui_state.particle_display_mode;
                 let uses_gpu = ui_state.uses_gpu_simulation();
                 let time_per_frame = ui_state.time_per_frame;
-                let simulation_type = ui_state.simulation_type;
+                let simulation_type = ui_state.active_simulation_type();
                 let sim_scale = ui_state.scale;
                 drop(ui_state);
 
