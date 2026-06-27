@@ -2,9 +2,6 @@ use dual_spacetime_simulator::object_input::{ObjectInput, ObjectInputType};
 use dual_spacetime_simulator::pipeline::build_add_center_marker;
 use glam::DVec3;
 
-const X_COLOR: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
-const Y_COLOR: [f32; 4] = [0.2, 1.0, 0.2, 1.0];
-const Z_COLOR: [f32; 4] = [0.3, 0.5, 1.0, 1.0];
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
 fn edge_colors(verts: &[([f32; 3], [f32; 4])]) -> Vec<[f32; 4]> {
@@ -30,13 +27,11 @@ fn edge_is_diagonal(edge: [([f32; 3], [f32; 4]); 2]) -> bool {
 #[test]
 fn build_add_center_marker_has_octahedron_segments() {
     let verts = build_add_center_marker([1.0, 2.0, 3.0], 0.15);
-    assert_eq!(verts.len(), 36);
+    assert_eq!(verts.len(), 24);
 
     let colors = edge_colors(&verts);
-    assert_eq!(colors.iter().filter(|&&c| c == X_COLOR).count(), 2);
-    assert_eq!(colors.iter().filter(|&&c| c == Y_COLOR).count(), 2);
-    assert_eq!(colors.iter().filter(|&&c| c == Z_COLOR).count(), 2);
-    assert_eq!(colors.iter().filter(|&&c| c == WHITE).count(), 12);
+    assert_eq!(colors.len(), 12);
+    assert!(colors.iter().all(|&c| c == WHITE));
 }
 
 #[test]
@@ -55,14 +50,13 @@ fn build_add_center_marker_spans_each_axis() {
 }
 
 #[test]
-fn build_add_center_marker_diagonal_edges_are_white() {
+fn build_add_center_marker_all_edges_are_white() {
     let verts = build_add_center_marker([0.0, 0.0, 0.0], 0.15);
     for edge in verts.chunks_exact(2) {
         let pair: [([f32; 3], [f32; 4]); 2] = [edge[0], edge[1]];
-        if edge_is_diagonal(pair) {
-            assert_eq!(pair[0].1, WHITE);
-            assert_eq!(pair[1].1, WHITE);
-        }
+        assert!(edge_is_diagonal(pair));
+        assert_eq!(pair[0].1, WHITE);
+        assert_eq!(pair[1].1, WHITE);
     }
 }
 

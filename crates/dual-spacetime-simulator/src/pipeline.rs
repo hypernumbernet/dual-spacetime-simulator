@@ -23,19 +23,10 @@ const INITIAL_POSITION: Vec3 = Vec3::new(1.6, -1.6, 3.0);
 const INITIAL_TARGET: Vec3 = Vec3::new(0.0, 0.0, 0.0);
 const AXIS_XZ_GRID_EXTENT: f32 = 2.0;
 const AXIS_XZ_GRID_LINE_COUNT: usize = 9;
-const ADD_CENTER_MARKER_EDGE_COUNT: usize = 18;
+const ADD_CENTER_MARKER_EDGE_COUNT: usize = 12;
 const ADD_CENTER_MARKER_VERTICES: usize = ADD_CENTER_MARKER_EDGE_COUNT * 2;
-const ADD_CENTER_X_COLOR: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
-const ADD_CENTER_Y_COLOR: [f32; 4] = [0.2, 1.0, 0.2, 1.0];
-const ADD_CENTER_Z_COLOR: [f32; 4] = [0.3, 0.5, 1.0, 1.0];
 const ADD_CENTER_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const ADD_CENTER_MARKER_EDGES: [([i8; 3], [i8; 3], [f32; 4]); ADD_CENTER_MARKER_EDGE_COUNT] = [
-    ([0, 0, 0], [1, 0, 0], ADD_CENTER_X_COLOR),
-    ([0, 0, 0], [-1, 0, 0], ADD_CENTER_X_COLOR),
-    ([0, 0, 0], [0, 1, 0], ADD_CENTER_Y_COLOR),
-    ([0, 0, 0], [0, -1, 0], ADD_CENTER_Y_COLOR),
-    ([0, 0, 0], [0, 0, 1], ADD_CENTER_Z_COLOR),
-    ([0, 0, 0], [0, 0, -1], ADD_CENTER_Z_COLOR),
     ([1, 0, 0], [0, 1, 0], ADD_CENTER_WHITE),
     ([1, 0, 0], [0, -1, 0], ADD_CENTER_WHITE),
     ([1, 0, 0], [0, 0, 1], ADD_CENTER_WHITE),
@@ -764,7 +755,7 @@ impl Drop for ParticleRenderPipeline {
     }
 }
 
-/// Builds an octahedron marker with colored axis spokes at the target center.
+/// Builds a white octahedron wireframe marker at the target center.
 pub fn build_add_center_marker(
     center: [f32; 3],
     half_extent: f32,
