@@ -480,6 +480,21 @@ impl ObjectInput {
         )
     }
 
+    /// Preview marker geometry in axes space (grid-aligned, constant size).
+    pub fn add_center_marker_preview_geometry(
+        center: DVec3,
+        base_scale: f64,
+        visual_scale_factor: f32,
+    ) -> ([f32; 3], f32) {
+        let world = Self::add_center_world_position(center, base_scale);
+        let scaled = [
+            (world.x * visual_scale_factor as f64) as f32,
+            (world.y * visual_scale_factor as f64) as f32,
+            (world.z * visual_scale_factor as f64) as f32,
+        ];
+        (scaled, Self::add_center_marker_half_extent(base_scale))
+    }
+
     fn add_center_scale_factor(base_scale: f64) -> (f64, f64) {
         let scale = clamp_world_scale(base_scale);
         (scale, Correct::new(scale).m)

@@ -91,7 +91,7 @@ pub struct ParticleRenderPipeline {
     axes_vertex_count: u32,
     add_center_marker_buffer: Option<AllocatedBuffer>,
     add_center_marker_vertex_count: u32,
-    last_add_center_marker_key: Option<(glam::DVec3, u64)>,
+    last_add_center_marker_key: Option<(glam::DVec3, u64, u64)>,
     selection_marker_index: i32,
     particle_descriptor_set_layout: vk::DescriptorSetLayout,
     gpu_sim: GpuParticleSimulation,
@@ -365,10 +365,6 @@ impl ParticleRenderPipeline {
             size_scale,
         };
 
-        let line_pc = AxesPushConstants {
-            view_proj: view_proj_cols,
-        };
-
         self.draw_particles(command_buffer, &pc, particle_display_mode);
 
         if self.selection_marker_index >= 0 {
@@ -389,9 +385,14 @@ impl ParticleRenderPipeline {
 
         if self.add_center_marker_vertex_count > 0 {
             if let Some(ref buf) = self.add_center_marker_buffer {
+                let add_center_pc = AxesPushConstants {
+                    view_proj: self
+                        .compute_mvp_axes(aspect_ratio)
+                        .to_cols_array_2d(),
+                };
                 self.draw_axes_lines(
                     command_buffer,
-                    &line_pc,
+                    &add_center_pc,
                     buf.buffer,
                     self.add_center_marker_vertex_count,
                 );
@@ -446,14 +447,22 @@ impl ParticleRenderPipeline {
             return;
         }
 
-        let marker_key = (ui_state.add_center, ui_state.base_scale.to_bits());
+        let marker_key = (
+            ui_state.add_center,
+            ui_state.base_scale.to_bits(),
+            ui_state.scale_gauge.to_bits(),
+        );
         if self.last_add_center_marker_key == Some(marker_key) {
             return;
         }
         self.last_add_center_marker_key = Some(marker_key);
 
-        let (center, half_extent) =
-            ObjectInput::add_center_marker_geometry(ui_state.add_center, ui_state.base_scale);
+        let visual_scale_factor = particle_visual_scale_factor(ui_state.scale_gauge);
+        let (center, half_extent) = ObjectInput::add_center_marker_preview_geometry(
+            ui_state.add_center,
+            ui_state.base_scale,
+            visual_scale_factor,
+        );
         let verts = build_add_center_marker_vertices(center, half_extent);
         let allocator = Arc::clone(&self.allocator);
         upload_axes_line_buffer(

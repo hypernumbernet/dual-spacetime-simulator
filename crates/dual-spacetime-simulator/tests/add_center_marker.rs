@@ -101,6 +101,38 @@ fn add_center_marker_half_extent_is_fifteen_percent_of_base_scale() {
 }
 
 #[test]
+fn add_center_marker_preview_geometry_matches_geometry_at_unit_scale() {
+    let center = DVec3::new(2.0, -1.0, 3.0);
+    let base_scale = 1e10;
+    let (preview_center, preview_half) =
+        ObjectInput::add_center_marker_preview_geometry(center, base_scale, 1.0);
+    let (geometry_center, geometry_half) =
+        ObjectInput::add_center_marker_geometry(center, base_scale);
+    assert_eq!(preview_center, geometry_center);
+    assert!((preview_half - geometry_half).abs() < 1e-6);
+}
+
+#[test]
+fn add_center_marker_preview_geometry_scales_center_with_visual_scale_factor() {
+    let center = DVec3::new(2.0, -1.0, 3.0);
+    let base_scale = 1e10;
+    let (preview_center, preview_half) =
+        ObjectInput::add_center_marker_preview_geometry(center, base_scale, 4.0);
+    let (geometry_center, geometry_half) =
+        ObjectInput::add_center_marker_geometry(center, base_scale);
+    assert_eq!(
+        preview_center,
+        [
+            geometry_center[0] * 4.0,
+            geometry_center[1] * 4.0,
+            geometry_center[2] * 4.0,
+        ]
+    );
+    assert!((preview_half - geometry_half).abs() < 1e-6);
+    assert!((preview_half - 0.15).abs() < 1e-6);
+}
+
+#[test]
 fn preview_group_extent_matches_random_sphere_radius() {
     let scale = 1e10;
     let input = ObjectInputType::RandomSphere.to_object_input(scale);
