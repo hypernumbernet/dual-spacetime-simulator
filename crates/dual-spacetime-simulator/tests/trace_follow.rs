@@ -6,10 +6,12 @@ use dual_spacetime_simulator::trace_follow::{
 use dual_spacetime_simulator::ui_state::ParticleDisplayMode;
 
 #[test]
-fn trace_follow_distance_limits_match_default_at_unit_scale() {
+fn trace_follow_distance_limits_at_unit_scale_glow_linked() {
     let (min, max) = compute_trace_follow_distance_limits(1.0, true, ParticleDisplayMode::Glow);
-    assert!((min - 0.1).abs() < 1e-6);
-    assert!((max - 100.0).abs() < 1e-4);
+    let expected_min = PARTICLE_SIZE_RATIO / MAX_TRACE_PARTICLE_SCREEN_FRACTION;
+    let expected_max = PARTICLE_SIZE_RATIO / MIN_TRACE_PARTICLE_SCREEN_FRACTION;
+    assert!((min - expected_min).abs() < 1e-6);
+    assert!((max - expected_max).abs() < 1e-4);
 }
 
 #[test]

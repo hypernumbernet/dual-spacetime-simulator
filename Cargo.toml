@@ -19,7 +19,7 @@ vulkanvil = { path = "crates/vulkanvil" }
 ash = { version = "0.38", features = ["loaded"] }
 ash-window = "0.13"
 bytemuck = { version = "1.25.0", features = ["derive"] }
-glam = "0.30.8"
+glam = "0.33"
 gpu-allocator = { version = "0.27", default-features = false, features = ["vulkan"] }
 raw-window-handle = "0.6"
 winit = "0.30.12"
