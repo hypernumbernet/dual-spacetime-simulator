@@ -132,12 +132,8 @@ fn remove_particle_at_deletes_index_and_shifts_remaining() {
 
 #[test]
 fn advance_with_zero_particles_is_noop_for_all_simulation_types() {
-    let scale = 1e10;
-    for sim_type in [
-        UiSimType::Normal,
-        UiSimType::SpeedOfLightLimit,
-        UiSimType::LorentzTransformation,
-    ] {
+    let scale = dual_spacetime_simulator::simulation::DEFAULT_WORLD_SCALE;
+    for sim_type in UiSimType::ALL {
         let mgr = SimulationManager::new();
         mgr.clear(sim_type, scale);
         assert_eq!(mgr.particle_count(), 0);

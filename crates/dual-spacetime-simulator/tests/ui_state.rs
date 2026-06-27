@@ -95,26 +95,26 @@ fn simulation_type_change_keeps_gpu_computing_unit() {
 }
 
 #[test]
+fn simulation_type_gpu_code_matches_all_order() {
+    for (i, &sim_type) in SimulationType::ALL.iter().enumerate() {
+        assert_eq!(sim_type.gpu_code(), i as u32);
+    }
+}
+
+#[test]
 fn gpu_computing_available_for_all_types() {
     let mut ui = UiState::default();
-    ui.simulation_type = SimulationType::Normal;
     ui.computing_unit = ComputingUnit::Gpu;
-    ui.active_computing_unit = ComputingUnit::Gpu;
-    assert!(ui.gpu_computing_available());
-    assert!(ui.uses_gpu_simulation());
 
-    ui.active_computing_unit = ComputingUnit::Cpu;
-    assert!(!ui.uses_gpu_simulation());
+    for sim_type in SimulationType::ALL {
+        ui.simulation_type = sim_type;
+        ui.active_computing_unit = ComputingUnit::Gpu;
+        assert!(ui.gpu_computing_available());
+        assert!(ui.uses_gpu_simulation());
 
-    // Relativistic types now also support GPU compute.
-    ui.simulation_type = SimulationType::SpeedOfLightLimit;
-    ui.active_computing_unit = ComputingUnit::Gpu;
-    assert!(ui.gpu_computing_available());
-    assert!(ui.uses_gpu_simulation());
-
-    ui.simulation_type = SimulationType::LorentzTransformation;
-    assert!(ui.gpu_computing_available());
-    assert!(ui.uses_gpu_simulation());
+        ui.active_computing_unit = ComputingUnit::Cpu;
+        assert!(!ui.uses_gpu_simulation());
+    }
 }
 
 #[test]

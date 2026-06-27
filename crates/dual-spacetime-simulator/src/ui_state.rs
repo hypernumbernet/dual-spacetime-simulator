@@ -213,21 +213,32 @@ pub const PANELS: &[PanelKind] = &[
     PanelKind::Settings,
 ];
 
+#[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum SimulationType {
-    Normal,
-    SpeedOfLightLimit,
-    LorentzTransformation,
+    Normal = 0,
+    SpeedOfLightLimit = 1,
+    LorentzTransformation = 2,
+    DstGravity = 3,
 }
 
 impl SimulationType {
+    /// All simulation types in UI display order (must match `repr(u32)` discriminants).
+    pub const ALL: [Self; 4] = [
+        Self::Normal,
+        Self::SpeedOfLightLimit,
+        Self::LorentzTransformation,
+        Self::DstGravity,
+    ];
+
     /// Returns the discriminant passed to the GPU compute shader push constants.
     pub fn gpu_code(self) -> u32 {
-        match self {
-            SimulationType::Normal => 0,
-            SimulationType::SpeedOfLightLimit => 1,
-            SimulationType::LorentzTransformation => 2,
-        }
+        self as u32
+    }
+
+    /// Whether generated particles need rapidity conversion before simulation.
+    pub fn uses_rapidity_particles(self) -> bool {
+        matches!(self, Self::LorentzTransformation)
     }
 }
 
@@ -256,6 +267,7 @@ impl std::fmt::Display for SimulationType {
             SimulationType::Normal => "Normal",
             SimulationType::SpeedOfLightLimit => "Speed of Light Limit",
             SimulationType::LorentzTransformation => "Lorentz Transformation",
+            SimulationType::DstGravity => "DST Gravity",
         };
         write!(f, "{}", text)
     }

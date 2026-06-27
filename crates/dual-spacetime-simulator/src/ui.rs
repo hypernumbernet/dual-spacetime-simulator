@@ -618,17 +618,9 @@ fn combobox_simulation_type(ui: &mut egui::Ui, uis: &mut UiState) {
         .selected_text(format!("{}", uis.simulation_type))
         .width(ui.available_width())
         .show_ui(ui, |ui| {
-            selectable_value(ui, &mut uis.simulation_type, SimulationType::Normal);
-            selectable_value(
-                ui,
-                &mut uis.simulation_type,
-                SimulationType::SpeedOfLightLimit,
-            );
-            selectable_value(
-                ui,
-                &mut uis.simulation_type,
-                SimulationType::LorentzTransformation,
-            );
+            for ty in SimulationType::ALL {
+                selectable_value(ui, &mut uis.simulation_type, ty);
+            }
         });
     uis.apply_simulation_type_change(previous_type);
 }

@@ -51,16 +51,18 @@ fn particle_snapshot_file_roundtrip() {
         mass: 7.0,
         color: [0.1, 0.2, 0.3, 1.0],
     }];
-    let snapshot = ParticleSnapshot::new(SimulationType::LorentzTransformation, 3e9, particles);
 
     let dir = std::env::temp_dir().join("dual-spacetime-simulator-test");
-    let path = dir.join("particles_test.zip");
-    snapshot.save(&path).unwrap();
-    let bytes = std::fs::read(&path).unwrap();
-    assert!(bytes.starts_with(b"PK"));
-    let loaded = ParticleSnapshot::load(&path).unwrap();
-    assert_eq!(snapshot, loaded);
-    let _ = std::fs::remove_file(&path);
+    for (i, sim_type) in SimulationType::ALL.into_iter().enumerate() {
+        let snapshot = ParticleSnapshot::new(sim_type, 3e9 + i as f64, particles.clone());
+        let path = dir.join(format!("particles_{i}.zip"));
+        snapshot.save(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(bytes.starts_with(b"PK"));
+        let loaded = ParticleSnapshot::load(&path).unwrap();
+        assert_eq!(snapshot, loaded);
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 #[test]

@@ -20,13 +20,14 @@ layout(push_constant) uniform PushConstants {
     float gravity_dt;
     float epsilon;
     float light_speed_per_scale; // c / scale
-    uint sim_type;               // 0:Normal 1:SpeedOfLightLimit 2:Lorentz
+    uint sim_type;               // 0:Normal 1:SpeedOfLightLimit 2:Lorentz 3:DstGravity
     uint phase;
 } pc;
 
 const uint SIM_NORMAL = 0u;
 const uint SIM_SPEED_OF_LIGHT_LIMIT = 1u;
 const uint SIM_LORENTZ = 2u;
+const uint SIM_DST_GRAVITY = 3u;
 
 // Port of dst-math::spacetime::rapidity_from_momentum.
 vec3 rapidity_from_momentum(vec3 momentum, float mass, float c) {
@@ -63,6 +64,10 @@ vec3 lorentz_position_delta(vec3 rapidity, float ct) {
 void main() {
     uint i = gl_GlobalInvocationID.x;
     if (i >= pc.particle_count) {
+        return;
+    }
+
+    if (pc.sim_type == SIM_DST_GRAVITY) {
         return;
     }
 

@@ -16,6 +16,7 @@ pub const MPC: f64 = PC * 1_000_000.0; // Megaparsec in meters
 pub const LIGHT_SPEED_SQUARED: f64 = LIGHT_SPEED * LIGHT_SPEED;
 pub const G: f64 = 6.6743e-11; // Gravitational constant in m^3 kg^-1 s^-2
 pub const EPSILON: f64 = 1e-10;
+pub const DEFAULT_WORLD_SCALE: f64 = 1e10;
 
 pub trait SimulationEngine {
     /// Updates particle velocities for one simulation step duration.
@@ -38,10 +39,16 @@ pub struct SimulationLorentzTransformation {
     pub scale: f64,
 }
 
+pub struct SimulationDstGravity {
+    pub particles: Vec<Particle>,
+    pub scale: f64,
+}
+
 pub enum SimulationState {
     Normal(SimulationNormal),
     SpeedOfLightLimit(SimulationSpeedOfLightLimit),
     LorentzTransformation(SimulationLorentzTransformation),
+    DstGravity(SimulationDstGravity),
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq)]
@@ -167,6 +174,14 @@ impl SimulationEngine for SimulationLorentzTransformation {
     }
 }
 
+impl SimulationEngine for SimulationDstGravity {
+    /// Stub: DST gravity physics is not implemented yet.
+    fn update_velocities(&mut self, _delta_seconds: f64) {}
+
+    /// Stub: DST gravity physics is not implemented yet.
+    fn advance_time(&mut self, _delta_seconds: f64) {}
+}
+
 impl SimulationEngine for SimulationState {
     /// Delegates velocity updates to the active simulation variant.
     fn update_velocities(&mut self, delta_seconds: f64) {
@@ -174,6 +189,7 @@ impl SimulationEngine for SimulationState {
             SimulationState::Normal(s) => s.update_velocities(delta_seconds),
             SimulationState::SpeedOfLightLimit(s) => s.update_velocities(delta_seconds),
             SimulationState::LorentzTransformation(s) => s.update_velocities(delta_seconds),
+            SimulationState::DstGravity(s) => s.update_velocities(delta_seconds),
         }
     }
 
@@ -183,6 +199,7 @@ impl SimulationEngine for SimulationState {
             SimulationState::Normal(s) => s.advance_time(delta_seconds),
             SimulationState::SpeedOfLightLimit(s) => s.advance_time(delta_seconds),
             SimulationState::LorentzTransformation(s) => s.advance_time(delta_seconds),
+            SimulationState::DstGravity(s) => s.advance_time(delta_seconds),
         }
     }
 }
@@ -199,7 +216,7 @@ impl Default for SimulationSpeedOfLightLimit {
     fn default() -> Self {
         Self {
             particles: vec![],
-            scale: 1e10,
+            scale: DEFAULT_WORLD_SCALE,
         }
     }
 }
@@ -209,7 +226,16 @@ impl Default for SimulationLorentzTransformation {
     fn default() -> Self {
         Self {
             particles: vec![],
-            scale: 1e10,
+            scale: DEFAULT_WORLD_SCALE,
+        }
+    }
+}
+
+impl Default for SimulationDstGravity {
+    fn default() -> Self {
+        Self {
+            particles: vec![],
+            scale: DEFAULT_WORLD_SCALE,
         }
     }
 }
@@ -221,6 +247,16 @@ impl SimulationState {
             SimulationState::Normal(s) => &s.particles,
             SimulationState::SpeedOfLightLimit(s) => &s.particles,
             SimulationState::LorentzTransformation(s) => &s.particles,
+            SimulationState::DstGravity(s) => &s.particles,
+        }
+    }
+
+    fn particles_mut(&mut self) -> &mut Vec<Particle> {
+        match self {
+            SimulationState::Normal(s) => &mut s.particles,
+            SimulationState::SpeedOfLightLimit(s) => &mut s.particles,
+            SimulationState::LorentzTransformation(s) => &mut s.particles,
+            SimulationState::DstGravity(s) => &mut s.particles,
         }
     }
 }
@@ -252,11 +288,10 @@ impl SimulationManager {
         scale: f64,
     ) -> SimulationState {
         let normal = object_input.generate_particles(particle_count);
-        let particles = match simulation_type {
-            SimulationType::LorentzTransformation => {
-                Self::convert_to_lorentz(normal.particles, scale)
-            }
-            _ => normal.particles,
+        let particles = if simulation_type.uses_rapidity_particles() {
+            Self::convert_to_lorentz(normal.particles, scale)
+        } else {
+            normal.particles
         };
         Self::state_from_particles(simulation_type, particles, scale)
     }
@@ -276,6 +311,9 @@ impl SimulationManager {
                     particles,
                     scale,
                 })
+            }
+            SimulationType::DstGravity => {
+                SimulationState::DstGravity(SimulationDstGravity { particles, scale })
             }
         }
     }
@@ -315,9 +353,10 @@ impl SimulationManager {
         simulation_type: SimulationType,
         scale: f64,
     ) {
-        let particles = match simulation_type {
-            SimulationType::LorentzTransformation => Self::convert_to_lorentz(particles, scale),
-            _ => particles,
+        let particles = if simulation_type.uses_rapidity_particles() {
+            Self::convert_to_lorentz(particles, scale)
+        } else {
+            particles
         };
         let mut state_guard = self.state.write().unwrap();
         *state_guard = Self::state_from_particles(simulation_type, particles, scale);
@@ -371,16 +410,12 @@ impl SimulationManager {
         let mut new_particles = object_input
             .generate_particles_at_center(batch_count, center, base_scale)
             .particles;
-        if simulation_type == SimulationType::LorentzTransformation {
+        if simulation_type.uses_rapidity_particles() {
             new_particles = Self::convert_to_lorentz(new_particles, scale);
         }
 
         let mut state_guard = self.state.write().unwrap();
-        let particles = match &mut *state_guard {
-            SimulationState::Normal(s) => &mut s.particles,
-            SimulationState::SpeedOfLightLimit(s) => &mut s.particles,
-            SimulationState::LorentzTransformation(s) => &mut s.particles,
-        };
+        let particles = state_guard.particles_mut();
 
         let remaining = max_particle_count.saturating_sub(particles.len() as u32) as usize;
         let to_add = new_particles.len().min(remaining);
@@ -391,11 +426,7 @@ impl SimulationManager {
     /// Removes the particle at `index`. Returns false when the index is out of bounds.
     pub fn remove_particle_at(&self, index: usize) -> bool {
         let mut state_guard = self.state.write().unwrap();
-        let particles = match &mut *state_guard {
-            SimulationState::Normal(s) => &mut s.particles,
-            SimulationState::SpeedOfLightLimit(s) => &mut s.particles,
-            SimulationState::LorentzTransformation(s) => &mut s.particles,
-        };
+        let particles = state_guard.particles_mut();
         if index >= particles.len() {
             return false;
         }
