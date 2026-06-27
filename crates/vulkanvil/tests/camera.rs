@@ -801,19 +801,19 @@ fn trace_free_mode_no_pitch_clamp() {
 }
 
 use vulkanvil::{
-    apply_camera_mouse_wheel, apply_orbit_keyboard, apply_trace_follow_distance_delta,
-    MAX_TRACE_FOLLOW_DISTANCE, MIN_TRACE_FOLLOW_DISTANCE,
+    apply_camera_mouse_wheel, apply_orbit_keyboard, MAX_TRACE_FOLLOW_DISTANCE,
+    MIN_TRACE_FOLLOW_DISTANCE,
 };
 
 #[test]
 fn trace_follow_distance_clamps_to_limits() {
     let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
     cam.begin_trace_follow();
-    apply_trace_follow_distance_delta(&mut cam, -100.0);
+    cam.adjust_trace_follow_distance(-100.0);
     assert!(
         (cam.trace_follow_distance_or_default() - MIN_TRACE_FOLLOW_DISTANCE).abs() < 1e-5
     );
-    apply_trace_follow_distance_delta(&mut cam, 1000.0);
+    cam.adjust_trace_follow_distance(1000.0);
     assert!(
         (cam.trace_follow_distance_or_default() - MAX_TRACE_FOLLOW_DISTANCE).abs() < 1e-5
     );

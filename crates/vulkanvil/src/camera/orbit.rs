@@ -130,13 +130,22 @@ impl OrbitCamera {
             .unwrap_or_else(|| self.orbit_distance())
     }
 
+    /// Returns the clamped trace follow distance used for camera placement.
+    pub fn clamped_trace_follow_distance(&self) -> f32 {
+        clamp_trace_follow_distance(self.trace_follow_distance_or_default())
+    }
+
     /// Adjusts trace follow distance by `delta`, clamped to trace distance limits.
     pub fn adjust_trace_follow_distance(&mut self, delta: f32) {
         if delta.abs() <= EPSILON {
             return;
         }
         let current = self.trace_follow_distance_or_default();
-        self.trace_follow_distance = Some(clamp_trace_follow_distance(current + delta));
+        let next = clamp_trace_follow_distance(current + delta);
+        if (next - current).abs() <= EPSILON {
+            return;
+        }
+        self.trace_follow_distance = Some(next);
     }
 
     /// Translates target and position together on the XZ plane, preserving orbit distance.

@@ -24,7 +24,6 @@ pub const KEYBOARD_PAN_SPEED: f32 = 0.006;
 pub const KEYBOARD_ORBIT_YAW_SPEED: f32 = 0.03;
 pub const WHEEL_FORWARD_SPEED: f32 = 0.03;
 pub const WHEEL_TRACE_DISTANCE_SPEED: f32 = 0.1;
-pub const KEYBOARD_TRACE_DISTANCE_SPEED: f32 = 0.006;
 
 /// Normalized keyboard axis values for orbit camera controls.
 #[derive(Clone, Copy, Default)]
@@ -104,25 +103,16 @@ pub fn apply_orbit_keyboard(
     let pan_speed = distance * KEYBOARD_PAN_SPEED;
 
     if axes.forward != 0.0 || axes.right != 0.0 {
-        let mut forward_xz = Vec3::new(relative.x, 0.0, relative.z);
-        if forward_xz.length_squared() <= f32::EPSILON {
-            forward_xz = Vec3::NEG_Z;
-        } else {
-            forward_xz = forward_xz.normalize();
-        }
-        let right_xz = forward_xz.cross(Vec3::Y);
         if suppress_space_shift {
-            if axes.forward != 0.0 {
-                apply_trace_follow_distance_delta(
-                    camera,
-                    -axes.forward * distance * KEYBOARD_TRACE_DISTANCE_SPEED,
-                );
-            }
-            if axes.right != 0.0 {
-                let offset = right_xz * axes.right * pan_speed;
-                camera.pan_xz(offset);
-            }
+            apply_trace_forward_axis_distance(camera, axes.forward);
         } else {
+            let mut forward_xz = Vec3::new(relative.x, 0.0, relative.z);
+            if forward_xz.length_squared() <= f32::EPSILON {
+                forward_xz = Vec3::NEG_Z;
+            } else {
+                forward_xz = forward_xz.normalize();
+            }
+            let right_xz = forward_xz.cross(Vec3::Y);
             let offset = (forward_xz * axes.forward + right_xz * axes.right) * pan_speed;
             camera.pan_xz(offset);
         }
@@ -155,10 +145,7 @@ pub fn apply_camera_mouse_wheel(
             return;
         }
         let distance = camera.trace_follow_distance_or_default();
-        apply_trace_follow_distance_delta(
-            camera,
-            -scroll_y * distance * WHEEL_TRACE_DISTANCE_SPEED,
-        );
+        camera.adjust_trace_follow_distance(-scroll_y * distance * WHEEL_TRACE_DISTANCE_SPEED);
     } else if lock_camera_up {
         apply_wheel_forward(camera, scroll_y);
     } else {
@@ -166,9 +153,13 @@ pub fn apply_camera_mouse_wheel(
     }
 }
 
-/// Adjusts the trace follow distance when Trace On is active.
-pub fn apply_trace_follow_distance_delta(camera: &mut OrbitCamera, delta: f32) {
-    camera.adjust_trace_follow_distance(delta);
+/// Applies W/S forward-axis input as trace follow distance when Trace On is active.
+pub(crate) fn apply_trace_forward_axis_distance(camera: &mut OrbitCamera, forward_axis: f32) {
+    if forward_axis == 0.0 {
+        return;
+    }
+    let distance = camera.trace_follow_distance_or_default();
+    camera.adjust_trace_follow_distance(-forward_axis * distance * KEYBOARD_PAN_SPEED);
 }
 
 /// Moves the camera along the view direction by a wheel delta scaled to orbit distance.

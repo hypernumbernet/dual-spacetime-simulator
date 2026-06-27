@@ -783,12 +783,17 @@ impl ApplicationHandler for App {
                 self.last_cursor_position = Some((x, y));
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let (lock_camera_up, steer_anchor_active, trace_active) = {
+                let (lock_camera_up, steer_anchor_active, trace_may_be_active) = {
                     let ui = self.ui_state.read().unwrap();
-                    let trace_active = ui.is_trace_enabled && ui.is_particle_info_panel_open;
-                    (ui.lock_camera_up, ui.spacecraft_steer_anchor.is_some(), trace_active)
+                    (
+                        ui.lock_camera_up,
+                        ui.spacecraft_steer_anchor.is_some(),
+                        ui.is_trace_enabled
+                            && ui.is_particle_info_panel_open
+                            && ui.selected_particle.is_some(),
+                    )
                 };
-                let trace_active = trace_active
+                let trace_active = trace_may_be_active
                     && resolve_trace_particle_for_camera(
                         &self.ui_state,
                         &self.simulation_manager,

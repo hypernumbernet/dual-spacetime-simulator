@@ -2,7 +2,6 @@ use glam::Vec3;
 use std::f32::EPSILON;
 
 use super::orbit::{OrbitCamera, clamp_pitch, get_closest_perp_unit_to_y};
-use super::{MAX_TRACE_FOLLOW_DISTANCE, MIN_TRACE_FOLLOW_DISTANCE};
 
 const MIN_TRACE_VELOCITY_SQ: f32 = 1e-12;
 
@@ -44,9 +43,7 @@ pub fn trace_particle_from_behind(
         return;
     }
 
-    let distance = camera
-        .trace_follow_distance_or_default()
-        .clamp(MIN_TRACE_FOLLOW_DISTANCE, MAX_TRACE_FOLLOW_DISTANCE);
+    let distance = camera.clamped_trace_follow_distance();
     let relative = forward * distance;
     let lock_up = camera.lock_up();
     camera.target = particle_position;
