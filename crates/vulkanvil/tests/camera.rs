@@ -799,3 +799,84 @@ fn trace_free_mode_no_pitch_clamp() {
         "lock-up should clamp steep pitch: locked={locked_horiz} free={free_horiz}"
     );
 }
+
+use vulkanvil::{
+    apply_camera_mouse_wheel, apply_orbit_keyboard, apply_trace_follow_distance_delta,
+    MAX_TRACE_FOLLOW_DISTANCE, MIN_TRACE_FOLLOW_DISTANCE,
+};
+
+#[test]
+fn trace_follow_distance_clamps_to_limits() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    cam.begin_trace_follow();
+    apply_trace_follow_distance_delta(&mut cam, -100.0);
+    assert!(
+        (cam.trace_follow_distance_or_default() - MIN_TRACE_FOLLOW_DISTANCE).abs() < 1e-5
+    );
+    apply_trace_follow_distance_delta(&mut cam, 1000.0);
+    assert!(
+        (cam.trace_follow_distance_or_default() - MAX_TRACE_FOLLOW_DISTANCE).abs() < 1e-5
+    );
+}
+
+#[test]
+fn trace_wheel_adjusts_follow_distance() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 10.0), Vec3::ZERO);
+    cam.set_lock_up(true);
+    cam.begin_trace_follow();
+    let before = cam.trace_follow_distance_or_default();
+    apply_camera_mouse_wheel(&mut cam, true, 1.0, true);
+    let after_wheel = cam.trace_follow_distance_or_default();
+    assert!(
+        after_wheel < before,
+        "scroll up should move closer: before={before} after={after_wheel}"
+    );
+
+    let particle_pos = Vec3::new(3.0, 0.0, 0.0);
+    let particle_vel = Vec3::new(1.0, 0.0, 0.0);
+    trace_particle_from_behind(&mut cam, particle_pos, particle_vel);
+    assert!((cam.orbit_distance() - after_wheel).abs() < 1e-4);
+}
+
+#[test]
+fn trace_orbit_keyboard_w_s_adjusts_follow_distance() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 8.0), Vec3::ZERO);
+    cam.set_lock_up(true);
+    cam.begin_trace_follow();
+    let before = cam.trace_follow_distance_or_default();
+
+    apply_orbit_keyboard(
+        &mut cam,
+        &input_holding(&[KeyCode::KeyW]),
+        true,
+        false,
+        true,
+    );
+    assert!(cam.trace_follow_distance_or_default() < before);
+
+    let after_w = cam.trace_follow_distance_or_default();
+    apply_orbit_keyboard(
+        &mut cam,
+        &input_holding(&[KeyCode::KeyS]),
+        true,
+        false,
+        true,
+    );
+    assert!(cam.trace_follow_distance_or_default() > after_w);
+}
+
+#[test]
+fn trace_spacecraft_keyboard_w_adjusts_follow_distance_not_pitch() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 6.0), Vec3::ZERO);
+    cam.begin_trace_follow();
+    let forward_before = (cam.target - cam.position).normalize();
+    let distance_before = cam.trace_follow_distance_or_default();
+
+    apply_spacecraft_keyboard(&mut cam, &input_holding(&[KeyCode::KeyW]), 0.05, false, true);
+
+    assert!(cam.trace_follow_distance_or_default() < distance_before);
+    assert!(
+        (cam.target - cam.position).normalize().dot(forward_before) > 0.999,
+        "W during trace should not pitch the view"
+    );
+}

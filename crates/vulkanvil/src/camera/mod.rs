@@ -18,9 +18,13 @@ use crate::input::InputState;
 use glam::Vec3;
 use winit::keyboard::KeyCode;
 
+pub const MIN_TRACE_FOLLOW_DISTANCE: f32 = 0.1;
+pub const MAX_TRACE_FOLLOW_DISTANCE: f32 = 100.0;
 pub const KEYBOARD_PAN_SPEED: f32 = 0.006;
 pub const KEYBOARD_ORBIT_YAW_SPEED: f32 = 0.03;
 pub const WHEEL_FORWARD_SPEED: f32 = 0.03;
+pub const WHEEL_TRACE_DISTANCE_SPEED: f32 = 0.1;
+pub const KEYBOARD_TRACE_DISTANCE_SPEED: f32 = 0.006;
 
 /// Normalized keyboard axis values for orbit camera controls.
 #[derive(Clone, Copy, Default)]
@@ -107,8 +111,21 @@ pub fn apply_orbit_keyboard(
             forward_xz = forward_xz.normalize();
         }
         let right_xz = forward_xz.cross(Vec3::Y);
-        let offset = (forward_xz * axes.forward + right_xz * axes.right) * pan_speed;
-        camera.pan_xz(offset);
+        if suppress_space_shift {
+            if axes.forward != 0.0 {
+                apply_trace_follow_distance_delta(
+                    camera,
+                    -axes.forward * distance * KEYBOARD_TRACE_DISTANCE_SPEED,
+                );
+            }
+            if axes.right != 0.0 {
+                let offset = right_xz * axes.right * pan_speed;
+                camera.pan_xz(offset);
+            }
+        } else {
+            let offset = (forward_xz * axes.forward + right_xz * axes.right) * pan_speed;
+            camera.pan_xz(offset);
+        }
     }
     if axes.yaw != 0.0 {
         camera.orbit_yaw(axes.yaw * KEYBOARD_ORBIT_YAW_SPEED);
@@ -126,13 +143,32 @@ pub fn apply_orbit_keyboard(
     true
 }
 
-/// Routes mouse-wheel input to orbit zoom or spacecraft thrust.
-pub fn apply_camera_mouse_wheel(camera: &mut OrbitCamera, lock_camera_up: bool, scroll_y: f32) {
-    if lock_camera_up {
+/// Routes mouse-wheel input to orbit zoom, spacecraft thrust, or trace follow distance.
+pub fn apply_camera_mouse_wheel(
+    camera: &mut OrbitCamera,
+    lock_camera_up: bool,
+    scroll_y: f32,
+    trace_active: bool,
+) {
+    if trace_active {
+        if scroll_y.abs() <= f32::EPSILON {
+            return;
+        }
+        let distance = camera.trace_follow_distance_or_default();
+        apply_trace_follow_distance_delta(
+            camera,
+            -scroll_y * distance * WHEEL_TRACE_DISTANCE_SPEED,
+        );
+    } else if lock_camera_up {
         apply_wheel_forward(camera, scroll_y);
     } else {
         apply_spacecraft_wheel_thrust(camera, scroll_y);
     }
+}
+
+/// Adjusts the trace follow distance when Trace On is active.
+pub fn apply_trace_follow_distance_delta(camera: &mut OrbitCamera, delta: f32) {
+    camera.adjust_trace_follow_distance(delta);
 }
 
 /// Moves the camera along the view direction by a wheel delta scaled to orbit distance.

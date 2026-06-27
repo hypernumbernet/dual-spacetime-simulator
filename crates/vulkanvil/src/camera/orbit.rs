@@ -21,6 +21,7 @@ pub struct OrbitCamera {
     pub(crate) thrust_accel: f32,
     lock_up: bool,
     reference_orbit_distance: f32,
+    trace_follow_distance: Option<f32>,
     /// Lock-up path for the in-flight origin-center animation (`center_target_on_origin`).
     origin_center_lock_up: bool,
     animating_to_origin: u32,
@@ -42,6 +43,7 @@ impl OrbitCamera {
             thrust_accel: 0.0,
             lock_up: false,
             reference_orbit_distance,
+            trace_follow_distance: None,
             origin_center_lock_up: false,
             animating_to_origin: 0,
             start_time: None,
@@ -108,6 +110,33 @@ impl OrbitCamera {
     #[inline]
     pub fn orbit_distance(&self) -> f32 {
         self.view_relative().length()
+    }
+
+    /// Initializes trace follow distance from the current orbit distance when trace begins.
+    pub fn begin_trace_follow(&mut self) {
+        if self.trace_follow_distance.is_none() {
+            self.trace_follow_distance = Some(clamp_trace_follow_distance(self.orbit_distance()));
+        }
+    }
+
+    /// Clears trace follow distance when trace ends.
+    pub fn end_trace_follow(&mut self) {
+        self.trace_follow_distance = None;
+    }
+
+    /// Returns the active trace follow distance, or the current orbit distance when unset.
+    pub fn trace_follow_distance_or_default(&self) -> f32 {
+        self.trace_follow_distance
+            .unwrap_or_else(|| self.orbit_distance())
+    }
+
+    /// Adjusts trace follow distance by `delta`, clamped to trace distance limits.
+    pub fn adjust_trace_follow_distance(&mut self, delta: f32) {
+        if delta.abs() <= EPSILON {
+            return;
+        }
+        let current = self.trace_follow_distance_or_default();
+        self.trace_follow_distance = Some(clamp_trace_follow_distance(current + delta));
     }
 
     /// Translates target and position together on the XZ plane, preserving orbit distance.
@@ -321,6 +350,13 @@ impl OrbitCamera {
         }
         self.up = get_closest_perp_unit_to_y(self.position, self.target);
     }
+}
+
+fn clamp_trace_follow_distance(distance: f32) -> f32 {
+    distance.clamp(
+        super::MIN_TRACE_FOLLOW_DISTANCE,
+        super::MAX_TRACE_FOLLOW_DISTANCE,
+    )
 }
 
 /// Clamps view pitch to avoid near-vertical singularities during camera motion.

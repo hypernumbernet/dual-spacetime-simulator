@@ -783,10 +783,18 @@ impl ApplicationHandler for App {
                 self.last_cursor_position = Some((x, y));
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let (lock_camera_up, steer_anchor_active) = {
+                let (lock_camera_up, steer_anchor_active, trace_active) = {
                     let ui = self.ui_state.read().unwrap();
-                    (ui.lock_camera_up, ui.spacecraft_steer_anchor.is_some())
+                    let trace_active = ui.is_trace_enabled && ui.is_particle_info_panel_open;
+                    (ui.lock_camera_up, ui.spacecraft_steer_anchor.is_some(), trace_active)
                 };
+                let trace_active = trace_active
+                    && resolve_trace_particle_for_camera(
+                        &self.ui_state,
+                        &self.simulation_manager,
+                        Some(&*pipeline),
+                    )
+                    .1;
                 if spacecraft_scene_wheel_allowed(
                     lock_camera_up,
                     steer_anchor_active,
@@ -794,13 +802,19 @@ impl ApplicationHandler for App {
                 ) {
                     match delta {
                         MouseScrollDelta::LineDelta(_, y) => {
-                            apply_camera_mouse_wheel(pipeline.camera_mut(), lock_camera_up, *y);
+                            apply_camera_mouse_wheel(
+                                pipeline.camera_mut(),
+                                lock_camera_up,
+                                *y,
+                                trace_active,
+                            );
                         }
                         MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
                             apply_camera_mouse_wheel(
                                 pipeline.camera_mut(),
                                 lock_camera_up,
                                 *y as f32,
+                                trace_active,
                             );
                         }
                     }
@@ -868,6 +882,11 @@ impl ApplicationHandler for App {
         );
         if let Some(pipeline) = self.render_pipeline.as_mut() {
             pipeline.set_lock_camera_up(lock_camera_up);
+            if suppress_space_shift {
+                pipeline.camera_mut().begin_trace_follow();
+            } else {
+                pipeline.camera_mut().end_trace_follow();
+            }
             if !lock_camera_up {
                 let now = Instant::now();
                 let dt = self

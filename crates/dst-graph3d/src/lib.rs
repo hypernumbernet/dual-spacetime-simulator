@@ -433,13 +433,14 @@ impl ApplicationHandler for App {
                 ) {
                     match delta {
                         MouseScrollDelta::LineDelta(_, y) => {
-                            apply_camera_mouse_wheel(pipeline.camera_mut(), lock_camera_up, *y);
+                            apply_camera_mouse_wheel(pipeline.camera_mut(), lock_camera_up, *y, false);
                         }
                         MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
                             apply_camera_mouse_wheel(
                                 pipeline.camera_mut(),
                                 lock_camera_up,
                                 *y as f32,
+                                false,
                             );
                         }
                     }

@@ -1,4 +1,5 @@
 use super::orbit::OrbitCamera;
+use super::{apply_trace_follow_distance_delta, KEYBOARD_TRACE_DISTANCE_SPEED};
 use crate::input::InputState;
 use glam::{Quat, Vec3};
 use std::f32::EPSILON;
@@ -203,8 +204,23 @@ pub fn apply_spacecraft_keyboard(
     if yaw != 0.0 {
         apply_spacecraft_yaw(camera, yaw * rate);
     }
-    if roll != 0.0 || pitch != 0.0 {
-        apply_spacecraft_roll_pitch(camera, roll * rate, pitch * rate);
+    if suppress_space_shift && pitch != 0.0 {
+        let distance = camera.trace_follow_distance_or_default();
+        apply_trace_follow_distance_delta(
+            camera,
+            -pitch * distance * KEYBOARD_TRACE_DISTANCE_SPEED,
+        );
+    }
+    if roll != 0.0 || (!suppress_space_shift && pitch != 0.0) {
+        apply_spacecraft_roll_pitch(
+            camera,
+            roll * rate,
+            if suppress_space_shift {
+                0.0
+            } else {
+                pitch * rate
+            },
+        );
     }
 
     true
