@@ -196,18 +196,27 @@ impl ParticleRenderPipeline {
     }
 
     /// Uploads simulation particles into the shared GPU storage buffer.
-    pub fn upload_particles(&mut self, particles: &[Particle]) {
-        self.gpu_sim.upload_from_cpu(particles);
+    pub fn upload_particles(&mut self, particles: &[Particle], simulation_type: SimulationType) {
+        self.gpu_sim.upload_from_cpu(particles, simulation_type);
     }
 
     /// Reads back GPU particle state for snapshot export.
-    pub fn readback_particles(&self) -> Vec<Particle> {
-        self.gpu_sim.readback_to_cpu()
+    pub fn readback_particles(
+        &self,
+        simulation_type: SimulationType,
+        scale: f64,
+    ) -> Vec<Particle> {
+        self.gpu_sim.readback_to_cpu(simulation_type, scale)
     }
 
     /// Reads one GPU-simulated particle by index for live UI display.
-    pub fn read_particle_at(&self, index: usize) -> Option<Particle> {
-        self.gpu_sim.read_particle_at(index)
+    pub fn read_particle_at(
+        &self,
+        index: usize,
+        simulation_type: SimulationType,
+        scale: f64,
+    ) -> Option<Particle> {
+        self.gpu_sim.read_particle_at(index, simulation_type, scale)
     }
 
     /// Appends particles while keeping the simulated positions of existing ones.
@@ -216,13 +225,18 @@ impl ParticleRenderPipeline {
     /// initial positions, so a plain re-upload resets them. This reads the current
     /// GPU positions back and overlays them onto the leading entries of
     /// `all_particles` (existing + newly appended) before re-uploading the buffer.
-    pub fn add_particles_preserving_simulated(&mut self, all_particles: &[Particle]) {
+    pub fn add_particles_preserving_simulated(
+        &mut self,
+        all_particles: &[Particle],
+        simulation_type: SimulationType,
+        scale: f64,
+    ) {
         self.wait_device_idle("add_particles_preserving_simulated");
-        let simulated = self.gpu_sim.readback_to_cpu();
+        let simulated = self.gpu_sim.readback_to_cpu(simulation_type, scale);
         let mut combined = all_particles.to_vec();
         let preserved = simulated.len().min(combined.len());
         combined[..preserved].copy_from_slice(&simulated[..preserved]);
-        self.gpu_sim.upload_from_cpu(&combined);
+        self.gpu_sim.upload_from_cpu(&combined, simulation_type);
     }
 
     /// Removes one particle while keeping simulated positions of the rest.

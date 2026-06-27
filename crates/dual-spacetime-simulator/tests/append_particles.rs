@@ -21,12 +21,12 @@ fn manager_with_particles(particles: Vec<Particle>) -> SimulationManager {
 #[test]
 fn append_particles_increases_count() {
     let scale = 1e10;
-    let mgr = manager_with_particles(vec![Particle {
-        position: DVec3::new(100.0, 0.0, 0.0),
-        velocity: DVec3::new(1.0, 2.0, 3.0),
-        mass: 1.0,
-        color: [1.0, 0.0, 0.0, 1.0],
-    }]);
+    let mgr = manager_with_particles(vec![Particle::from_kinematics(
+        DVec3::new(100.0, 0.0, 0.0),
+        DVec3::new(1.0, 2.0, 3.0),
+        1.0,
+        [1.0, 0.0, 0.0, 1.0],
+    )]);
     let added = mgr.append_particles(
         random_sphere_input(scale),
         UiSimType::Normal,
@@ -43,12 +43,12 @@ fn append_particles_increases_count() {
 #[test]
 fn append_particles_preserves_existing_particles() {
     let scale = 1e10;
-    let existing = Particle {
-        position: DVec3::new(100.0, 0.0, 0.0),
-        velocity: DVec3::new(1.0, 2.0, 3.0),
-        mass: 1.0,
-        color: [1.0, 0.0, 0.0, 1.0],
-    };
+    let existing = Particle::from_kinematics(
+        DVec3::new(100.0, 0.0, 0.0),
+        DVec3::new(1.0, 2.0, 3.0),
+        1.0,
+        [1.0, 0.0, 0.0, 1.0],
+    );
     let mgr = manager_with_particles(vec![existing]);
     mgr.append_particles(
         random_sphere_input(scale),
@@ -101,11 +101,13 @@ fn append_particles_offsets_positions_by_base_scale() {
 fn append_particles_respects_max_count() {
     let scale = 1e10;
     let existing: Vec<Particle> = (0..5)
-        .map(|i| Particle {
-            position: DVec3::new(i as f64, 0.0, 0.0),
-            velocity: DVec3::ZERO,
-            mass: 1.0,
-            color: [1.0, 1.0, 1.0, 1.0],
+        .map(|i| {
+            Particle::from_kinematics(
+                DVec3::new(i as f64, 0.0, 0.0),
+                DVec3::ZERO,
+                1.0,
+                [1.0, 1.0, 1.0, 1.0],
+            )
         })
         .collect();
     let mgr = manager_with_particles(existing);

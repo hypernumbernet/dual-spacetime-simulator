@@ -1,7 +1,9 @@
 //! Extra integration coverage for `spacetime` (see also crate-local `#[cfg(test)]`).
 
 use dst_math::spacetime::{
-    Spacetime, lorentz_boost_matrix_from_velocity, rapidity_from_momentum, rapidity_vector,
+    Spacetime, lorentz_boost_matrix_from_velocity, momentum_from_velocity,
+    position_delta_from_momentum, rapidity_from_momentum, rapidity_vector,
+    velocity_from_momentum,
 };
 use glam::{DMat4, DVec3, DVec4};
 
@@ -56,6 +58,47 @@ fn apply_lorentz_transform_by_rapidity_zero_is_noop() {
 #[test]
 fn rapidity_from_momentum_zero_returns_zero() {
     assert_eq!(rapidity_from_momentum(DVec3::ZERO, 1.0, 1.0), DVec3::ZERO);
+}
+
+#[test]
+fn velocity_from_momentum_zero_returns_zero() {
+    assert_eq!(velocity_from_momentum(DVec3::ZERO, 1.0, 1.0), DVec3::ZERO);
+}
+
+#[test]
+fn velocity_from_momentum_large_p_approaches_c() {
+    let c = 1.0;
+    let p = DVec3::new(1e30, 0.0, 0.0);
+    let v = velocity_from_momentum(p, 1.0, c);
+    assert!((v.x - c).abs() / c < 1e-10);
+}
+
+#[test]
+fn velocity_from_momentum_massless_is_lightlike() {
+    let c = 299_792_458.0;
+    let p = DVec3::new(1.0, 2.0, 3.0);
+    let v = velocity_from_momentum(p, 0.0, c);
+    assert!((v.length() - c).abs() / c < 1e-10);
+    assert!((v.normalize() - p.normalize()).length() < 1e-10);
+}
+
+#[test]
+fn momentum_velocity_roundtrip() {
+    let c = 1.0;
+    let v0 = DVec3::new(0.3, -0.1, 0.2);
+    let p = momentum_from_velocity(v0, 2.0, c);
+    let v1 = velocity_from_momentum(p, 2.0, c);
+    assert!((v0 - v1).length() < 1e-12);
+}
+
+#[test]
+fn position_delta_from_momentum_stays_finite_at_large_p() {
+    let c = 1.0;
+    let p = DVec3::new(1e30, 0.0, 0.0);
+    let delta = position_delta_from_momentum(p, 1.0, c, 1.0);
+    assert!(delta.x.is_finite());
+    assert!(delta.y.is_finite());
+    assert!(delta.z.is_finite());
 }
 
 #[test]

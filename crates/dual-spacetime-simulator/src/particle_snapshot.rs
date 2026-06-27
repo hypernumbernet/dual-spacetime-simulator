@@ -8,7 +8,7 @@ use zip::{ZipArchive, ZipWriter};
 use crate::simulation::Particle;
 use crate::ui_state::SimulationType;
 
-pub const SNAPSHOT_VERSION: u32 = 1;
+pub const SNAPSHOT_VERSION: u32 = 2;
 pub const SNAPSHOT_FILTER_NAME: &str = "Particle Snapshot";
 pub const SNAPSHOT_FILTER_EXT: &str = "zip";
 pub const SNAPSHOT_ENTRY_NAME: &str = "particles.json";
@@ -81,11 +81,11 @@ impl ParticleSnapshot {
     }
 
     fn validate_version(snapshot: Self) -> io::Result<Self> {
-        if snapshot.version != SNAPSHOT_VERSION {
+        if snapshot.version == 0 || snapshot.version > SNAPSHOT_VERSION {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "Unsupported snapshot version: {} (expected {})",
+                    "Unsupported snapshot version: {} (expected 1..={})",
                     snapshot.version, SNAPSHOT_VERSION
                 ),
             ));

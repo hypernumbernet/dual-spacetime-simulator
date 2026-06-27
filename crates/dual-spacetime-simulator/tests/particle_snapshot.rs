@@ -23,6 +23,7 @@ fn particle_snapshot_json_roundtrip() {
     for (a, b) in snapshot.particles.iter().zip(back.particles.iter()) {
         assert_dvec3_approx(a.position, b.position);
         assert_dvec3_approx(a.velocity, b.velocity);
+        assert_dvec3_approx(a.momentum, b.momentum);
         assert!((a.mass - b.mass).abs() < 1e-12);
         assert_eq!(a.color, b.color);
     }
@@ -45,12 +46,12 @@ fn load_from_snapshot_restores_particles() {
 
 #[test]
 fn particle_snapshot_file_roundtrip() {
-    let particles = vec![dual_spacetime_simulator::simulation::Particle {
-        position: DVec3::new(1.0, 2.0, 3.0),
-        velocity: DVec3::new(4.0, 5.0, 6.0),
-        mass: 7.0,
-        color: [0.1, 0.2, 0.3, 1.0],
-    }];
+    let particles = vec![dual_spacetime_simulator::simulation::Particle::from_kinematics(
+        DVec3::new(1.0, 2.0, 3.0),
+        DVec3::new(4.0, 5.0, 6.0),
+        7.0,
+        [0.1, 0.2, 0.3, 1.0],
+    )];
 
     let dir = std::env::temp_dir().join("dual-spacetime-simulator-test");
     for (i, sim_type) in SimulationType::ALL.into_iter().enumerate() {
@@ -66,13 +67,36 @@ fn particle_snapshot_file_roundtrip() {
 }
 
 #[test]
+fn particle_snapshot_loads_legacy_v1_json_without_momentum() {
+    let json = r#"{
+        "version": 1,
+        "simulation_type": "Normal",
+        "scale": 1e10,
+        "particles": [{
+            "position": [0.0, 0.0, 0.0],
+            "velocity": [1.0, 2.0, 3.0],
+            "mass": 5.0,
+            "color": [1.0, 1.0, 1.0, 1.0]
+        }]
+    }"#;
+
+    let dir = std::env::temp_dir().join("dual-spacetime-simulator-test");
+    let path = dir.join("particles_legacy_v1.json");
+    std::fs::write(&path, json).unwrap();
+    let loaded = ParticleSnapshot::load(&path).unwrap();
+    assert_eq!(loaded.version, 1);
+    assert_eq!(loaded.particles[0].momentum, DVec3::ZERO);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn particle_snapshot_loads_legacy_json() {
-    let particles = vec![dual_spacetime_simulator::simulation::Particle {
-        position: DVec3::ZERO,
-        velocity: DVec3::ZERO,
-        mass: 1.0,
-        color: [1.0, 1.0, 1.0, 1.0],
-    }];
+    let particles = vec![dual_spacetime_simulator::simulation::Particle::from_kinematics(
+        DVec3::ZERO,
+        DVec3::ZERO,
+        1.0,
+        [1.0, 1.0, 1.0, 1.0],
+    )];
     let snapshot = ParticleSnapshot::new(SimulationType::Normal, 1e10, particles);
     let json = serde_json::to_string_pretty(&snapshot).unwrap();
 

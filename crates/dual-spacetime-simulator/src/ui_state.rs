@@ -240,6 +240,11 @@ impl SimulationType {
     pub fn uses_rapidity_particles(self) -> bool {
         matches!(self, Self::LorentzTransformation)
     }
+
+    /// Whether generated particles need momentum conversion before simulation.
+    pub fn uses_momentum_particles(self) -> bool {
+        matches!(self, Self::SpeedOfLightLimit)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]

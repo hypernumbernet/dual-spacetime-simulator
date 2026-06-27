@@ -971,7 +971,11 @@ impl ApplicationHandler for App {
                 self.render_pipeline.as_mut(),
                 self.simulation_manager.try_read(),
             ) {
-                pipeline.upload_particles(&manager.particles());
+                let simulation_type = {
+                    let uis = self.ui_state.read().unwrap();
+                    uis.active_simulation_type()
+                };
+                pipeline.upload_particles(&manager.particles(), simulation_type);
             }
         }
 
@@ -979,9 +983,16 @@ impl ApplicationHandler for App {
         // reading back current GPU state before re-uploading the combined buffer.
         // Cleared only after a successful upload to avoid dropping the request.
         if self.gpu_particle_sync.append_pending() {
-            let particles = self.simulation_manager.read().unwrap().particles();
+            let (particles, simulation_type, scale) = {
+                let uis = self.ui_state.read().unwrap();
+                (
+                    self.simulation_manager.read().unwrap().particles(),
+                    uis.active_simulation_type(),
+                    uis.scale,
+                )
+            };
             if let Some(pipeline) = self.render_pipeline.as_mut() {
-                pipeline.add_particles_preserving_simulated(&particles);
+                pipeline.add_particles_preserving_simulated(&particles, simulation_type, scale);
             }
             self.gpu_particle_sync.clear_append_pending();
         }
@@ -1002,7 +1013,11 @@ impl ApplicationHandler for App {
         if let Ok(manager) = self.simulation_manager.try_read() {
             self.need_redraw.write().unwrap().clone_from(&false);
             if let Some(pipeline) = self.render_pipeline.as_mut() {
-                pipeline.upload_particles(&manager.particles());
+                let simulation_type = {
+                    let uis = self.ui_state.read().unwrap();
+                    uis.active_simulation_type()
+                };
+                pipeline.upload_particles(&manager.particles(), simulation_type);
             }
         }
     }
@@ -1149,13 +1164,18 @@ impl App {
             return;
         }
 
-        let (uses_gpu, scale_gauge) = {
+        let (uses_gpu, scale_gauge, simulation_type, scale) = {
             let uis = self.ui_state.read().unwrap();
-            (uis.uses_gpu_simulation(), uis.scale_gauge)
+            (
+                uis.uses_gpu_simulation(),
+                uis.scale_gauge,
+                uis.active_simulation_type(),
+                uis.scale,
+            )
         };
 
         let particles = if uses_gpu {
-            pipeline.readback_particles()
+            pipeline.readback_particles(simulation_type, scale)
         } else {
             self.simulation_manager.read().unwrap().particles()
         };

@@ -57,12 +57,12 @@ fn elliptical_two_body_energy_approximately_conserved_short_run() {
 #[test]
 fn convert_to_lorentz_finite() {
     // `rapidity_vector` uses `(|v|^2 * scale / c).atanh()` — keep |v|^2 * scale / c < 1.
-    let p = Particle {
-        position: DVec3::new(1.0, 0.0, 0.0),
-        velocity: DVec3::new(10.0, -20.0, 5.0),
-        mass: 1e24,
-        color: [1.0, 1.0, 1.0, 1.0],
-    };
+    let p = Particle::from_kinematics(
+        DVec3::new(1.0, 0.0, 0.0),
+        DVec3::new(10.0, -20.0, 5.0),
+        1e24,
+        [1.0, 1.0, 1.0, 1.0],
+    );
     let scale = 1e3;
     let out = SimulationManager::convert_to_lorentz(vec![p], scale);
     assert!(out[0].velocity.x.is_finite());
@@ -88,7 +88,41 @@ fn speed_of_light_limit_advance_stays_finite() {
     for p in mgr.particles() {
         assert!(p.position.x.is_finite());
         assert!(p.velocity.length_squared().is_finite());
+        assert!(p.momentum.length_squared().is_finite());
     }
+}
+
+#[test]
+fn speed_of_light_limit_huge_momentum_stays_finite() {
+    let scale = 1e10;
+    let mut particle = SimulationManager::convert_to_momentum(
+        vec![Particle::from_kinematics(
+            DVec3::ZERO,
+            DVec3::new(0.01, 0.0, 0.0),
+            1e24,
+            [1.0, 1.0, 1.0, 1.0],
+        )],
+        scale,
+    )[0];
+    particle.momentum = DVec3::new(1e30, 0.0, 0.0);
+    let state = dual_spacetime_simulator::simulation::SimulationState::SpeedOfLightLimit(
+        dual_spacetime_simulator::simulation::SimulationSpeedOfLightLimit {
+            particles: vec![particle],
+            scale,
+        },
+    );
+    let mgr = SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(state)),
+    };
+    for _ in 0..10 {
+        mgr.advance(1e3);
+    }
+    let p = &mgr.particles()[0];
+    assert!(p.position.is_finite());
+    assert!(p.velocity.is_finite());
+    assert!(p.momentum.is_finite());
+    let ls = dual_spacetime_simulator::simulation::LIGHT_SPEED / scale;
+    assert!(p.velocity.length() <= ls * 1.0001);
 }
 
 #[test]

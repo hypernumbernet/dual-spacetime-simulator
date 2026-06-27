@@ -1,6 +1,7 @@
 use crate::simulation::{EPSILON, G, LIGHT_SPEED, Particle};
 use crate::ui_state::SimulationType;
 use ash::vk;
+use dst_math::spacetime::velocity_from_momentum;
 use glam::DVec3;
 use gpu_allocator::vulkan::Allocator;
 use std::sync::{Arc, Mutex};
@@ -23,7 +24,12 @@ pub struct GpuParticle {
 const _: () = assert!(std::mem::size_of::<GpuParticle>() == 64);
 
 impl GpuParticle {
-    pub fn from_cpu(particle: &Particle) -> Self {
+    pub fn from_cpu(particle: &Particle, simulation_type: SimulationType) -> Self {
+        let kinematic = if simulation_type.uses_momentum_particles() {
+            particle.momentum
+        } else {
+            particle.velocity
+        };
         Self {
             position: [
                 particle.position.x as f32,
@@ -32,9 +38,9 @@ impl GpuParticle {
                 0.0,
             ],
             velocity: [
-                particle.velocity.x as f32,
-                particle.velocity.y as f32,
-                particle.velocity.z as f32,
+                kinematic.x as f32,
+                kinematic.y as f32,
+                kinematic.z as f32,
                 0.0,
             ],
             attrs: [particle.mass as f32, 0.0, 0.0, 0.0],
@@ -51,19 +57,35 @@ impl GpuParticle {
         }
     }
 
-    pub fn to_cpu(self) -> Particle {
+    pub fn to_cpu(self, simulation_type: SimulationType, scale: f64) -> Particle {
+        let mass = self.attrs[0] as f64;
+        let momentum = if simulation_type.uses_momentum_particles() {
+            DVec3::new(
+                self.velocity[0] as f64,
+                self.velocity[1] as f64,
+                self.velocity[2] as f64,
+            )
+        } else {
+            DVec3::ZERO
+        };
+        let velocity = if simulation_type.uses_momentum_particles() {
+            velocity_from_momentum(momentum, mass, LIGHT_SPEED / scale)
+        } else {
+            DVec3::new(
+                self.velocity[0] as f64,
+                self.velocity[1] as f64,
+                self.velocity[2] as f64,
+            )
+        };
         Particle {
             position: DVec3::new(
                 self.position[0] as f64,
                 self.position[1] as f64,
                 self.position[2] as f64,
             ),
-            velocity: DVec3::new(
-                self.velocity[0] as f64,
-                self.velocity[1] as f64,
-                self.velocity[2] as f64,
-            ),
-            mass: self.attrs[0] as f64,
+            velocity,
+            momentum,
+            mass,
             color: self.color,
         }
     }
@@ -133,7 +155,7 @@ impl GpuParticleSimulation {
             buffer_capacity,
         };
         if !particles.is_empty() {
-            sim.write_cpu_particles(particles);
+            sim.write_cpu_particles(particles, SimulationType::Normal);
         }
         sim
     }
@@ -147,13 +169,17 @@ impl GpuParticleSimulation {
     }
 
     /// Uploads CPU simulation particles into the mapped SSBO.
-    pub fn upload_from_cpu(&mut self, particles: &[Particle]) {
+    pub fn upload_from_cpu(
+        &mut self,
+        particles: &[Particle],
+        simulation_type: SimulationType,
+    ) {
         self.particle_count = particles.len() as u32;
         if particles.is_empty() {
             return;
         }
         self.ensure_buffer_capacity(particles.len());
-        self.write_cpu_particles(particles);
+        self.write_cpu_particles(particles, simulation_type);
     }
 
     /// Removes the particle at `index` in the mapped SSBO without a CPU roundtrip.
@@ -250,16 +276,26 @@ impl GpuParticleSimulation {
     }
 
     /// Copies GPU particle data back to CPU for snapshot export.
-    pub fn readback_to_cpu(&self) -> Vec<Particle> {
-        read_mapped_particles(&self.particle_buffer, self.particle_count as usize)
+    pub fn readback_to_cpu(&self, simulation_type: SimulationType, scale: f64) -> Vec<Particle> {
+        read_mapped_particles(
+            &self.particle_buffer,
+            self.particle_count as usize,
+            simulation_type,
+            scale,
+        )
     }
 
     /// Reads one particle from the host-mapped SSBO without copying the full buffer.
-    pub fn read_particle_at(&self, index: usize) -> Option<Particle> {
+    pub fn read_particle_at(
+        &self,
+        index: usize,
+        simulation_type: SimulationType,
+        scale: f64,
+    ) -> Option<Particle> {
         if index >= self.particle_count as usize {
             return None;
         }
-        read_mapped_particle_at(&self.particle_buffer, index)
+        read_mapped_particle_at(&self.particle_buffer, index, simulation_type, scale)
     }
 
     fn ensure_buffer_capacity(&mut self, count: usize) {
@@ -282,12 +318,12 @@ impl GpuParticleSimulation {
         );
     }
 
-    fn write_cpu_particles(&self, particles: &[Particle]) {
+    fn write_cpu_particles(&self, particles: &[Particle], simulation_type: SimulationType) {
         let Some(dst) = mapped_particle_slice_mut(&self.particle_buffer, particles.len()) else {
             return;
         };
         for (slot, particle) in dst.iter_mut().zip(particles) {
-            *slot = GpuParticle::from_cpu(particle);
+            *slot = GpuParticle::from_cpu(particle, simulation_type);
         }
     }
 
@@ -360,14 +396,24 @@ fn mapped_particle_slice_mut(buffer: &AllocatedBuffer, count: usize) -> Option<&
     Some(unsafe { std::slice::from_raw_parts_mut(mapped.as_ptr() as *mut GpuParticle, count) })
 }
 
-fn read_mapped_particle_at(buffer: &AllocatedBuffer, index: usize) -> Option<Particle> {
+fn read_mapped_particle_at(
+    buffer: &AllocatedBuffer,
+    index: usize,
+    simulation_type: SimulationType,
+    scale: f64,
+) -> Option<Particle> {
     let alloc = buffer.allocation.as_ref()?;
     let mapped = alloc.mapped_ptr()?;
     let gpu_particle = unsafe { *(mapped.as_ptr() as *const GpuParticle).add(index) };
-    Some(gpu_particle.to_cpu())
+    Some(gpu_particle.to_cpu(simulation_type, scale))
 }
 
-fn read_mapped_particles(buffer: &AllocatedBuffer, count: usize) -> Vec<Particle> {
+fn read_mapped_particles(
+    buffer: &AllocatedBuffer,
+    count: usize,
+    simulation_type: SimulationType,
+    scale: f64,
+) -> Vec<Particle> {
     if count == 0 {
         return Vec::new();
     }
@@ -382,7 +428,7 @@ fn read_mapped_particles(buffer: &AllocatedBuffer, count: usize) -> Vec<Particle
     gpu_particles
         .iter()
         .copied()
-        .map(GpuParticle::to_cpu)
+        .map(|gpu| gpu.to_cpu(simulation_type, scale))
         .collect()
 }
 

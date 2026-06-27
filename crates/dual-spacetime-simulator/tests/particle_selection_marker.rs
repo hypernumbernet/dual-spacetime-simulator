@@ -16,12 +16,7 @@ fn test_mvp(aspect_ratio: f32, scale_factor: f32) -> Mat4 {
 }
 
 fn origin_particle() -> Particle {
-    Particle {
-        position: DVec3::ZERO,
-        velocity: DVec3::ZERO,
-        mass: 1.0,
-        color: [1.0, 1.0, 1.0, 1.0],
-    }
+    Particle::from_kinematics(DVec3::ZERO, DVec3::ZERO, 1.0, [1.0, 1.0, 1.0, 1.0])
 }
 
 #[test]

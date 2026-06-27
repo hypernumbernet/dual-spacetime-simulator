@@ -6,7 +6,10 @@ use std::sync::{Arc, RwLock};
 use crate::object_input::ObjectInput;
 use crate::particle_snapshot::ParticleSnapshot;
 use crate::ui_state::SimulationType;
-use dst_math::spacetime::{Spacetime, rapidity_from_momentum};
+use dst_math::spacetime::{
+    Spacetime, momentum_from_velocity, position_delta_from_momentum, rapidity_from_momentum,
+    velocity_from_momentum,
+};
 
 pub const LIGHT_SPEED: f64 = 299_792_458.0; // Speed of light in meters per second
 pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
@@ -55,8 +58,28 @@ pub enum SimulationState {
 pub struct Particle {
     pub position: DVec3,
     pub velocity: DVec3,
+    #[serde(default)]
+    pub momentum: DVec3,
     pub mass: f64,
     pub color: [f32; 4],
+}
+
+impl Particle {
+    /// Creates a particle with zero momentum (momentum-based simulators fill this on reset).
+    pub fn from_kinematics(
+        position: DVec3,
+        velocity: DVec3,
+        mass: f64,
+        color: [f32; 4],
+    ) -> Self {
+        Self {
+            position,
+            velocity,
+            momentum: DVec3::ZERO,
+            mass,
+            color,
+        }
+    }
 }
 
 impl SimulationEngine for SimulationNormal {
@@ -95,7 +118,7 @@ impl SimulationEngine for SimulationNormal {
 }
 
 impl SimulationEngine for SimulationSpeedOfLightLimit {
-    /// Applies Newtonian gravity to update velocities before relativistic position correction.
+    /// Applies Lorentz-type gravity to update momentum before position integration.
     fn update_velocities(&mut self, delta_seconds: f64) {
         let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
@@ -104,7 +127,8 @@ impl SimulationEngine for SimulationSpeedOfLightLimit {
             .par_iter_mut()
             .enumerate()
             .for_each(|(i, particle)| {
-                let mut acceleration = DVec3::ZERO;
+                let mass_i = particle.mass;
+                let mut impulse = DVec3::ZERO;
                 for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
                     if i == j {
                         continue;
@@ -114,20 +138,28 @@ impl SimulationEngine for SimulationSpeedOfLightLimit {
                     if r_squared < EPSILON {
                         continue;
                     }
-                    let accel_magnitude = time_g * mass_j / r_squared;
-                    acceleration += accel_magnitude * diff.normalize();
+                    let force = time_g * mass_i * mass_j / r_squared;
+                    impulse += force * diff.normalize();
                 }
-                particle.velocity += acceleration;
+                particle.momentum += impulse;
+                let ls = LIGHT_SPEED / self.scale;
+                particle.velocity =
+                    velocity_from_momentum(particle.momentum, particle.mass, ls);
             });
     }
 
-    /// Advances positions with a gamma-based speed limit correction.
+    /// Advances positions using momentum-based relativistic kinematics.
     fn advance_time(&mut self, delta_seconds: f64) {
-        let lss = LIGHT_SPEED_SQUARED / (self.scale * self.scale);
+        let ls = LIGHT_SPEED / self.scale;
         self.particles.par_iter_mut().for_each(|particle| {
-            let speed_squared = particle.velocity.length_squared();
-            let gamma_inv = (1.0 - speed_squared / lss).sqrt();
-            particle.position += particle.velocity * gamma_inv * delta_seconds;
+            particle.position += position_delta_from_momentum(
+                particle.momentum,
+                particle.mass,
+                ls,
+                delta_seconds,
+            );
+            particle.velocity =
+                velocity_from_momentum(particle.momentum, particle.mass, ls);
         });
     }
 }
@@ -290,6 +322,8 @@ impl SimulationManager {
         let normal = object_input.generate_particles(particle_count);
         let particles = if simulation_type.uses_rapidity_particles() {
             Self::convert_to_lorentz(normal.particles, scale)
+        } else if simulation_type.uses_momentum_particles() {
+            Self::convert_to_momentum(normal.particles, scale)
         } else {
             normal.particles
         };
@@ -326,8 +360,31 @@ impl SimulationManager {
             .map(|p| Particle {
                 position: p.position,
                 velocity: dst_math::spacetime::rapidity_vector(p.velocity, ls),
+                momentum: p.momentum,
                 mass: p.mass,
                 color: p.color,
+            })
+            .collect()
+    }
+
+    /// Converts particle velocities into momentum representation for SpeedOfLightLimit mode.
+    pub fn convert_to_momentum(particles: Vec<Particle>, scale: f64) -> Vec<Particle> {
+        let ls = LIGHT_SPEED / scale;
+        particles
+            .into_iter()
+            .map(|p| {
+                let momentum = if p.momentum == DVec3::ZERO {
+                    momentum_from_velocity(p.velocity, p.mass, ls)
+                } else {
+                    p.momentum
+                };
+                Particle {
+                    position: p.position,
+                    velocity: velocity_from_momentum(momentum, p.mass, ls),
+                    momentum,
+                    mass: p.mass,
+                    color: p.color,
+                }
             })
             .collect()
     }
@@ -355,6 +412,8 @@ impl SimulationManager {
     ) {
         let particles = if simulation_type.uses_rapidity_particles() {
             Self::convert_to_lorentz(particles, scale)
+        } else if simulation_type.uses_momentum_particles() {
+            Self::convert_to_momentum(particles, scale)
         } else {
             particles
         };
@@ -389,9 +448,16 @@ impl SimulationManager {
 
     /// Replaces current simulation state with particles from a saved snapshot.
     pub fn load_from_snapshot(&self, snapshot: ParticleSnapshot) {
+        let particles = if snapshot.simulation_type.uses_rapidity_particles() {
+            Self::convert_to_lorentz(snapshot.particles, snapshot.scale)
+        } else if snapshot.simulation_type.uses_momentum_particles() {
+            Self::convert_to_momentum(snapshot.particles, snapshot.scale)
+        } else {
+            snapshot.particles
+        };
         *self.state.write().unwrap() = Self::state_from_particles(
             snapshot.simulation_type,
-            snapshot.particles,
+            particles,
             snapshot.scale,
         );
     }
@@ -412,6 +478,8 @@ impl SimulationManager {
             .particles;
         if simulation_type.uses_rapidity_particles() {
             new_particles = Self::convert_to_lorentz(new_particles, scale);
+        } else if simulation_type.uses_momentum_particles() {
+            new_particles = Self::convert_to_momentum(new_particles, scale);
         }
 
         let mut state_guard = self.state.write().unwrap();

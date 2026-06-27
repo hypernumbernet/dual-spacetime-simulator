@@ -300,10 +300,10 @@ pub fn build_solar_system_particles(
                     y: velocity.y(),
                     z: velocity.z(),
                 };
-                particles.push(Particle {
-                    position: pos_dvec3 * correct.m,
-                    velocity: vel_dvec3 * correct.m,
-                    mass: match body {
+                particles.push(Particle::from_kinematics(
+                    pos_dvec3 * correct.m,
+                    vel_dvec3 * correct.m,
+                    match body {
                         SolarSystem::Mercury => MASS_MERCURY * correct.kg,
                         SolarSystem::Venus => MASS_VENUS * correct.kg,
                         SolarSystem::EMB => MASS_EARTH * correct.kg,
@@ -316,7 +316,7 @@ pub fn build_solar_system_particles(
                         SolarSystem::Sun => MASS_SUN * correct.kg,
                         _ => 1.0 * correct.kg,
                     },
-                    color: match body {
+                    match body {
                         SolarSystem::Mercury => [0.5, 0.5, 0.5, 1.0],
                         SolarSystem::Venus => [1.0, 0.8, 0.2, 1.0],
                         SolarSystem::EMB => [0.2, 0.5, 1.0, 1.0],
@@ -329,7 +329,7 @@ pub fn build_solar_system_particles(
                         SolarSystem::Sun => [1.0, 1.0, 0.0, 1.0],
                         _ => [1.0, 1.0, 1.0, 1.0],
                     },
-                });
+                ));
             }
             Err(e) => {
                 log(&format!("Error for {:?}: {}", body, e));
@@ -342,81 +342,40 @@ pub fn build_solar_system_particles(
 /// Provides a small deterministic solar-system particle set when ephemeris data is unavailable.
 fn get_solar_system_fallback_particles(correct: &Correct) -> Vec<Particle> {
     vec![
-        // Sun
-        Particle {
-            position: DVec3 {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            },
-            velocity: DVec3 {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            },
-            mass: MASS_SUN * correct.kg,
-            color: [1.0, 1.0, 0.0, 1.0], // Yellow
-        },
+        Particle::from_kinematics(
+            DVec3::ZERO,
+            DVec3::ZERO,
+            MASS_SUN * correct.kg,
+            [1.0, 1.0, 0.0, 1.0], // Yellow
+        ),
         // Earth
-        Particle {
-            position: DVec3 {
-                x: 1.496e11 * correct.m,
-                y: 0.0,
-                z: 0.0,
-            },
-            velocity: DVec3 {
-                x: 0.0,
-                y: 0.0,
-                z: 29780.0 * correct.m,
-            },
-            mass: MASS_EARTH * correct.kg,
-            color: [0.2, 0.5, 1.0, 1.0], // Blue
-        },
+        Particle::from_kinematics(
+            DVec3::new(1.496e11 * correct.m, 0.0, 0.0),
+            DVec3::new(0.0, 0.0, 29780.0 * correct.m),
+            MASS_EARTH * correct.kg,
+            [0.2, 0.5, 1.0, 1.0], // Blue
+        ),
         // Mars
-        Particle {
-            position: DVec3 {
-                x: 2.279e11 * correct.m,
-                y: 0.0,
-                z: 0.0,
-            },
-            velocity: DVec3 {
-                x: 0.0,
-                y: 0.0,
-                z: 24070.0 * correct.m,
-            },
-            mass: MASS_MARS * correct.kg,
-            color: [1.0, 0.3, 0.2, 1.0], // Reddish color
-        },
+        Particle::from_kinematics(
+            DVec3::new(2.279e11 * correct.m, 0.0, 0.0),
+            DVec3::new(0.0, 0.0, 24070.0 * correct.m),
+            MASS_MARS * correct.kg,
+            [1.0, 0.3, 0.2, 1.0], // Reddish color
+        ),
         // Venus
-        Particle {
-            position: DVec3 {
-                x: 1.082e11 * correct.m,
-                y: 0.0,
-                z: 0.0,
-            },
-            velocity: DVec3 {
-                x: 0.0,
-                y: 0.0,
-                z: 35020.0 * correct.m,
-            },
-            mass: MASS_VENUS * correct.kg,
-            color: [1.0, 0.8, 0.2, 1.0], // Yellowish color
-        },
+        Particle::from_kinematics(
+            DVec3::new(1.082e11 * correct.m, 0.0, 0.0),
+            DVec3::new(0.0, 0.0, 35020.0 * correct.m),
+            MASS_VENUS * correct.kg,
+            [1.0, 0.8, 0.2, 1.0], // Yellowish color
+        ),
         // Mercury
-        Particle {
-            position: DVec3 {
-                x: 5.791e10 * correct.m,
-                y: 0.0,
-                z: 0.0,
-            },
-            velocity: DVec3 {
-                x: 0.0,
-                y: 0.0,
-                z: 47360.0 * correct.m,
-            },
-            mass: MASS_MERCURY * correct.kg,
-            color: [0.5, 0.5, 0.5, 1.0], // Grayish color
-        },
+        Particle::from_kinematics(
+            DVec3::new(5.791e10 * correct.m, 0.0, 0.0),
+            DVec3::new(0.0, 0.0, 47360.0 * correct.m),
+            MASS_MERCURY * correct.kg,
+            [0.5, 0.5, 0.5, 1.0], // Grayish color
+        ),
     ]
 }
 
@@ -544,12 +503,7 @@ impl ObjectInput {
                         };
                         let mass = rng.random_range(mass_lower..mass_upper);
                         let color = Self::basic_particle_color(i);
-                        Particle {
-                            position: pos,
-                            velocity: vel,
-                            mass,
-                            color,
-                        }
+                        Particle::from_kinematics(pos, vel, mass, color)
                     })
                     .collect();
                 SimulationNormal { particles }
@@ -583,12 +537,7 @@ impl ObjectInput {
                         };
                         let mass = rng.random_range(mass_lower..mass_upper);
                         let color = Self::basic_particle_color(i);
-                        Particle {
-                            position: pos,
-                            velocity: vel,
-                            mass,
-                            color,
-                        }
+                        Particle::from_kinematics(pos, vel, mass, color)
                     })
                     .collect();
                 SimulationNormal { particles }
@@ -624,12 +573,7 @@ impl ObjectInput {
                             z: theta.cos() * speed_rate,
                         };
                         let color = Self::basic_particle_color(i);
-                        Particle {
-                            position: pos,
-                            velocity: vel,
-                            mass,
-                            color,
-                        }
+                        Particle::from_kinematics(pos, vel, mass, color)
                     })
                     .collect();
                 SimulationNormal { particles }
@@ -670,12 +614,12 @@ impl ObjectInput {
                 let mass_max = 1000.0 * correct.kg;
 
                 let mut particles = Vec::with_capacity(1 + *satellite_count as usize);
-                particles.push(Particle {
-                    position: DVec3::ZERO,
-                    velocity: DVec3::ZERO,
-                    mass: earth_mass,
-                    color: [0.2, 0.5, 1.0, 1.0], // Blue
-                });
+                particles.push(Particle::from_kinematics(
+                    DVec3::ZERO,
+                    DVec3::ZERO,
+                    earth_mass,
+                    [0.2, 0.5, 1.0, 1.0], // Blue
+                ));
                 for _ in 0..*satellite_count {
                     let orbit_radius =
                         (EARTH_RADIUS + rng.random_range(alt_min..alt_max)) * radius_scale;
@@ -688,12 +632,12 @@ impl ObjectInput {
                         z: orbit_radius * cos_theta,
                     };
                     let vel_speed = (gm_earth / orbit_radius).sqrt();
-                    particles.push(Particle {
-                        position: pos,
-                        velocity: Self::random_perpendicular_unit_vector(pos, &mut rng) * vel_speed,
-                        mass: rng.random_range(mass_min..mass_max),
-                        color: [1.0, 1.0, 1.0, 1.0],
-                    });
+                    particles.push(Particle::from_kinematics(
+                        pos,
+                        Self::random_perpendicular_unit_vector(pos, &mut rng) * vel_speed,
+                        rng.random_range(mass_min..mass_max),
+                        [1.0, 1.0, 1.0, 1.0],
+                    ));
                 }
                 SimulationNormal { particles }
             }
@@ -710,28 +654,18 @@ impl ObjectInput {
                 let planetary_distance = *planetary_distance * correct.m;
                 let planetary_speed = *planetary_speed * correct.m;
                 let particles = vec![
-                    // Central Body
-                    Particle {
-                        position: DVec3::ZERO,
-                        velocity: DVec3::ZERO,
-                        mass: central_mass,
-                        color: [1.0, 1.0, 0.0, 1.0], // Yellow
-                    },
-                    // Orbiting Body
-                    Particle {
-                        position: DVec3 {
-                            x: planetary_distance,
-                            y: 0.0,
-                            z: 0.0,
-                        },
-                        velocity: DVec3 {
-                            x: 0.0,
-                            y: 0.0,
-                            z: planetary_speed,
-                        },
-                        mass: planetary_mass,
-                        color: [0.2, 0.5, 1.0, 1.0], // Blue
-                    },
+                    Particle::from_kinematics(
+                        DVec3::ZERO,
+                        DVec3::ZERO,
+                        central_mass,
+                        [1.0, 1.0, 0.0, 1.0], // Yellow
+                    ),
+                    Particle::from_kinematics(
+                        DVec3::new(planetary_distance, 0.0, 0.0),
+                        DVec3::new(0.0, 0.0, planetary_speed),
+                        planetary_mass,
+                        [0.2, 0.5, 1.0, 1.0], // Blue
+                    ),
                 ];
                 SimulationNormal { particles }
             }
@@ -743,12 +677,12 @@ impl ObjectInput {
                 color,
             } => {
                 let correct = Correct::new(*scale);
-                let particles = vec![Particle {
-                    position: *position * correct.m,
-                    velocity: *velocity * correct.m,
-                    mass: *mass * correct.kg,
-                    color: color.rgba(),
-                }];
+                let particles = vec![Particle::from_kinematics(
+                    *position * correct.m,
+                    *velocity * correct.m,
+                    *mass * correct.kg,
+                    color.rgba(),
+                )];
                 SimulationNormal { particles }
             }
         };

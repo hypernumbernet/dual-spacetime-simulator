@@ -41,6 +41,25 @@ vec3 rapidity_from_momentum(vec3 momentum, float mass, float c) {
     return (a / pr) * momentum;
 }
 
+// v = p / sqrt(m^2 + |p|^2 / c^2)
+vec3 velocity_from_momentum(vec3 momentum, float mass, float c) {
+    float pn = dot(momentum, momentum);
+    if (pn == 0.0) {
+        return vec3(0.0);
+    }
+    return momentum / sqrt(mass * mass + pn / (c * c));
+}
+
+// position delta = p * m / (m^2 + |p|^2 / c^2) * dt
+vec3 position_delta_from_momentum(vec3 momentum, float mass, float c, float dt) {
+    float pn = dot(momentum, momentum);
+    if (pn == 0.0) {
+        return vec3(0.0);
+    }
+    float denom = mass * mass + pn / (c * c);
+    return momentum * (mass * dt / denom);
+}
+
 // Applies apply_lorentz_transform_by_rapidity to Spacetime::from_t(ct) and
 // returns the resulting spatial displacement (st.xyz * tau). Mirrors the CPU
 // length_squared() convention used in dst-math.
@@ -77,9 +96,9 @@ void main() {
             float ct = pc.delta_seconds * pc.light_speed_per_scale;
             particles[i].position.xyz += lorentz_position_delta(vel, ct);
         } else if (pc.sim_type == SIM_SPEED_OF_LIGHT_LIMIT) {
-            float lss = pc.light_speed_per_scale * pc.light_speed_per_scale;
-            float gamma_inv = sqrt(1.0 - dot(vel, vel) / lss);
-            particles[i].position.xyz += vel * gamma_inv * pc.delta_seconds;
+            float mass_i = particles[i].attrs.x;
+            particles[i].position.xyz += position_delta_from_momentum(
+                vel, mass_i, pc.light_speed_per_scale, pc.delta_seconds);
         } else {
             particles[i].position.xyz += vel * pc.delta_seconds;
         }
@@ -102,6 +121,9 @@ void main() {
             float force = pc.gravity_dt * mass_i * particles[j].attrs.x / r_squared;
             vec3 momentum = force * normalize(diff);
             acceleration += rapidity_from_momentum(momentum, mass_i, pc.light_speed_per_scale);
+        } else if (pc.sim_type == SIM_SPEED_OF_LIGHT_LIMIT) {
+            float force = pc.gravity_dt * mass_i * particles[j].attrs.x / r_squared;
+            acceleration += force * normalize(diff);
         } else {
             float accel_magnitude = pc.gravity_dt * particles[j].attrs.x / r_squared;
             acceleration += accel_magnitude * normalize(diff);

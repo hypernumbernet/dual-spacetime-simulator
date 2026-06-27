@@ -373,7 +373,9 @@ pub(crate) fn resolve_selected_particle_live(
     }
 
     let particle = if uis.uses_gpu_simulation() {
-        match render_pipeline.and_then(|pipeline| pipeline.read_particle_at(index)) {
+        match render_pipeline.and_then(|pipeline| {
+            pipeline.read_particle_at(index, uis.active_simulation_type(), uis.scale)
+        }) {
             Some(particle) => particle,
             None => {
                 uis.clear_selected_particle();
@@ -434,6 +436,7 @@ fn particle_info_window(ctx: &egui::Context, uis: &mut UiState, selection: Optio
         SimulationType::LorentzTransformation => "|η|",
         _ => "Speed |v|",
     };
+    let show_momentum = simulation_type == SimulationType::SpeedOfLightLimit;
 
     let position = particle.position;
     let velocity = particle.velocity;
@@ -492,6 +495,27 @@ fn particle_info_window(ctx: &egui::Context, uis: &mut UiState, selection: Optio
                 label_normal(ui, magnitude_label);
                 label_indicator(ui, &format_particle_info_value(speed));
             });
+            if show_momentum {
+                let momentum = particle.momentum;
+                ui.separator();
+                label_normal(ui, "Momentum (Base Scale Units·kg/s)");
+                ui.horizontal(|ui| {
+                    label_normal(ui, "X");
+                    label_indicator(ui, &format_particle_info_value(momentum.x));
+                });
+                ui.horizontal(|ui| {
+                    label_normal(ui, "Y");
+                    label_indicator(ui, &format_particle_info_value(momentum.y));
+                });
+                ui.horizontal(|ui| {
+                    label_normal(ui, "Z");
+                    label_indicator(ui, &format_particle_info_value(momentum.z));
+                });
+                ui.horizontal(|ui| {
+                    label_normal(ui, "|p|");
+                    label_indicator(ui, &format_particle_info_value(momentum.length()));
+                });
+            }
             ui.separator();
             draw_particle_color_swatch(ui, color_rgba);
             ui.separator();
@@ -970,7 +994,7 @@ fn save_particles(
     let uis = ui_state.read().unwrap();
     let particles = if uis.uses_gpu_simulation() {
         render_pipeline
-            .map(crate::pipeline::ParticleRenderPipeline::readback_particles)
+            .map(|pipeline| pipeline.readback_particles(uis.active_simulation_type(), uis.scale))
             .unwrap_or_else(|| simulation_manager.read().unwrap().particles())
     } else {
         simulation_manager.read().unwrap().particles()
