@@ -2,11 +2,12 @@
 
 layout(local_size_x = 64) in;
 
-// std430: four vec4 members => 64 bytes, matching Rust GpuParticle exactly.
+// std430: five vec4 members => 80 bytes, matching Rust GpuParticle exactly.
 struct Particle {
     vec4 position;
     vec4 velocity;
     vec4 attrs;
+    vec4 dual_state;
     vec4 color;
 };
 
@@ -76,8 +77,50 @@ vec3 lorentz_position_delta(vec3 rapidity, float ct) {
     float r = dir.y * sh;
     float s = dir.z * sh;
     float t = (p * p + q * q + r * r + s * s) * ct;
-    vec3 xyz = 2.0 * ct * p * vec3(q, r, s);
+    vec3 xyz = 2.0 * ct * vec3(q, r, s);
     return xyz * (ct / t);
+}
+
+// Port of dst-math::gravity::usual_boost_from_sim_velocity.
+vec3 usual_boost_from_sim_velocity(vec3 velocity, float inverse_light_speed) {
+    float speed_sq = dot(velocity, velocity);
+    if (speed_sq == 0.0) {
+        return vec3(0.0);
+    }
+    float speed = sqrt(speed_sq);
+    float ratio = speed * inverse_light_speed;
+    const float MAX_RAPIDITY_RATIO = 0.9999999;
+    if (ratio >= MAX_RAPIDITY_RATIO) {
+        ratio = MAX_RAPIDITY_RATIO;
+    }
+    float rapidity = atanh(ratio);
+    return (rapidity / speed) * velocity;
+}
+
+float killing_scalar(vec3 usual_boost, vec3 dual_rotor) {
+    return 0.5 * (dot(usual_boost, usual_boost) - dot(dual_rotor, dual_rotor));
+}
+
+float strong_field_gate(float g, float r_soft) {
+    const float STRONG_FIELD_RADIUS = 1.0;
+    float field = g / (r_soft * r_soft);
+    float reference = g / (STRONG_FIELD_RADIUS * STRONG_FIELD_RADIUS);
+    float x = field / max(reference, 1e-30);
+    return (x * x) / (1.0 + x * x);
+}
+
+float signed_interaction_weight(float j_local, vec3 phi_i, vec3 phi_j, float g, float r_soft) {
+    vec3 d = phi_i - phi_j;
+    float geom = 1.0 + dot(d, d);
+    if (j_local >= 0.0) {
+        return geom;
+    }
+    return -geom * strong_field_gate(g, r_soft);
+}
+
+float kernel_value(float distance, float g, float eps) {
+    float r_soft = sqrt(distance * distance + eps * eps);
+    return g / r_soft;
 }
 
 void main() {
@@ -86,13 +129,11 @@ void main() {
         return;
     }
 
-    if (pc.sim_type == SIM_DST_GRAVITY) {
-        return;
-    }
-
     if (pc.phase == 0u) {
         vec3 vel = particles[i].velocity.xyz;
-        if (pc.sim_type == SIM_LORENTZ) {
+        if (pc.sim_type == SIM_DST_GRAVITY) {
+            particles[i].position.xyz += vel * pc.delta_seconds;
+        } else if (pc.sim_type == SIM_LORENTZ) {
             float ct = pc.delta_seconds * pc.light_speed_per_scale;
             particles[i].position.xyz += lorentz_position_delta(vel, ct);
         } else if (pc.sim_type == SIM_SPEED_OF_LIGHT_LIMIT) {
@@ -102,6 +143,67 @@ void main() {
         } else {
             particles[i].position.xyz += vel * pc.delta_seconds;
         }
+        return;
+    }
+
+    if (pc.sim_type == SIM_DST_GRAVITY) {
+        float inverse_light_speed = 1.0 / pc.light_speed_per_scale;
+        vec3 pos_i = particles[i].position.xyz;
+        vec3 vel_i = particles[i].velocity.xyz;
+        float mass_i = particles[i].attrs.x;
+        vec3 phi_i = particles[i].attrs.yzw;
+        vec3 phi_vel_i = particles[i].dual_state.xyz;
+        float proper_time_i = particles[i].dual_state.w;
+
+        vec3 theta_i = usual_boost_from_sim_velocity(vel_i, inverse_light_speed);
+        float j_i = killing_scalar(theta_i, phi_i);
+        vec3 delta_theta = phi_i - theta_i;
+        vec3 acceleration = vec3(0.0);
+        float g = pc.gravity_dt / pc.delta_seconds;
+        float omega = sqrt(g);
+        vec3 phi_accel = -g * delta_theta - 2.0 * omega * phi_vel_i;
+
+        for (uint j = 0u; j < pc.particle_count; ++j) {
+            if (i == j) {
+                continue;
+            }
+            vec3 diff = particles[j].position.xyz - pos_i;
+            float distance_sq = dot(diff, diff);
+            if (distance_sq < pc.epsilon) {
+                continue;
+            }
+            float distance = sqrt(distance_sq);
+            vec3 phi_j = particles[j].attrs.yzw;
+            float mass_j = particles[j].attrs.x;
+            float r_soft = sqrt(distance_sq + pc.epsilon * pc.epsilon);
+            float weight = signed_interaction_weight(j_i, phi_i, phi_j, g, r_soft);
+            acceleration += mass_j * weight * g / (r_soft * r_soft * r_soft) * diff;
+            float k = kernel_value(distance, g, pc.epsilon);
+            phi_accel += -2.0 * (mass_j / max(mass_i, pc.epsilon)) * k * (phi_i - phi_j);
+        }
+
+        particles[i].velocity.xyz += acceleration * pc.delta_seconds;
+        phi_vel_i += phi_accel * pc.delta_seconds;
+        phi_i += phi_vel_i * pc.delta_seconds;
+        proper_time_i += cos(0.5 * length(delta_theta)) * pc.delta_seconds;
+
+        vec3 theta = usual_boost_from_sim_velocity(particles[i].velocity.xyz, inverse_light_speed);
+        float j_after = killing_scalar(theta, phi_i);
+        float max_phi = (j_after < 0.0)
+            ? max(length(theta), 1e-8) * 100.0 + 10.0
+            : max(length(theta), 1e-8) * 8.0 + 0.1;
+        float phi_len = length(phi_i);
+        if (phi_len > max_phi) {
+            phi_i *= max_phi / phi_len;
+        }
+        float max_phi_vel = max_phi * 100.0;
+        float phi_vel_len = length(phi_vel_i);
+        if (phi_vel_len > max_phi_vel) {
+            phi_vel_i *= max_phi_vel / phi_vel_len;
+        }
+
+        particles[i].attrs.yzw = phi_i;
+        particles[i].dual_state = vec4(phi_vel_i, proper_time_i);
         return;
     }
 

@@ -227,3 +227,162 @@ fn advance_with_zero_particles_is_noop_for_all_simulation_types() {
         assert_eq!(mgr.particle_count(), 0);
     }
 }
+
+#[test]
+fn dst_gravity_two_body_short_run_stays_finite() {
+    let scale = 1e10;
+    let particles = SimulationManager::convert_to_dst_gravity(
+        vec![
+            Particle::from_kinematics(
+                DVec3::ZERO,
+                DVec3::ZERO,
+                1.0e3,
+                [1.0, 1.0, 1.0, 1.0],
+            ),
+            Particle::from_kinematics(
+                DVec3::new(1.0, 0.0, 0.0),
+                DVec3::new(0.0, 0.01, 0.0),
+                1.0e2,
+                [0.8, 0.8, 1.0, 1.0],
+            ),
+        ],
+        scale,
+    );
+    let mgr = SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(
+            dual_spacetime_simulator::simulation::SimulationState::DstGravity(
+                dual_spacetime_simulator::simulation::SimulationDstGravity {
+                    particles,
+                    scale,
+                },
+            ),
+        )),
+    };
+    for _ in 0..50 {
+        mgr.advance(1.0);
+    }
+    for p in mgr.particles() {
+        assert!(p.position.x.is_finite());
+        assert!(p.position.y.is_finite());
+        assert!(p.position.z.is_finite());
+        assert!(p.velocity.x.is_finite());
+        assert!(p.velocity.y.is_finite());
+        assert!(p.velocity.z.is_finite());
+        assert!(p.dual_rotor.x.is_finite());
+        assert!(p.dual_rotor.y.is_finite());
+        assert!(p.dual_rotor.z.is_finite());
+        assert!(p.proper_time.is_finite());
+    }
+}
+
+#[test]
+fn dst_gravity_elliptical_orbit_repro_divergence() {
+    let scale = 1.5e11;
+    let ic = ObjectInput::EllipticalOrbit {
+        scale,
+        central_mass: 1.989e32,
+        planetary_mass: 5.972e24,
+        planetary_speed: 2.0e5,
+        planetary_distance: 2.0e11,
+    };
+    let state = SimulationManager::create_simulation(ic, UiSimType::DstGravity, 2, scale);
+    let mgr = SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(state)),
+    };
+    for frame in 1..=25 {
+        mgr.advance(10.0);
+        let particles = mgr.particles();
+        for p in &particles {
+            assert!(p.position.x.is_finite(), "diverged frame {frame} pos={:?}", p.position);
+            assert!(p.position.length() < 1e6, "exploded frame {frame} pos_len={}", p.position.length());
+        }
+    }
+}
+
+#[test]
+fn dst_gravity_random_sphere_stays_finite_short_run() {
+    use dual_spacetime_simulator::simulation::DEFAULT_WORLD_SCALE;
+    let scale = DEFAULT_WORLD_SCALE;
+    let ic = ObjectInput::RandomSphere {
+        scale,
+        radius: 1e10,
+        mass_range: (1e29, 1e31),
+        velocity_std: 1e6,
+    };
+    let state = SimulationManager::create_simulation(ic, UiSimType::DstGravity, 32, scale);
+    let mgr = SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(state)),
+    };
+    for frame in 1..=25 {
+        mgr.advance(10.0);
+        for p in mgr.particles() {
+            assert!(p.position.x.is_finite(), "diverged frame {frame} pos={:?}", p.position);
+            assert!(
+                p.position.length() < 1e8,
+                "exploded frame {frame} pos_len={} phi={:?} phi_vel={:?}",
+                p.position.length(),
+                p.dual_rotor,
+                p.dual_rotor_vel
+            );
+        }
+    }
+}
+
+#[test]
+fn torsion_star_shell_expands_under_central_mass() {
+    let scale = 1e10;
+    let ic = ObjectInput::TorsionStar {
+        scale,
+        central_mass: 1.989e32,
+        shell_radius: 5.0e9,
+        shell_particle_count: 8,
+        shell_mass: 1.0e28,
+        shell_phi_magnitude: 1.0,
+    };
+    let state = SimulationManager::create_simulation(ic, UiSimType::DstGravity, 9, scale);
+    let mgr = SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(state)),
+    };
+    let r0 = {
+        let p = &mgr.particles()[1];
+        p.position.length()
+    };
+    for _ in 0..30 {
+        mgr.advance(100.0);
+    }
+    let r1 = {
+        let p = &mgr.particles()[1];
+        p.position.length()
+    };
+    assert!(
+        r1 > r0 * 1.05,
+        "repulsion shell should expand: r0={r0} r1={r1}"
+    );
+}
+
+#[test]
+fn dst_gravity_random_sphere_large_dt_stays_finite() {
+    use dual_spacetime_simulator::simulation::DEFAULT_WORLD_SCALE;
+    let scale = DEFAULT_WORLD_SCALE;
+    let ic = ObjectInput::RandomSphere {
+        scale,
+        radius: 1e10,
+        mass_range: (1e29, 1e31),
+        velocity_std: 1e6,
+    };
+    let state = SimulationManager::create_simulation(ic, UiSimType::DstGravity, 64, scale);
+    let mgr = SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(state)),
+    };
+    for frame in 1..=100 {
+        mgr.advance(10_000.0);
+        for p in mgr.particles() {
+            assert!(p.position.x.is_finite(), "diverged frame {frame} pos={:?}", p.position);
+            assert!(
+                p.position.length() < 1e12,
+                "exploded frame {frame} pos_len={}",
+                p.position.length()
+            );
+        }
+    }
+}

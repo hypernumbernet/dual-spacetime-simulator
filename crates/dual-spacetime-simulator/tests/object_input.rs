@@ -46,6 +46,7 @@ fn uses_add_particle_count_matches_generation_behavior() {
     ] {
         assert!(ty.uses_add_particle_count(), "{ty}");
     }
+    assert!(!ObjectInputType::TorsionStar.uses_add_particle_count());
     assert!(!ObjectInputType::EllipticalOrbit.uses_add_particle_count());
     assert!(!ObjectInputType::SingleParticle.uses_add_particle_count());
 }

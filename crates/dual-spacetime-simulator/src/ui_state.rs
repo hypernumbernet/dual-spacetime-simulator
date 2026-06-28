@@ -250,6 +250,11 @@ impl SimulationType {
     pub fn requires_subluminal_velocity(self) -> bool {
         !matches!(self, Self::Normal)
     }
+
+    /// Whether particles carry dual-rotor state for DST Gravity.
+    pub fn uses_dst_gravity_state(self) -> bool {
+        matches!(self, Self::DstGravity)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -423,6 +428,7 @@ pub struct UiState {
     pub solar_system: SolarSystemParameters,
     pub satellite_orbit: SatelliteOrbitParameters,
     pub elliptical_orbit: EllipticalOrbitParameters,
+    pub torsion_star: TorsionStarParameters,
     pub single_particle: SingleParticleParameters,
     pub is_simulation_panel_open: bool,
     pub is_object_input_panel_open: bool,
@@ -489,6 +495,7 @@ impl Default for UiState {
             solar_system: SolarSystemParameters::default(),
             satellite_orbit: SatelliteOrbitParameters::default(),
             elliptical_orbit: EllipticalOrbitParameters::default(),
+            torsion_star: TorsionStarParameters::default(),
             single_particle: SingleParticleParameters::default(),
             is_simulation_panel_open: true,
             is_object_input_panel_open: false,
@@ -875,6 +882,22 @@ impl UiState {
                     planetary_distance,
                 };
             }
+            ObjectInput::TorsionStar {
+                central_mass,
+                shell_radius,
+                shell_particle_count,
+                shell_mass,
+                shell_phi_magnitude,
+                ..
+            } => {
+                self.torsion_star = TorsionStarParameters {
+                    central_mass,
+                    shell_radius,
+                    shell_particle_count,
+                    shell_mass,
+                    shell_phi_magnitude,
+                };
+            }
             ObjectInput::SingleParticle {
                 mass,
                 position,
@@ -901,6 +924,7 @@ impl UiState {
             ObjectInputType::RandomCube => self.random_cube.to_object_input(scale),
             ObjectInputType::SpiralDisk => self.spiral_disk.to_object_input(scale),
             ObjectInputType::EllipticalOrbit => self.elliptical_orbit.to_object_input(scale),
+            ObjectInputType::TorsionStar => self.torsion_star.to_object_input(scale),
             ObjectInputType::SingleParticle => self.single_particle.to_object_input(scale),
         }
     }
@@ -1155,6 +1179,51 @@ impl Default for EllipticalOrbitParameters {
                 planetary_mass,
                 planetary_speed,
                 planetary_distance,
+            }
+        } else {
+            panic!();
+        }
+    }
+}
+
+pub struct TorsionStarParameters {
+    pub central_mass: f64,
+    pub shell_radius: f64,
+    pub shell_particle_count: u32,
+    pub shell_mass: f64,
+    pub shell_phi_magnitude: f64,
+}
+
+impl TorsionStarParameters {
+    pub fn to_object_input(&self, scale: f64) -> ObjectInput {
+        ObjectInput::TorsionStar {
+            scale,
+            central_mass: self.central_mass,
+            shell_radius: self.shell_radius,
+            shell_particle_count: self.shell_particle_count,
+            shell_mass: self.shell_mass,
+            shell_phi_magnitude: self.shell_phi_magnitude,
+        }
+    }
+}
+
+impl Default for TorsionStarParameters {
+    fn default() -> Self {
+        if let ObjectInput::TorsionStar {
+            central_mass,
+            shell_radius,
+            shell_particle_count,
+            shell_mass,
+            shell_phi_magnitude,
+            ..
+        } = ObjectInputType::TorsionStar.to_object_input(1e10)
+        {
+            Self {
+                central_mass,
+                shell_radius,
+                shell_particle_count,
+                shell_mass,
+                shell_phi_magnitude,
             }
         } else {
             panic!();

@@ -5,7 +5,7 @@ use glam::DVec3;
 
 #[test]
 fn gpu_particle_matches_std430_vec4_layout() {
-    assert_eq!(std::mem::size_of::<GpuParticle>(), 64);
+    assert_eq!(std::mem::size_of::<GpuParticle>(), 80);
 }
 
 #[test]
@@ -49,5 +49,29 @@ fn gpu_particle_from_display_sets_position_and_color_only() {
     assert_eq!(gpu.position[..3], [1.0, 2.0, 3.0]);
     assert_eq!(gpu.velocity, [0.0; 4]);
     assert_eq!(gpu.attrs, [0.0; 4]);
+    assert_eq!(gpu.dual_state, [0.0; 4]);
     assert_eq!(gpu.color, [0.2, 0.4, 0.6, 1.0]);
+}
+
+#[test]
+fn gpu_particle_dst_gravity_roundtrip_preserves_dual_state() {
+    let scale = 1e10;
+    let particle = dual_spacetime_simulator::simulation::SimulationManager::convert_to_dst_gravity(
+        vec![Particle::from_kinematics(
+            DVec3::new(1.0e6, 2.0e6, 3.0e6),
+            DVec3::new(0.01, -0.005, 0.002),
+            5.0e6,
+            [1.0, 0.5, 0.25, 1.0],
+        )],
+        scale,
+    )[0];
+    let gpu = GpuParticle::from_cpu(&particle, SimulationType::DstGravity);
+    let restored = gpu.to_cpu(SimulationType::DstGravity, scale);
+    assert!((particle.position - restored.position).length() < 1.0);
+    assert!((particle.velocity - restored.velocity).length() < 1e-3);
+    assert!((particle.dual_rotor - restored.dual_rotor).length() < 1e-6);
+    assert!((particle.dual_rotor_vel - restored.dual_rotor_vel).length() < 1e-9);
+    assert!((particle.proper_time - restored.proper_time).abs() < 1e-9);
+    assert!((particle.mass - restored.mass).abs() < 1e-3);
+    assert_eq!(particle.color, restored.color);
 }
