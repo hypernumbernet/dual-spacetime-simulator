@@ -1,10 +1,45 @@
 use dual_spacetime_simulator::object_input::ObjectInputType;
 use dual_spacetime_simulator::settings::AppSettings;
+use dual_spacetime_simulator::simulation::{LIGHT_SPEED, max_subluminal_speed_m_s};
 use dual_spacetime_simulator::ui_state::{
     ComputingUnit, DEFAULT_ADD_PARTICLE_COUNT, DEFAULT_MAX_FPS, DEFAULT_SATELLITE_COUNT,
     DEFAULT_SCALE_UI, DEFAULT_SKIP_DRAWING_FRAMES, ParticleDisplayMode, PlacementMode,
     SimulationType, UiState,
 };
+use glam::DVec3;
+
+#[test]
+fn clamp_velocity_inputs_noop_in_normal_mode() {
+    let mut ui = UiState::default();
+    ui.simulation_type = SimulationType::Normal;
+    ui.single_particle.velocity = DVec3::new(LIGHT_SPEED * 2.0, 0.0, 0.0);
+    ui.random_sphere.velocity_std = LIGHT_SPEED * 2.0;
+    ui.clamp_velocity_inputs();
+    assert_eq!(ui.single_particle.velocity.x, LIGHT_SPEED * 2.0);
+    assert_eq!(ui.random_sphere.velocity_std, LIGHT_SPEED * 2.0);
+}
+
+#[test]
+fn clamp_velocity_inputs_caps_superluminal_when_relativistic() {
+    let mut ui = UiState::default();
+    ui.simulation_type = SimulationType::LorentzTransformation;
+    ui.single_particle.velocity = DVec3::new(LIGHT_SPEED, 0.0, 0.0);
+    ui.random_sphere.velocity_std = LIGHT_SPEED;
+    ui.elliptical_orbit.planetary_speed = LIGHT_SPEED * 1.5;
+    ui.clamp_velocity_inputs();
+    assert_eq!(ui.single_particle.velocity.x, max_subluminal_speed_m_s());
+    assert_eq!(ui.random_sphere.velocity_std, max_subluminal_speed_m_s());
+    assert_eq!(ui.elliptical_orbit.planetary_speed, max_subluminal_speed_m_s());
+}
+
+#[test]
+fn simulation_type_change_clamps_existing_velocity_inputs() {
+    let mut ui = UiState::default();
+    ui.single_particle.velocity = DVec3::new(LIGHT_SPEED * 1.2, 0.0, 0.0);
+    ui.simulation_type = SimulationType::SpeedOfLightLimit;
+    ui.apply_simulation_type_change(SimulationType::Normal);
+    assert_eq!(ui.single_particle.velocity.x, max_subluminal_speed_m_s());
+}
 
 #[test]
 fn particle_display_mode_size_scale_factor() {

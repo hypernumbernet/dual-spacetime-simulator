@@ -17,9 +17,54 @@ pub const LY: f64 = LIGHT_SPEED * 365.25 * 86_400.0; // Julian light year in met
 pub const PC: f64 = AU * 648_000.0 / std::f64::consts::PI; // Parsec in meters
 pub const MPC: f64 = PC * 1_000_000.0; // Megaparsec in meters
 pub const LIGHT_SPEED_SQUARED: f64 = LIGHT_SPEED * LIGHT_SPEED;
+/// Maximum allowed speed as a fraction of light speed for non-Normal simulation types.
+pub const SUBLUMINAL_SPEED_FRACTION: f64 = 0.9999999;
 pub const G: f64 = 6.6743e-11; // Gravitational constant in m^3 kg^-1 s^-2
 pub const EPSILON: f64 = 1e-10;
 pub const DEFAULT_WORLD_SCALE: f64 = 1e10;
+
+/// Returns the maximum subluminal speed in meters per second.
+pub fn max_subluminal_speed_m_s() -> f64 {
+    LIGHT_SPEED * SUBLUMINAL_SPEED_FRACTION
+}
+
+/// Returns the maximum subluminal speed in simulation units for the given world scale.
+pub fn max_subluminal_speed_sim(scale: f64) -> f64 {
+    max_subluminal_speed_m_s() / scale
+}
+
+/// Clamps a scalar speed in m/s to subluminal when it is at or above light speed.
+pub fn clamp_scalar_speed_m_s(speed: f64) -> f64 {
+    if speed >= LIGHT_SPEED {
+        max_subluminal_speed_m_s()
+    } else {
+        speed
+    }
+}
+
+/// Clamps a velocity vector in m/s to subluminal magnitude while preserving direction.
+pub fn clamp_velocity_m_s(velocity: DVec3) -> DVec3 {
+    let speed_squared = velocity.length_squared();
+    if speed_squared == 0.0 || speed_squared < LIGHT_SPEED_SQUARED {
+        velocity
+    } else {
+        velocity * (max_subluminal_speed_m_s() / speed_squared.sqrt())
+    }
+}
+
+/// Clamps particle velocities in simulation units to subluminal when at or above c.
+pub fn clamp_particle_velocities_sim(particles: &mut [Particle], scale: f64) {
+    let light_speed_sim = LIGHT_SPEED / scale;
+    let light_speed_sim_squared = light_speed_sim * light_speed_sim;
+    let max_speed = max_subluminal_speed_sim(scale);
+    for particle in particles.iter_mut() {
+        let speed_squared = particle.velocity.length_squared();
+        if speed_squared == 0.0 || speed_squared < light_speed_sim_squared {
+            continue;
+        }
+        particle.velocity *= max_speed / speed_squared.sqrt();
+    }
+}
 
 pub trait SimulationEngine {
     /// Updates particle velocities for one simulation step duration.
@@ -320,14 +365,25 @@ impl SimulationManager {
         scale: f64,
     ) -> SimulationState {
         let normal = object_input.generate_particles(particle_count);
-        let particles = if simulation_type.uses_rapidity_particles() {
-            Self::convert_to_lorentz(normal.particles, scale)
-        } else if simulation_type.uses_momentum_particles() {
-            Self::convert_to_momentum(normal.particles, scale)
-        } else {
-            normal.particles
-        };
+        let particles = Self::prepare_particles(normal.particles, simulation_type, scale);
         Self::state_from_particles(simulation_type, particles, scale)
+    }
+
+    fn prepare_particles(
+        mut particles: Vec<Particle>,
+        simulation_type: SimulationType,
+        scale: f64,
+    ) -> Vec<Particle> {
+        if simulation_type.requires_subluminal_velocity() {
+            clamp_particle_velocities_sim(&mut particles, scale);
+        }
+        if simulation_type.uses_rapidity_particles() {
+            Self::convert_to_lorentz(particles, scale)
+        } else if simulation_type.uses_momentum_particles() {
+            Self::convert_to_momentum(particles, scale)
+        } else {
+            particles
+        }
     }
 
     fn state_from_particles(
@@ -410,13 +466,7 @@ impl SimulationManager {
         simulation_type: SimulationType,
         scale: f64,
     ) {
-        let particles = if simulation_type.uses_rapidity_particles() {
-            Self::convert_to_lorentz(particles, scale)
-        } else if simulation_type.uses_momentum_particles() {
-            Self::convert_to_momentum(particles, scale)
-        } else {
-            particles
-        };
+        let particles = Self::prepare_particles(particles, simulation_type, scale);
         let mut state_guard = self.state.write().unwrap();
         *state_guard = Self::state_from_particles(simulation_type, particles, scale);
     }
@@ -448,13 +498,11 @@ impl SimulationManager {
 
     /// Replaces current simulation state with particles from a saved snapshot.
     pub fn load_from_snapshot(&self, snapshot: ParticleSnapshot) {
-        let particles = if snapshot.simulation_type.uses_rapidity_particles() {
-            Self::convert_to_lorentz(snapshot.particles, snapshot.scale)
-        } else if snapshot.simulation_type.uses_momentum_particles() {
-            Self::convert_to_momentum(snapshot.particles, snapshot.scale)
-        } else {
-            snapshot.particles
-        };
+        let particles = Self::prepare_particles(
+            snapshot.particles,
+            snapshot.simulation_type,
+            snapshot.scale,
+        );
         *self.state.write().unwrap() = Self::state_from_particles(
             snapshot.simulation_type,
             particles,
@@ -476,11 +524,7 @@ impl SimulationManager {
         let mut new_particles = object_input
             .generate_particles_at_center(batch_count, center, base_scale)
             .particles;
-        if simulation_type.uses_rapidity_particles() {
-            new_particles = Self::convert_to_lorentz(new_particles, scale);
-        } else if simulation_type.uses_momentum_particles() {
-            new_particles = Self::convert_to_momentum(new_particles, scale);
-        }
+        new_particles = Self::prepare_particles(new_particles, simulation_type, scale);
 
         let mut state_guard = self.state.write().unwrap();
         let particles = state_guard.particles_mut();

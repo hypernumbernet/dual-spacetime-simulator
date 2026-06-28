@@ -3,7 +3,7 @@ use crate::object_input::{
     SOLAR_SYSTEM_SCALE, clamp_world_scale,
 };
 use crate::settings::AppSettings;
-use crate::simulation::{AU, LY, MPC, PC};
+use crate::simulation::{AU, LY, MPC, PC, clamp_scalar_speed_m_s, clamp_velocity_m_s};
 use glam::DVec3;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -244,6 +244,11 @@ impl SimulationType {
     /// Whether generated particles need momentum conversion before simulation.
     pub fn uses_momentum_particles(self) -> bool {
         matches!(self, Self::SpeedOfLightLimit)
+    }
+
+    /// Whether particle velocities must stay below light speed.
+    pub fn requires_subluminal_velocity(self) -> bool {
+        !matches!(self, Self::Normal)
     }
 }
 
@@ -617,7 +622,21 @@ impl UiState {
                 self.force_cpu_computing_units();
             }
             self.disable_add_until_reset();
+            self.clamp_velocity_inputs();
         }
+    }
+
+    /// Clamps user-entered velocity parameters when a relativistic simulation type is selected.
+    pub fn clamp_velocity_inputs(&mut self) {
+        if !self.simulation_type.requires_subluminal_velocity() {
+            return;
+        }
+        self.random_sphere.velocity_std =
+            clamp_scalar_speed_m_s(self.random_sphere.velocity_std);
+        self.random_cube.velocity_std = clamp_scalar_speed_m_s(self.random_cube.velocity_std);
+        self.elliptical_orbit.planetary_speed =
+            clamp_scalar_speed_m_s(self.elliptical_orbit.planetary_speed);
+        self.single_particle.velocity = clamp_velocity_m_s(self.single_particle.velocity);
     }
 
     /// Disables particle append when computing unit changes until the next reset.

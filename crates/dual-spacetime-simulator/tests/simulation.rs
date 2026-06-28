@@ -1,5 +1,8 @@
 use dual_spacetime_simulator::object_input::ObjectInput;
-use dual_spacetime_simulator::simulation::{G, Particle, SimulationManager};
+use dual_spacetime_simulator::simulation::{
+    G, LIGHT_SPEED, Particle, SimulationManager, clamp_scalar_speed_m_s, clamp_velocity_m_s,
+    max_subluminal_speed_m_s,
+};
 use dual_spacetime_simulator::ui_state::SimulationType as UiSimType;
 use glam::DVec3;
 
@@ -18,6 +21,53 @@ fn total_energy(particles: &[Particle]) -> f64 {
         }
     }
     ke + pe
+}
+
+#[test]
+fn clamp_scalar_speed_m_s_leaves_subluminal_unchanged() {
+    let sub = LIGHT_SPEED * 0.5;
+    assert_eq!(clamp_scalar_speed_m_s(sub), sub);
+}
+
+#[test]
+fn clamp_scalar_speed_m_s_caps_at_subluminal_fraction() {
+    assert_eq!(clamp_scalar_speed_m_s(LIGHT_SPEED), max_subluminal_speed_m_s());
+    assert_eq!(
+        clamp_scalar_speed_m_s(LIGHT_SPEED * 2.0),
+        max_subluminal_speed_m_s()
+    );
+}
+
+#[test]
+fn clamp_velocity_m_s_preserves_direction() {
+    let v = DVec3::new(LIGHT_SPEED, LIGHT_SPEED, 0.0);
+    let clamped = clamp_velocity_m_s(v);
+    let expected_speed = max_subluminal_speed_m_s();
+    assert!((clamped.length() - expected_speed).abs() < expected_speed * 1e-12);
+    let dir = v.normalize();
+    assert!((clamped.normalize() - dir).length() < 1e-12);
+}
+
+#[test]
+fn create_simulation_lorentz_with_superluminal_velocity_std_stays_finite() {
+    let ic = ObjectInput::RandomSphere {
+        scale: 1e10,
+        radius: 1e9,
+        mass_range: (1e28, 1e29),
+        velocity_std: LIGHT_SPEED,
+    };
+    let state = SimulationManager::create_simulation(ic, UiSimType::LorentzTransformation, 16, 1e10);
+    let particles = match state {
+        dual_spacetime_simulator::simulation::SimulationState::LorentzTransformation(s) => {
+            s.particles
+        }
+        _ => panic!("expected LorentzTransformation"),
+    };
+    for p in &particles {
+        assert!(p.velocity.x.is_finite());
+        assert!(p.velocity.y.is_finite());
+        assert!(p.velocity.z.is_finite());
+    }
 }
 
 #[test]

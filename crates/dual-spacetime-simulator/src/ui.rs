@@ -739,6 +739,7 @@ fn condition_random_sphere(ui: &mut egui::Ui, uis: &mut UiState) {
         1e3,
         "Velocity Std (m/s)",
     );
+    uis.clamp_velocity_inputs();
 }
 
 /// Renders parameter controls for the random-cube object input.
@@ -752,6 +753,7 @@ fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
         1e3,
         "Velocity Std (m/s)",
     );
+    uis.clamp_velocity_inputs();
 }
 
 /// Renders parameter controls for the spiral-disk object input.
@@ -817,6 +819,7 @@ fn condition_elliptical_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
         1e3,
         "Initial Speed (m/s)",
     );
+    uis.clamp_velocity_inputs();
     dragvalue_normal(
         ui,
         &mut uis.elliptical_orbit.planetary_distance,
@@ -836,6 +839,7 @@ fn condition_single_particle(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.single_particle.velocity.x, 1e3, "X");
     dragvalue_normal(ui, &mut uis.single_particle.velocity.y, 1e3, "Y");
     dragvalue_normal(ui, &mut uis.single_particle.velocity.z, 1e3, "Z");
+    uis.clamp_velocity_inputs();
     ui.horizontal(|ui| {
         label_normal(ui, "Color");
         let id = ui.make_persistent_id("single_particle_color_combobox");
