@@ -166,6 +166,27 @@ fn dst_gravity_velocity_inverts_direction_inside_event_horizon() {
     assert!(dv_near.is_finite());
     assert!(dv_far.length() > 0.0);
     assert!(dv_near.length() > 0.0);
+
+    let r_far = 10.0 * rs;
+    let r_near = 0.4 * rs;
+    let expected_far = G * mass / (r_far * r_far) * dt;
+    let expected_near = G * mass / (r_near * r_near) * dt;
+    assert!(
+        (dv_far.length() - expected_far).abs() < 1e-6 * expected_far,
+        "weak field magnitude should match Newtonian exchange: |dv|={} expected={}",
+        dv_far.length(),
+        expected_far
+    );
+    assert!(
+        (dv_near.length() - expected_near).abs() < 1e-6 * expected_near,
+        "strong field magnitude should match exchange (repulsive direction only): |dv|={} expected={}",
+        dv_near.length(),
+        expected_near
+    );
+    assert!(
+        (dv_far.length() - dv_near.length()).abs() > 0.0,
+        "different separations should yield different magnitudes"
+    );
 }
 
 #[test]

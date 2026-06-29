@@ -149,7 +149,11 @@ vec3 dst_gravity_velocity_delta(
     float momentum_magnitude = momentum_per_mass_i * mass_i; // SIM_DST_GRAVITY
     float angle = momentum_to_s3_angle(momentum_magnitude, distance, rs); // SIM_DST_GRAVITY
     vec3 ln = s3_log_from_rotation_angle(angle, diff); // SIM_DST_GRAVITY
-    return ln * momentum_per_mass_i;
+    float ln_len = length(ln);
+    if (ln_len < 1e-30) {
+        return vec3(0.0);
+    }
+    return (ln / ln_len) * momentum_per_mass_i;
 }
 
 void main() {
