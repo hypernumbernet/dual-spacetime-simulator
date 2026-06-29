@@ -357,6 +357,10 @@ fn dst_gravity_ln_inversion_via_update() {
     mgr.advance(1.0);
     let v1 = mgr.particles()[0].velocity;
     let dv = v1 - v0;
+    eprintln!(
+        "dst_gravity_ln_inversion: rs={rs:.6e} dv=({:.6e}, {:.6e}, {:.6e}) |dv|={:.6e}",
+        dv.x, dv.y, dv.z, dv.length()
+    );
     assert!(dv.x < 0.0, "horizon-scale pair should repel: dv={dv:?}");
     assert!(dv.is_finite());
     assert!(dv.length() > 0.0);
@@ -369,6 +373,13 @@ fn dst_gravity_ln_inversion_via_update() {
         LIGHT_SPEED,
         1.0,
         dual_spacetime_simulator::simulation::EPSILON,
+    );
+    eprintln!(
+        "dst_gravity_ln_inversion expected=({:.6e}, {:.6e}, {:.6e}) |expected|={:.6e}",
+        expected.x,
+        expected.y,
+        expected.z,
+        expected.length()
     );
     assert!((dv - expected).length() < 1e-6 * expected.length().max(1.0));
 }
@@ -400,8 +411,13 @@ fn dst_gravity_weak_field_attracts_via_update() {
     let v0 = mgr.particles()[0].velocity;
     mgr.advance(1.0);
     let dv = mgr.particles()[0].velocity - v0;
+    eprintln!(
+        "dst_gravity_weak_field: rs={rs:.6e} dv=({:.6e}, {:.6e}, {:.6e}) |dv|={:.6e}",
+        dv.x, dv.y, dv.z, dv.length()
+    );
     assert!(dv.x > 0.0, "weak-field pair should attract: dv={dv:?}");
     assert!(dv.length() > 0.0);
+    assert!(dv.x.is_finite() && dv.y.is_finite() && dv.z.is_finite());
 }
 
 #[test]

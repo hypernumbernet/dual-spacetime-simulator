@@ -102,12 +102,22 @@ vec3 s3_log_from_rotation_angle(float angle, vec3 axis) {
     return unit * half_angle;
 }
 
+// Port of dst-math::gravity::horizon_reference_momentum.
+float horizon_reference_momentum(float momentum_magnitude, float separation, float schwarzschild_r) {
+    if (separation <= 0.0 || schwarzschild_r <= 0.0) {
+        return max(momentum_magnitude, 0.0);
+    }
+    float ratio = separation / schwarzschild_r;
+    return momentum_magnitude * ratio * ratio;
+}
+
 // Port of dst-math::gravity::momentum_to_s3_angle.
 float momentum_to_s3_angle(float momentum_magnitude, float separation, float schwarzschild_r) {
-    if (separation <= 0.0 || schwarzschild_r <= 0.0) {
+    if (separation <= 0.0 || schwarzschild_r <= 0.0 || momentum_magnitude <= 0.0) {
         return 0.0;
     }
-    return DST_PI * schwarzschild_r / separation;
+    float p_horizon = horizon_reference_momentum(momentum_magnitude, separation, schwarzschild_r);
+    return DST_PI * momentum_magnitude / p_horizon;
 }
 
 // Port of dst-math::gravity::dst_gravity_velocity_delta.

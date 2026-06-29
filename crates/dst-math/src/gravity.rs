@@ -219,20 +219,34 @@ pub fn unit_quaternion_ln(q: DQuat, rotation_angle: f64, momentum_axis: DVec3) -
     s3_log_from_rotation_angle(rotation_angle, momentum_axis)
 }
 
-/// Maps a momentum-exchange magnitude and separation to a rotation angle on S³.
+/// Momentum-exchange magnitude at `separation = schwarzschild_radius` for the same pair and dt.
 ///
-/// At `separation == schwarzschild_radius` the angle equals π, placing the quaternion on
-/// the equator of S³ where the logarithm branch flips.
-pub fn momentum_to_s3_angle(
+/// Because `p ∝ 1/r²`, the horizon reference is `p_horizon = p · (r/r_s)²`.
+pub fn horizon_reference_momentum(
     momentum_magnitude: f64,
     separation: f64,
     schwarzschild_r: f64,
 ) -> f64 {
     if separation <= 0.0 || schwarzschild_r <= 0.0 {
+        return momentum_magnitude.max(0.0);
+    }
+    momentum_magnitude * (separation / schwarzschild_r).powi(2)
+}
+
+/// Maps momentum-exchange magnitude to a rotation angle on S³ via the horizon ratio `p/p_horizon`.
+///
+/// At `separation == schwarzschild_radius` we have `p == p_horizon` and the angle equals π,
+/// placing the quaternion on the equator of S³ where the logarithm branch flips.
+pub fn momentum_to_s3_angle(
+    momentum_magnitude: f64,
+    separation: f64,
+    schwarzschild_r: f64,
+) -> f64 {
+    if separation <= 0.0 || schwarzschild_r <= 0.0 || momentum_magnitude <= 0.0 {
         return 0.0;
     }
-    let _ = momentum_magnitude;
-    std::f64::consts::PI * schwarzschild_r / separation
+    let p_horizon = horizon_reference_momentum(momentum_magnitude, separation, schwarzschild_r);
+    std::f64::consts::PI * momentum_magnitude / p_horizon
 }
 
 /// Builds a unit quaternion on S³ from a momentum-exchange direction and S³ rotation angle.

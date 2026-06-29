@@ -1,7 +1,8 @@
 use dst_math::gravity::{
     acceleration_at, dst_gravity_velocity_delta, dual_rotor_accel_at, killing_scalar,
     momentum_to_s3_angle, proper_time_rate, repulsion_shell_dual_rotor,
-    schwarzschild_radius, signed_interaction_weight, strong_field_gate, torsion_mismatch,
+    horizon_reference_momentum, schwarzschild_radius, signed_interaction_weight,
+    strong_field_gate, torsion_mismatch,
     s3_log_from_rotation_angle, unit_quaternion_from_momentum_axis, unit_quaternion_ln,
     usual_boost_from_velocity,
 };
@@ -86,9 +87,27 @@ fn repulsion_shell_pushes_outward_in_strong_field() {
 
 #[test]
 fn momentum_to_s3_angle_equals_pi_at_event_horizon() {
-    let rs = schwarzschild_radius(1.0e30, 1.0e30, G, C);
-    let angle = momentum_to_s3_angle(1.0, rs, rs);
+    let mass = 1.0e30;
+    let rs = schwarzschild_radius(mass, mass, G, C);
+    let dt = 1.0;
+    let p_at_horizon = G * mass * mass / (rs * rs) * dt;
+    let angle = momentum_to_s3_angle(p_at_horizon, rs, rs);
     assert!((angle - std::f64::consts::PI).abs() < 1e-12);
+    let p_ref = horizon_reference_momentum(p_at_horizon, rs, rs);
+    assert!((p_at_horizon - p_ref).abs() < 1e-12 * p_at_horizon);
+}
+
+#[test]
+fn momentum_to_s3_angle_scales_with_momentum_ratio() {
+    let mass = 1.0e30;
+    let rs = schwarzschild_radius(mass, mass, G, C);
+    let r = 2.0 * rs;
+    let dt = 1.0;
+    let p = G * mass * mass / (r * r) * dt;
+    let p_horizon = horizon_reference_momentum(p, r, rs);
+    let angle = momentum_to_s3_angle(p, r, rs);
+    assert!((angle - std::f64::consts::PI * p / p_horizon).abs() < 1e-12);
+    assert!((angle - 0.25 * std::f64::consts::PI).abs() < 1e-12);
 }
 
 #[test]
@@ -127,6 +146,20 @@ fn dst_gravity_velocity_inverts_direction_inside_event_horizon() {
         EPSILON,
     );
 
+    eprintln!(
+        "dst_gravity_velocity_delta far: dv=({:.6e}, {:.6e}, {:.6e}) |dv|={:.6e}",
+        dv_far.x,
+        dv_far.y,
+        dv_far.z,
+        dv_far.length()
+    );
+    eprintln!(
+        "dst_gravity_velocity_delta near: dv=({:.6e}, {:.6e}, {:.6e}) |dv|={:.6e}",
+        dv_near.x,
+        dv_near.y,
+        dv_near.z,
+        dv_near.length()
+    );
     assert!(dv_far.x > 0.0, "weak field should attract along +x");
     assert!(dv_near.x < 0.0, "inside horizon scale should repel along -x");
     assert!(dv_far.is_finite());
