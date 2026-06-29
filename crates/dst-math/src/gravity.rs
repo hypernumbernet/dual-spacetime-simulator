@@ -266,10 +266,10 @@ pub fn unit_quaternion_from_momentum_axis(axis: DVec3, angle: f64) -> DQuat {
 
 /// Velocity increment from pairwise momentum exchange via the S³ logarithm map.
 ///
-/// The exchange magnitude `p/m_i = G m_j / r² · dt` matches Newtonian gravity in the
-/// weak field. The S³ logarithm supplies only the direction (including the horizon flip);
-/// multiplying `ln` by `p/m_i` directly would suppress weak-field gravity by `(r_s/r)²` and
-/// amplify strong-field repulsion by the same factor.
+/// Base coupling is `Δv = ln · (p/m_i)`. In the weak field `|ln| = θ/2 ≪ 1`, which would
+/// suppress gravity by `(r_s/r)²`; a factor `1/(θ/2)` (when `θ/2 < 1`) restores Newtonian
+/// magnitude there. Inside the horizon `θ/2 ≥ 1` and the factor is unity, so repulsion keeps
+/// the full Ln scale `|Δv| ≈ (θ/2) · p/m_i` together with the sign flip.
 ///
 /// All inputs use simulation units: `diff` and derived separations are length/scale,
 /// masses are kg/scale³, and `light_speed` is c/scale. The Schwarzschild radius and
@@ -307,5 +307,7 @@ pub fn dst_gravity_velocity_delta(
     if ln_len < 1e-30 {
         return DVec3::ZERO;
     }
-    (ln / ln_len) * momentum_per_mass_i
+    let half = 0.5 * angle;
+    let ln_scale = if half < 1.0 { 1.0 / half } else { 1.0 };
+    ln * momentum_per_mass_i * ln_scale
 }

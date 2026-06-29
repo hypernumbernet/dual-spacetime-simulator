@@ -169,23 +169,26 @@ fn dst_gravity_velocity_inverts_direction_inside_event_horizon() {
 
     let r_far = 10.0 * rs;
     let r_near = 0.4 * rs;
-    let expected_far = G * mass / (r_far * r_far) * dt;
-    let expected_near = G * mass / (r_near * r_near) * dt;
+    let exchange_far = G * mass / (r_far * r_far) * dt;
+    let exchange_near = G * mass / (r_near * r_near) * dt;
+    let half_near =
+        0.5 * std::f64::consts::PI * (rs / r_near).powi(2);
+    let expected_near = half_near * exchange_near;
     assert!(
-        (dv_far.length() - expected_far).abs() < 1e-6 * expected_far,
+        (dv_far.length() - exchange_far).abs() < 1e-6 * exchange_far,
         "weak field magnitude should match Newtonian exchange: |dv|={} expected={}",
         dv_far.length(),
-        expected_far
+        exchange_far
     );
     assert!(
         (dv_near.length() - expected_near).abs() < 1e-6 * expected_near,
-        "strong field magnitude should match exchange (repulsive direction only): |dv|={} expected={}",
+        "strong field should use full Ln scale (θ/2)·p/m: |dv|={} expected={}",
         dv_near.length(),
         expected_near
     );
     assert!(
-        (dv_far.length() - dv_near.length()).abs() > 0.0,
-        "different separations should yield different magnitudes"
+        dv_near.length() > exchange_near,
+        "repulsion inside horizon should exceed bare exchange magnitude"
     );
 }
 

@@ -153,7 +153,9 @@ vec3 dst_gravity_velocity_delta(
     if (ln_len < 1e-30) {
         return vec3(0.0);
     }
-    return (ln / ln_len) * momentum_per_mass_i;
+    float half_angle = 0.5 * angle;
+    float ln_scale = (half_angle < 1.0) ? (1.0 / half_angle) : 1.0;
+    return ln * momentum_per_mass_i * ln_scale;
 }
 
 void main() {
