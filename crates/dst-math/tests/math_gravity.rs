@@ -1,8 +1,8 @@
 use dst_math::gravity::{
     acceleration_at, dst_gravity_velocity_delta, dual_rotor_accel_at, killing_scalar,
-    momentum_to_s3_angle, proper_time_rate, repulsion_shell_dual_rotor,
-    horizon_reference_momentum, schwarzschild_radius, signed_interaction_weight,
-    strong_field_gate, torsion_mismatch,
+    momentum_to_s3_angle, momentum_to_s3_angle_from_separation, proper_time_rate,
+    repulsion_shell_dual_rotor, horizon_reference_momentum, schwarzschild_radius,
+    signed_interaction_weight, strong_field_gate, torsion_mismatch,
     s3_log_from_rotation_angle, unit_quaternion_from_momentum_axis, unit_quaternion_ln,
     usual_boost_from_velocity,
 };
@@ -119,6 +119,41 @@ fn unit_quaternion_ln_flips_sign_past_antipodal_hemisphere() {
     assert!(ln.x < 0.0, "ln should point opposite to momentum axis past horizon");
     let direct = s3_log_from_rotation_angle(angle, DVec3::X);
     assert!((ln - direct).length() < 1e-12);
+}
+
+#[test]
+fn momentum_to_s3_angle_from_separation_matches_horizon_ratio() {
+    let rs = schwarzschild_radius(1.0e30, 1.0e30, G, C);
+    for r_over_rs in [0.4_f64, 1.0, 2.0, 10.0] {
+        let r = r_over_rs * rs;
+        let p = G * 1.0e30 * 1.0e30 / (r * r);
+        let from_sep = momentum_to_s3_angle_from_separation(r, rs);
+        let from_p = momentum_to_s3_angle(p, r, rs);
+        assert!((from_sep - from_p).abs() < 1e-12 * from_sep.max(1.0));
+    }
+}
+
+#[test]
+fn dst_gravity_closed_form_matches_ln_coupling() {
+    let mass = 1.0e30;
+    let rs = schwarzschild_radius(mass, mass, G, C);
+    let dt = 1.0;
+    for r_over_rs in [0.4_f64, 0.85, 1.0, 2.0, 10.0] {
+        let diff = DVec3::new(r_over_rs * rs, 0.0, 0.0);
+        let closed = dst_gravity_velocity_delta(mass, mass, diff, G, C, dt, EPSILON);
+        let distance = diff.length();
+        let r_soft_sq = distance * distance + EPSILON * EPSILON;
+        let momentum_per_mass_i = G * mass / r_soft_sq * dt;
+        let angle = momentum_to_s3_angle_from_separation(distance, rs);
+        let half = 0.5 * angle;
+        let ln = s3_log_from_rotation_angle(angle, diff);
+        let ln_scale = if half < 1.0 { 1.0 / half } else { 1.0 };
+        let reference = ln * momentum_per_mass_i * ln_scale;
+        assert!(
+            (closed - reference).length() < 1e-9 * reference.length().max(1.0),
+            "r/rs={r_over_rs} closed={closed:?} reference={reference:?}"
+        );
+    }
 }
 
 #[test]

@@ -233,6 +233,18 @@ pub fn horizon_reference_momentum(
     momentum_magnitude * (separation / schwarzschild_r).powi(2)
 }
 
+/// S³ rotation angle from separation alone when exchange momentum scales as `1/r²`.
+///
+/// Because `p_horizon = p · (r/r_s)²`, the ratio `p/p_horizon` collapses to `(r_s/r)²`
+/// and the angle is `π (r_s/r)²` independent of mass and `dt`.
+pub fn momentum_to_s3_angle_from_separation(separation: f64, schwarzschild_r: f64) -> f64 {
+    if separation <= 0.0 || schwarzschild_r <= 0.0 {
+        return 0.0;
+    }
+    let rs_over_r = schwarzschild_r / separation;
+    std::f64::consts::PI * rs_over_r * rs_over_r
+}
+
 /// Maps momentum-exchange magnitude to a rotation angle on S³ via the horizon ratio `p/p_horizon`.
 ///
 /// At `separation == schwarzschild_radius` we have `p == p_horizon` and the angle equals π,
@@ -242,11 +254,10 @@ pub fn momentum_to_s3_angle(
     separation: f64,
     schwarzschild_r: f64,
 ) -> f64 {
-    if separation <= 0.0 || schwarzschild_r <= 0.0 || momentum_magnitude <= 0.0 {
+    if momentum_magnitude <= 0.0 {
         return 0.0;
     }
-    let p_horizon = horizon_reference_momentum(momentum_magnitude, separation, schwarzschild_r);
-    std::f64::consts::PI * momentum_magnitude / p_horizon
+    momentum_to_s3_angle_from_separation(separation, schwarzschild_r)
 }
 
 /// Builds a unit quaternion on S³ from a momentum-exchange direction and S³ rotation angle.
@@ -266,10 +277,9 @@ pub fn unit_quaternion_from_momentum_axis(axis: DVec3, angle: f64) -> DQuat {
 
 /// Velocity increment from pairwise momentum exchange via the S³ logarithm map.
 ///
-/// Base coupling is `Δv = ln · (p/m_i)`. In the weak field `|ln| = θ/2 ≪ 1`, which would
-/// suppress gravity by `(r_s/r)²`; a factor `1/(θ/2)` (when `θ/2 < 1`) restores Newtonian
-/// magnitude there. Inside the horizon `θ/2 ≥ 1` and the factor is unity, so repulsion keeps
-/// the full Ln scale `|Δv| ≈ (θ/2) · p/m_i` together with the sign flip.
+/// Equivalent to `ln · (p/m_i) · scale(θ/2)` with `θ = π (r_s/r)²`, `ln` the S³ logarithm
+/// along `diff`, and `scale = 1/(θ/2)` when `θ/2 < 1` else `1`. Implemented in closed form
+/// without quaternion construction: weak field → `û · p/m_i`; strong field → `±û · (θ/2) · p/m_i`.
 ///
 /// All inputs use simulation units: `diff` and derived separations are length/scale,
 /// masses are kg/scale³, and `light_speed` is c/scale. The Schwarzschild radius and
@@ -293,21 +303,26 @@ pub fn dst_gravity_velocity_delta(
         return DVec3::ZERO;
     }
     let distance = r_soft_sq.sqrt();
-    let rs = schwarzschild_radius(mass_i, mass_j, g, light_speed);
-    // p = G m_i m_j / r² dt  and  p/m_i = G m_j / r² dt — avoid m_i·m_j product for f32 GPU parity.
+    // p/m_i = G m_j / r² dt
     let momentum_per_mass_i = g * mass_j / r_soft_sq * delta_seconds;
-    let angle = momentum_to_s3_angle(
-        momentum_per_mass_i * mass_i,
-        distance,
-        rs,
-    );
-    let q = unit_quaternion_from_momentum_axis(diff, angle);
-    let ln = unit_quaternion_ln(q, angle, diff);
-    let ln_len = ln.length();
-    if ln_len < 1e-30 {
+    if momentum_per_mass_i == 0.0 {
         return DVec3::ZERO;
     }
-    let half = 0.5 * angle;
-    let ln_scale = if half < 1.0 { 1.0 / half } else { 1.0 };
-    ln * momentum_per_mass_i * ln_scale
+
+    let rs = schwarzschild_radius(mass_i, mass_j, g, light_speed);
+    let rs_over_r = rs / distance;
+    let half = 0.5 * std::f64::consts::PI * rs_over_r * rs_over_r;
+    if half < 1e-30 {
+        return DVec3::ZERO;
+    }
+
+    // û · (p/m_i); diff/distance reuses r_soft without an extra normalize.
+    let along = diff * (momentum_per_mass_i / distance);
+    if half < 1.0 {
+        along
+    } else if half >= std::f64::consts::FRAC_PI_2 {
+        -along * half
+    } else {
+        along * half
+    }
 }

@@ -88,44 +88,7 @@ float schwarzschild_radius(float mass_a, float mass_b, float g, float light_spee
     return 2.0 * g * (mass_a + mass_b) / (light_speed * light_speed);
 }
 
-// Port of dst-math::gravity::s3_log_from_rotation_angle.
-vec3 s3_log_from_rotation_angle(float angle, vec3 axis) {
-    float axis_len = length(axis);
-    if (axis_len < 1e-15 || abs(angle) < 1e-15) {
-        return vec3(0.0);
-    }
-    vec3 unit = axis / axis_len;
-    float half_angle = 0.5 * angle;
-    if (half_angle >= 1.5707963267948966) {
-        return -unit * half_angle;
-    }
-    return unit * half_angle;
-}
-
-// Port of dst-math::gravity::horizon_reference_momentum.
-float horizon_reference_momentum(float momentum_magnitude, float separation, float schwarzschild_r) {
-    if (separation <= 0.0 || schwarzschild_r <= 0.0) {
-        return max(momentum_magnitude, 0.0);
-    }
-    float ratio = separation / schwarzschild_r;
-    return momentum_magnitude * ratio * ratio;
-}
-
-// Port of dst-math::gravity::momentum_to_s3_angle (π · p / p_horizon).
-float momentum_to_s3_angle(float momentum_magnitude, float separation, float schwarzschild_r) {
-    if (separation <= 0.0 || schwarzschild_r <= 0.0 || momentum_magnitude <= 0.0) {
-        return 0.0;
-    }
-    float p_horizon = horizon_reference_momentum(momentum_magnitude, separation, schwarzschild_r);
-    float ratio = momentum_magnitude / p_horizon;
-    if (isinf(ratio) || isnan(ratio)) {
-        float rs_over_r = schwarzschild_r / separation;
-        ratio = rs_over_r * rs_over_r;
-    }
-    return DST_PI * ratio;
-}
-
-// Port of dst-math::gravity::dst_gravity_velocity_delta.
+// Port of dst-math::gravity::dst_gravity_velocity_delta (closed form: θ = π(r_s/r)²).
 vec3 dst_gravity_velocity_delta(
     float mass_i,
     float mass_j,
@@ -144,18 +107,24 @@ vec3 dst_gravity_velocity_delta(
         return vec3(0.0);
     }
     float distance = sqrt(r_soft_sq);
-    float rs = schwarzschild_radius(mass_i, mass_j, g, light_speed);
     float momentum_per_mass_i = g * mass_j / r_soft_sq * delta_seconds;
-    float momentum_magnitude = momentum_per_mass_i * mass_i; // SIM_DST_GRAVITY
-    float angle = momentum_to_s3_angle(momentum_magnitude, distance, rs); // SIM_DST_GRAVITY
-    vec3 ln = s3_log_from_rotation_angle(angle, diff); // SIM_DST_GRAVITY
-    float ln_len = length(ln);
-    if (ln_len < 1e-30) {
+    if (momentum_per_mass_i == 0.0) {
         return vec3(0.0);
     }
-    float half_angle = 0.5 * angle;
-    float ln_scale = (half_angle < 1.0) ? (1.0 / half_angle) : 1.0;
-    return ln * momentum_per_mass_i * ln_scale;
+    float rs = schwarzschild_radius(mass_i, mass_j, g, light_speed); // SIM_DST_GRAVITY
+    float rs_over_r = rs / distance;
+    float half_angle = 0.5 * DST_PI * rs_over_r * rs_over_r; // SIM_DST_GRAVITY
+    if (half_angle < 1e-15) {
+        return vec3(0.0);
+    }
+    vec3 along = diff * (momentum_per_mass_i / distance);
+    if (half_angle < 1.0) {
+        return along;
+    }
+    if (half_angle >= 1.5707963267948966) {
+        return -along * half_angle;
+    }
+    return along * half_angle;
 }
 
 void main() {
@@ -181,7 +150,7 @@ void main() {
         return;
     }
 
-    // DstGravity: momentum_to_s3_angle + s3_log_from_rotation_angle via dst_gravity_velocity_delta
+    // DstGravity: closed-form S³ Ln coupling via dst_gravity_velocity_delta
     if (pc.sim_type == SIM_DST_GRAVITY) {
         vec3 pos_i = particles[i].position.xyz;
         float mass_i = particles[i].attrs.x;
