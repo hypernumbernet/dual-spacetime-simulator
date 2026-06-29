@@ -276,6 +276,7 @@ impl SimulationEngine for SimulationDstGravity {
     fn update_velocities(&mut self, delta_seconds: f64) {
         let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
         let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
+        let light_speed_sim = LIGHT_SPEED / self.scale;
 
         self.particles
             .par_iter_mut()
@@ -294,7 +295,7 @@ impl SimulationEngine for SimulationDstGravity {
                         mass_j,
                         diff,
                         G,
-                        LIGHT_SPEED,
+                        light_speed_sim,
                         delta_seconds,
                         EPSILON,
                     );

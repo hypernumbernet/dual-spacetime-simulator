@@ -365,12 +365,13 @@ fn dst_gravity_ln_inversion_via_update() {
     assert!(dv.is_finite());
     assert!(dv.length() > 0.0);
 
+    let light_speed_sim = LIGHT_SPEED / scale;
     let expected = dst_gravity_velocity_delta(
         mass,
         mass,
         DVec3::new(0.4 * rs, 0.0, 0.0),
         G,
-        LIGHT_SPEED,
+        light_speed_sim,
         1.0,
         dual_spacetime_simulator::simulation::EPSILON,
     );
@@ -418,6 +419,43 @@ fn dst_gravity_weak_field_attracts_via_update() {
     assert!(dv.x > 0.0, "weak-field pair should attract: dv={dv:?}");
     assert!(dv.length() > 0.0);
     assert!(dv.x.is_finite() && dv.y.is_finite() && dv.z.is_finite());
+}
+
+#[test]
+fn dst_gravity_ln_inversion_at_world_scale() {
+    let mass = 1.0e30;
+    let scale = 1e10;
+    let light_speed_sim = LIGHT_SPEED / scale;
+    let rs = schwarzschild_radius(mass, mass, G, light_speed_sim);
+    let particles = SimulationManager::convert_to_dst_gravity(
+        vec![
+            Particle::from_kinematics(DVec3::ZERO, DVec3::ZERO, mass, [1.0; 4]),
+            Particle::from_kinematics(
+                DVec3::new(0.4 * rs, 0.0, 0.0),
+                DVec3::ZERO,
+                mass,
+                [1.0; 4],
+            ),
+        ],
+        scale,
+    );
+    let mgr = SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(
+            dual_spacetime_simulator::simulation::SimulationState::DstGravity(
+                dual_spacetime_simulator::simulation::SimulationDstGravity { particles, scale },
+            ),
+        )),
+    };
+    let v0 = mgr.particles()[0].velocity;
+    mgr.advance(1.0);
+    let dv = mgr.particles()[0].velocity - v0;
+    eprintln!(
+        "dst_gravity_world_scale: scale={scale:.6e} rs={rs:.6e} dv.x={:.6e}",
+        dv.x
+    );
+    assert!(dv.x < 0.0, "scaled sim should repel inside horizon: dv={dv:?}");
+    assert!(dv.length() > 0.0);
+    assert!(dv.is_finite());
 }
 
 #[test]

@@ -237,6 +237,7 @@ pub fn horizon_reference_momentum(
 ///
 /// At `separation == schwarzschild_radius` we have `p == p_horizon` and the angle equals π,
 /// placing the quaternion on the equator of S³ where the logarithm branch flips.
+/// Algebraically `p/p_horizon = (r_s/r)²`; the separation form avoids `m_i·m_j` overflow in f32 GPU.
 pub fn momentum_to_s3_angle(
     momentum_magnitude: f64,
     separation: f64,
@@ -245,8 +246,12 @@ pub fn momentum_to_s3_angle(
     if separation <= 0.0 || schwarzschild_r <= 0.0 || momentum_magnitude <= 0.0 {
         return 0.0;
     }
+    let ratio = (schwarzschild_r / separation).powi(2);
     let p_horizon = horizon_reference_momentum(momentum_magnitude, separation, schwarzschild_r);
-    std::f64::consts::PI * momentum_magnitude / p_horizon
+    debug_assert!(
+        (momentum_magnitude / p_horizon - ratio).abs() < 1e-9 * ratio.max(1.0)
+    );
+    std::f64::consts::PI * ratio
 }
 
 /// Builds a unit quaternion on S³ from a momentum-exchange direction and S³ rotation angle.
@@ -266,8 +271,10 @@ pub fn unit_quaternion_from_momentum_axis(axis: DVec3, angle: f64) -> DQuat {
 
 /// Velocity increment from pairwise momentum exchange via the S³ logarithm map.
 ///
-/// Computes Newtonian momentum exchange, embeds its direction into a unit quaternion on S³
-/// with angle calibrated to flip at the Schwarzschild radius, takes Ln, and scales by Δp/mᵢ.
+/// All inputs use simulation units: `diff` and derived separations are length/scale,
+/// masses are kg/scale³, and `light_speed` is c/scale. The Schwarzschild radius and
+/// momentum exchange are evaluated consistently so the inversion occurs at r = r_s in
+/// simulation coordinates (matching the GPU `light_speed_per_scale` push constant).
 pub fn dst_gravity_velocity_delta(
     mass_i: f64,
     mass_j: f64,
@@ -283,9 +290,14 @@ pub fn dst_gravity_velocity_delta(
     }
     let distance = distance_sq.sqrt();
     let rs = schwarzschild_radius(mass_i, mass_j, g, light_speed);
-    let momentum_magnitude = g * mass_i * mass_j / distance_sq * delta_seconds;
-    let angle = momentum_to_s3_angle(momentum_magnitude, distance, rs);
+    // p = G m_i m_j / r² dt  and  p/m_i = G m_j / r² dt — avoid m_i·m_j product for f32 GPU parity.
+    let momentum_per_mass_i = g * mass_j / distance_sq * delta_seconds;
+    let angle = momentum_to_s3_angle(
+        momentum_per_mass_i * mass_i,
+        distance,
+        rs,
+    );
     let q = unit_quaternion_from_momentum_axis(diff, angle);
     let ln = unit_quaternion_ln(q, angle, diff);
-    ln * (momentum_magnitude / mass_i)
+    ln * momentum_per_mass_i
 }

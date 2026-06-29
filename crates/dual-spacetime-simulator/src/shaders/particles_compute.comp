@@ -111,13 +111,13 @@ float horizon_reference_momentum(float momentum_magnitude, float separation, flo
     return momentum_magnitude * ratio * ratio;
 }
 
-// Port of dst-math::gravity::momentum_to_s3_angle.
+// Port of dst-math::gravity::momentum_to_s3_angle (uses p/p_horizon = (r_s/r)² without overflow).
 float momentum_to_s3_angle(float momentum_magnitude, float separation, float schwarzschild_r) {
     if (separation <= 0.0 || schwarzschild_r <= 0.0 || momentum_magnitude <= 0.0) {
         return 0.0;
     }
-    float p_horizon = horizon_reference_momentum(momentum_magnitude, separation, schwarzschild_r);
-    return DST_PI * momentum_magnitude / p_horizon;
+    float rs_over_r = schwarzschild_r / separation;
+    return DST_PI * rs_over_r * rs_over_r;
 }
 
 // Port of dst-math::gravity::dst_gravity_velocity_delta.
@@ -136,10 +136,10 @@ vec3 dst_gravity_velocity_delta(
     }
     float distance = sqrt(distance_sq);
     float rs = schwarzschild_radius(mass_i, mass_j, g, light_speed);
-    float momentum_magnitude = g * mass_i * mass_j / distance_sq * delta_seconds;
-    float angle = momentum_to_s3_angle(momentum_magnitude, distance, rs);
+    float momentum_per_mass_i = g * mass_j / distance_sq * delta_seconds;
+    float angle = momentum_to_s3_angle(momentum_per_mass_i, distance, rs);
     vec3 ln = s3_log_from_rotation_angle(angle, diff);
-    return ln * (momentum_magnitude / mass_i);
+    return ln * momentum_per_mass_i;
 }
 
 void main() {
@@ -165,11 +165,12 @@ void main() {
         return;
     }
 
+    // DstGravity: momentum_to_s3_angle + s3_log_from_rotation_angle via dst_gravity_velocity_delta
     if (pc.sim_type == SIM_DST_GRAVITY) {
         vec3 pos_i = particles[i].position.xyz;
         float mass_i = particles[i].attrs.x;
         float g = pc.gravity_dt / pc.delta_seconds;
-        float light_speed = pc.light_speed_per_scale;
+        float light_speed_sim = pc.light_speed_per_scale;
         vec3 delta_v = vec3(0.0);
 
         for (uint j = 0u; j < pc.particle_count; ++j) {
@@ -182,7 +183,7 @@ void main() {
                 particles[j].attrs.x,
                 diff,
                 g,
-                light_speed,
+                light_speed_sim,
                 pc.delta_seconds,
                 pc.epsilon
             );
