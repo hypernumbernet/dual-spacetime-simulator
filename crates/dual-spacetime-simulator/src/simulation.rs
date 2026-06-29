@@ -6,6 +6,7 @@ use std::sync::{Arc, RwLock};
 use crate::object_input::ObjectInput;
 use crate::particle_snapshot::ParticleSnapshot;
 use crate::ui_state::SimulationType;
+use dst_math::gravity::{dst_gravity_velocity_delta, usual_boost_from_sim_velocity};
 use dst_math::spacetime::{
     Spacetime, momentum_from_velocity, position_delta_from_momentum, rapidity_from_momentum,
     velocity_from_momentum,
@@ -107,6 +108,15 @@ pub struct Particle {
     pub momentum: DVec3,
     pub mass: f64,
     pub color: [f32; 4],
+    /// Dual-rotor angles φ_a (DST Gravity).
+    #[serde(default)]
+    pub dual_rotor: DVec3,
+    /// Time derivative of dual-rotor angles (DST Gravity).
+    #[serde(default)]
+    pub dual_rotor_vel: DVec3,
+    /// Accumulated proper time (DST Gravity).
+    #[serde(default)]
+    pub proper_time: f64,
 }
 
 impl Particle {
@@ -123,6 +133,9 @@ impl Particle {
             momentum: DVec3::ZERO,
             mass,
             color,
+            dual_rotor: DVec3::ZERO,
+            dual_rotor_vel: DVec3::ZERO,
+            proper_time: 0.0,
         }
     }
 }
@@ -252,11 +265,44 @@ impl SimulationEngine for SimulationLorentzTransformation {
 }
 
 impl SimulationEngine for SimulationDstGravity {
-    /// Stub: DST gravity physics is not implemented yet.
-    fn update_velocities(&mut self, _delta_seconds: f64) {}
+    /// Advances positions using current velocities.
+    fn advance_time(&mut self, delta_seconds: f64) {
+        self.particles.par_iter_mut().for_each(|particle| {
+            particle.position += particle.velocity * delta_seconds;
+        });
+    }
 
-    /// Stub: DST gravity physics is not implemented yet.
-    fn advance_time(&mut self, _delta_seconds: f64) {}
+    /// Updates velocities from pairwise momentum exchange mapped through S³ Ln.
+    fn update_velocities(&mut self, delta_seconds: f64) {
+        let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
+        let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
+        let light_speed_sim = LIGHT_SPEED / self.scale;
+
+        self.particles
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(i, particle)| {
+                let mass_i = particle.mass;
+                let pos_i = particle.position;
+                let mut delta_v = DVec3::ZERO;
+                for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
+                    if i == j {
+                        continue;
+                    }
+                    let diff = pos_j - pos_i;
+                    delta_v += dst_gravity_velocity_delta( // SIM_DST_GRAVITY
+                        mass_i,
+                        mass_j,
+                        diff,
+                        G,
+                        light_speed_sim,
+                        delta_seconds,
+                        EPSILON,
+                    );
+                }
+                particle.velocity += delta_v;
+            });
+    }
 }
 
 impl SimulationEngine for SimulationState {
@@ -381,6 +427,8 @@ impl SimulationManager {
             Self::convert_to_lorentz(particles, scale)
         } else if simulation_type.uses_momentum_particles() {
             Self::convert_to_momentum(particles, scale)
+        } else if simulation_type.uses_dst_gravity_state() {
+            Self::convert_to_dst_gravity(particles, scale)
         } else {
             particles
         }
@@ -419,6 +467,9 @@ impl SimulationManager {
                 momentum: p.momentum,
                 mass: p.mass,
                 color: p.color,
+                dual_rotor: p.dual_rotor,
+                dual_rotor_vel: p.dual_rotor_vel,
+                proper_time: p.proper_time,
             })
             .collect()
     }
@@ -440,7 +491,26 @@ impl SimulationManager {
                     momentum,
                     mass: p.mass,
                     color: p.color,
+                    dual_rotor: p.dual_rotor,
+                    dual_rotor_vel: p.dual_rotor_vel,
+                    proper_time: p.proper_time,
                 }
+            })
+            .collect()
+    }
+
+    /// Initializes dual-rotor state for DST Gravity so torsion mismatch starts at zero.
+    pub fn convert_to_dst_gravity(particles: Vec<Particle>, scale: f64) -> Vec<Particle> {
+        let inverse_light_speed = scale / LIGHT_SPEED;
+        particles
+            .into_iter()
+            .map(|mut p| {
+                if p.dual_rotor == DVec3::ZERO {
+                    p.dual_rotor = usual_boost_from_sim_velocity(p.velocity, inverse_light_speed);
+                }
+                p.dual_rotor_vel = DVec3::ZERO;
+                p.proper_time = 0.0;
+                p
             })
             .collect()
     }

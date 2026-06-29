@@ -46,6 +46,7 @@ fn uses_add_particle_count_matches_generation_behavior() {
     ] {
         assert!(ty.uses_add_particle_count(), "{ty}");
     }
+    assert!(!ObjectInputType::TorsionStar.uses_add_particle_count());
     assert!(!ObjectInputType::EllipticalOrbit.uses_add_particle_count());
     assert!(!ObjectInputType::SingleParticle.uses_add_particle_count());
 }
@@ -286,6 +287,8 @@ fn spiral_disk_initial_speed_scales_with_enclosed_mass() {
 
     let mut min_speed = f64::INFINITY;
     let mut max_speed = 0.0_f64;
+    let mut min_r = f64::INFINITY;
+    let mut max_r = 0.0_f64;
 
     for particle in &sim.particles {
         let r = (particle.position.x * particle.position.x
@@ -302,11 +305,13 @@ fn spiral_disk_initial_speed_scales_with_enclosed_mass() {
 
         min_speed = min_speed.min(speed);
         max_speed = max_speed.max(speed);
+        min_r = min_r.min(r);
+        max_r = max_r.max(r);
     }
 
     assert!(min_speed < max_speed);
-    let inner_expected = edge_speed * (0.1_f64).sqrt();
-    let outer_expected = edge_speed;
-    assert!((min_speed - inner_expected).abs() < 0.05 * edge_speed);
-    assert!((max_speed - outer_expected).abs() < 0.05 * edge_speed);
+    let inner_expected = edge_speed * (min_r / radius).sqrt();
+    let outer_expected = edge_speed * (max_r / radius).sqrt();
+    assert!((min_speed - inner_expected).abs() < 1e-9 * edge_speed.max(1.0));
+    assert!((max_speed - outer_expected).abs() < 1e-9 * edge_speed.max(1.0));
 }

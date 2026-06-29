@@ -714,6 +714,7 @@ fn object_input_type_conditions(ui: &mut egui::Ui, uis: &mut UiState) {
         ObjectInputType::RandomCube => condition_random_cube(ui, uis),
         ObjectInputType::SpiralDisk => condition_spiral_disk(ui, uis),
         ObjectInputType::EllipticalOrbit => condition_elliptical_orbit(ui, uis),
+        ObjectInputType::TorsionStar => condition_torsion_star(ui, uis),
         ObjectInputType::SingleParticle => condition_single_particle(ui, uis),
     }
 }
@@ -826,6 +827,44 @@ fn condition_elliptical_orbit(ui: &mut egui::Ui, uis: &mut UiState) {
         1e7,
         "Initial Distance (m)",
     );
+}
+
+/// Renders parameter controls for the torsion-star (repulsion shell) object input.
+fn condition_torsion_star(ui: &mut egui::Ui, uis: &mut UiState) {
+    label_normal(ui, "Central Attractor");
+    dragvalue_normal(
+        ui,
+        &mut uis.torsion_star.central_mass,
+        1e20,
+        "Mass (kg)",
+    );
+    label_normal(ui, "Repulsion Shell");
+    dragvalue_normal(
+        ui,
+        &mut uis.torsion_star.shell_radius,
+        1e9,
+        "Shell Radius (m)",
+    );
+    dragvalue_normal(
+        ui,
+        &mut uis.torsion_star.shell_mass,
+        1e20,
+        "Shell Particle Mass (kg)",
+    );
+    dragvalue_normal(
+        ui,
+        &mut uis.torsion_star.shell_phi_magnitude,
+        0.1,
+        "Dual Rotor φ (repulsion strength)",
+    );
+    ui.horizontal(|ui| {
+        label_normal(ui, "Shell Count");
+        ui.add(
+            egui::DragValue::new(&mut uis.torsion_star.shell_particle_count)
+                .range(1..=256)
+                .speed(1),
+        );
+    });
 }
 
 /// Renders parameter controls for the single-particle object input.

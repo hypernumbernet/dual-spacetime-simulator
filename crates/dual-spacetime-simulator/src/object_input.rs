@@ -125,6 +125,15 @@ pub enum ObjectInput {
         velocity: DVec3,
         color: ParticleBasicColor,
     },
+    /// Central attractor plus a repulsion shell (dual rotors with J < 0) for DST Gravity.
+    TorsionStar {
+        scale: f64,
+        central_mass: f64,
+        shell_radius: f64,
+        shell_particle_count: u32,
+        shell_mass: f64,
+        shell_phi_magnitude: f64,
+    },
 }
 
 impl std::fmt::Display for ObjectInput {
@@ -138,6 +147,7 @@ impl std::fmt::Display for ObjectInput {
             ObjectInput::SatelliteOrbit { .. } => write!(f, "Satellite Orbit"),
             ObjectInput::EllipticalOrbit { .. } => write!(f, "Elliptical Orbit"),
             ObjectInput::SingleParticle { .. } => write!(f, "Single Particle"),
+            ObjectInput::TorsionStar { .. } => write!(f, "Torsion Star"),
         }
     }
 }
@@ -148,6 +158,7 @@ pub enum ObjectInputType {
     RandomCube,
     SpiralDisk,
     EllipticalOrbit,
+    TorsionStar,
     SingleParticle,
 }
 
@@ -166,6 +177,7 @@ impl std::fmt::Display for ObjectInputType {
             ObjectInputType::RandomCube => write!(f, "Random Cube"),
             ObjectInputType::SpiralDisk => write!(f, "Spiral Disk"),
             ObjectInputType::EllipticalOrbit => write!(f, "Elliptical Orbit"),
+            ObjectInputType::TorsionStar => write!(f, "Torsion Star"),
             ObjectInputType::SingleParticle => write!(f, "Single Particle"),
         }
     }
@@ -173,11 +185,12 @@ impl std::fmt::Display for ObjectInputType {
 
 impl ObjectInputType {
     /// All add-type variants in UI display order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::RandomSphere,
         Self::RandomCube,
         Self::SpiralDisk,
         Self::EllipticalOrbit,
+        Self::TorsionStar,
         Self::SingleParticle,
     ];
 
@@ -196,6 +209,7 @@ impl ObjectInputType {
             ObjectInputType::RandomCube => 1e10,
             ObjectInputType::SpiralDisk => 1e7,
             ObjectInputType::EllipticalOrbit => 1.5e11,
+            ObjectInputType::TorsionStar => 1e10,
             ObjectInputType::SingleParticle => 1e10,
         }
     }
@@ -230,6 +244,14 @@ impl ObjectInputType {
                 planetary_mass: 5.972e24 * factor_cubed,
                 planetary_speed: 2.0e5 * factor,
                 planetary_distance: 2.0e11 * factor,
+            },
+            ObjectInputType::TorsionStar => ObjectInput::TorsionStar {
+                scale,
+                central_mass: 1.989e32 * factor_cubed,
+                shell_radius: 5.0e9 * factor,
+                shell_particle_count: 24,
+                shell_mass: 1.0e28 * factor_cubed,
+                shell_phi_magnitude: 1.0,
             },
             ObjectInputType::SingleParticle => ObjectInput::SingleParticle {
                 scale,
@@ -389,6 +411,7 @@ impl ObjectInput {
             ObjectInput::SolarSystem { scale, .. } => *scale,
             ObjectInput::SatelliteOrbit { scale, .. } => *scale,
             ObjectInput::EllipticalOrbit { scale, .. } => *scale,
+            ObjectInput::TorsionStar { scale, .. } => *scale,
             ObjectInput::SingleParticle { scale, .. } => *scale,
         })
     }
@@ -408,6 +431,7 @@ impl ObjectInput {
             ObjectInput::EllipticalOrbit {
                 planetary_distance, ..
             } => planetary_distance * correct.m,
+            ObjectInput::TorsionStar { shell_radius, .. } => shell_radius * correct.m,
             ObjectInput::SingleParticle { position, .. } => position.length() * correct.m,
         }
     }
@@ -683,6 +707,45 @@ impl ObjectInput {
                     *mass * correct.kg,
                     color.rgba(),
                 )];
+                SimulationNormal { particles }
+            }
+            ObjectInput::TorsionStar {
+                scale,
+                central_mass,
+                shell_radius,
+                shell_particle_count,
+                shell_mass,
+                shell_phi_magnitude,
+            } => {
+                use dst_math::gravity::repulsion_shell_dual_rotor;
+                let correct = Correct::new(*scale);
+                let central_mass = *central_mass * correct.kg;
+                let shell_radius = *shell_radius * correct.m;
+                let shell_mass = *shell_mass * correct.kg;
+                let shell_phi = *shell_phi_magnitude;
+                let count = (*shell_particle_count).max(1) as usize;
+                let mut particles = vec![Particle::from_kinematics(
+                    DVec3::ZERO,
+                    DVec3::ZERO,
+                    central_mass,
+                    [1.0, 1.0, 0.0, 1.0],
+                )];
+                for i in 0..count {
+                    let azimuth = (i as f64 / count as f64) * TAU;
+                    let pos = DVec3::new(
+                        shell_radius * azimuth.cos(),
+                        shell_radius * azimuth.sin(),
+                        0.0,
+                    );
+                    let mut shell = Particle::from_kinematics(
+                        pos,
+                        DVec3::ZERO,
+                        shell_mass,
+                        [0.2, 0.9, 1.0, 1.0],
+                    );
+                    shell.dual_rotor = repulsion_shell_dual_rotor(shell_phi);
+                    particles.push(shell);
+                }
                 SimulationNormal { particles }
             }
         };

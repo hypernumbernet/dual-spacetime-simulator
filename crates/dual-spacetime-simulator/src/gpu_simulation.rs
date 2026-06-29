@@ -10,7 +10,7 @@ use vulkanvil::{AllocatedBuffer, create_shader_module};
 const WORKGROUP_SIZE: u32 = 64;
 const EPSILON_F32: f32 = EPSILON as f32;
 
-/// GPU particle layout: four 16-byte vec4 slots (64 bytes total).
+/// GPU particle layout: five 16-byte vec4 slots (80 bytes total).
 /// Must match GLSL `Particle` in compute and vertex shaders exactly under std430.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -18,10 +18,11 @@ pub struct GpuParticle {
     pub position: [f32; 4],
     pub velocity: [f32; 4],
     pub attrs: [f32; 4],
+    pub dual_state: [f32; 4],
     pub color: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuParticle>() == 64);
+const _: () = assert!(std::mem::size_of::<GpuParticle>() == 80);
 
 impl GpuParticle {
     pub fn from_cpu(particle: &Particle, simulation_type: SimulationType) -> Self {
@@ -29,6 +30,26 @@ impl GpuParticle {
             particle.momentum
         } else {
             particle.velocity
+        };
+        let attrs = if simulation_type.uses_dst_gravity_state() {
+            [
+                particle.mass as f32,
+                particle.dual_rotor.x as f32,
+                particle.dual_rotor.y as f32,
+                particle.dual_rotor.z as f32,
+            ]
+        } else {
+            [particle.mass as f32, 0.0, 0.0, 0.0]
+        };
+        let dual_state = if simulation_type.uses_dst_gravity_state() {
+            [
+                particle.dual_rotor_vel.x as f32,
+                particle.dual_rotor_vel.y as f32,
+                particle.dual_rotor_vel.z as f32,
+                particle.proper_time as f32,
+            ]
+        } else {
+            [0.0; 4]
         };
         Self {
             position: [
@@ -43,7 +64,8 @@ impl GpuParticle {
                 kinematic.z as f32,
                 0.0,
             ],
-            attrs: [particle.mass as f32, 0.0, 0.0, 0.0],
+            attrs,
+            dual_state,
             color: particle.color,
         }
     }
@@ -53,6 +75,7 @@ impl GpuParticle {
             position: [position[0], position[1], position[2], 0.0],
             velocity: [0.0; 4],
             attrs: [0.0; 4],
+            dual_state: [0.0; 4],
             color,
         }
     }
@@ -87,6 +110,29 @@ impl GpuParticle {
             momentum,
             mass,
             color: self.color,
+            dual_rotor: if simulation_type.uses_dst_gravity_state() {
+                DVec3::new(
+                    self.attrs[1] as f64,
+                    self.attrs[2] as f64,
+                    self.attrs[3] as f64,
+                )
+            } else {
+                DVec3::ZERO
+            },
+            dual_rotor_vel: if simulation_type.uses_dst_gravity_state() {
+                DVec3::new(
+                    self.dual_state[0] as f64,
+                    self.dual_state[1] as f64,
+                    self.dual_state[2] as f64,
+                )
+            } else {
+                DVec3::ZERO
+            },
+            proper_time: if simulation_type.uses_dst_gravity_state() {
+                self.dual_state[3] as f64
+            } else {
+                0.0
+            },
         }
     }
 }

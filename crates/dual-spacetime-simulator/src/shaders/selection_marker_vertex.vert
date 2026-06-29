@@ -4,6 +4,7 @@ struct Particle {
     vec4 position;
     vec4 velocity;
     vec4 attrs;
+    vec4 dual_state;
     vec4 color;
 };
 

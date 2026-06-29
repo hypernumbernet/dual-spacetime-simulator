@@ -2,11 +2,12 @@
 
 layout(local_size_x = 64) in;
 
-// std430: four vec4 members => 64 bytes, matching Rust GpuParticle exactly.
+// std430: five vec4 members => 80 bytes, matching Rust GpuParticle exactly.
 struct Particle {
     vec4 position;
     vec4 velocity;
     vec4 attrs;
+    vec4 dual_state;
     vec4 color;
 };
 
@@ -76,8 +77,54 @@ vec3 lorentz_position_delta(vec3 rapidity, float ct) {
     float r = dir.y * sh;
     float s = dir.z * sh;
     float t = (p * p + q * q + r * r + s * s) * ct;
-    vec3 xyz = 2.0 * ct * p * vec3(q, r, s);
+    vec3 xyz = 2.0 * ct * vec3(q, r, s);
     return xyz * (ct / t);
+}
+
+const float DST_PI = 3.141592653589793;
+
+// Port of dst-math::gravity::schwarzschild_radius.
+float schwarzschild_radius(float mass_a, float mass_b, float g, float light_speed) {
+    return 2.0 * g * (mass_a + mass_b) / (light_speed * light_speed);
+}
+
+// Port of dst-math::gravity::dst_gravity_velocity_delta (closed form: θ = π(r_s/r)²).
+vec3 dst_gravity_velocity_delta(
+    float mass_i,
+    float mass_j,
+    vec3 diff,
+    float g,
+    float light_speed,
+    float delta_seconds,
+    float epsilon
+) {
+    float distance_sq = dot(diff, diff);
+    if (mass_i <= 0.0) {
+        return vec3(0.0);
+    }
+    float r_soft_sq = distance_sq + epsilon * epsilon;
+    if (r_soft_sq <= 0.0) {
+        return vec3(0.0);
+    }
+    float distance = sqrt(r_soft_sq);
+    float momentum_per_mass_i = g * mass_j / r_soft_sq * delta_seconds;
+    if (momentum_per_mass_i == 0.0) {
+        return vec3(0.0);
+    }
+    float rs = schwarzschild_radius(mass_i, mass_j, g, light_speed); // SIM_DST_GRAVITY
+    float rs_over_r = rs / distance;
+    float half_angle = 0.5 * DST_PI * rs_over_r * rs_over_r; // SIM_DST_GRAVITY
+    if (half_angle < 1e-15) {
+        return vec3(0.0);
+    }
+    vec3 along = diff * (momentum_per_mass_i / distance);
+    if (half_angle < 1.0) {
+        return along;
+    }
+    if (half_angle >= 1.5707963267948966) {
+        return -along * half_angle;
+    }
+    return along * half_angle;
 }
 
 void main() {
@@ -86,13 +133,11 @@ void main() {
         return;
     }
 
-    if (pc.sim_type == SIM_DST_GRAVITY) {
-        return;
-    }
-
     if (pc.phase == 0u) {
         vec3 vel = particles[i].velocity.xyz;
-        if (pc.sim_type == SIM_LORENTZ) {
+        if (pc.sim_type == SIM_DST_GRAVITY) {
+            particles[i].position.xyz += vel * pc.delta_seconds;
+        } else if (pc.sim_type == SIM_LORENTZ) {
             float ct = pc.delta_seconds * pc.light_speed_per_scale;
             particles[i].position.xyz += lorentz_position_delta(vel, ct);
         } else if (pc.sim_type == SIM_SPEED_OF_LIGHT_LIMIT) {
@@ -102,6 +147,34 @@ void main() {
         } else {
             particles[i].position.xyz += vel * pc.delta_seconds;
         }
+        return;
+    }
+
+    // DstGravity: closed-form S³ Ln coupling via dst_gravity_velocity_delta
+    if (pc.sim_type == SIM_DST_GRAVITY) {
+        vec3 pos_i = particles[i].position.xyz;
+        float mass_i = particles[i].attrs.x;
+        float g = pc.gravity_dt / pc.delta_seconds;
+        float light_speed_sim = pc.light_speed_per_scale;
+        vec3 delta_v = vec3(0.0);
+
+        for (uint j = 0u; j < pc.particle_count; ++j) {
+            if (i == j) {
+                continue;
+            }
+            vec3 diff = particles[j].position.xyz - pos_i;
+            delta_v += dst_gravity_velocity_delta( // SIM_DST_GRAVITY
+                mass_i,
+                particles[j].attrs.x,
+                diff,
+                g,
+                light_speed_sim,
+                pc.delta_seconds,
+                pc.epsilon
+            );
+        }
+
+        particles[i].velocity.xyz += delta_v;
         return;
     }
 
