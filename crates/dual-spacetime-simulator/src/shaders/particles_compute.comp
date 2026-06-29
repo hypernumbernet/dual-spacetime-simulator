@@ -111,13 +111,18 @@ float horizon_reference_momentum(float momentum_magnitude, float separation, flo
     return momentum_magnitude * ratio * ratio;
 }
 
-// Port of dst-math::gravity::momentum_to_s3_angle (uses p/p_horizon = (r_s/r)² without overflow).
+// Port of dst-math::gravity::momentum_to_s3_angle (π · p / p_horizon).
 float momentum_to_s3_angle(float momentum_magnitude, float separation, float schwarzschild_r) {
     if (separation <= 0.0 || schwarzschild_r <= 0.0 || momentum_magnitude <= 0.0) {
         return 0.0;
     }
-    float rs_over_r = schwarzschild_r / separation;
-    return DST_PI * rs_over_r * rs_over_r;
+    float p_horizon = horizon_reference_momentum(momentum_magnitude, separation, schwarzschild_r);
+    float ratio = momentum_magnitude / p_horizon;
+    if (isinf(ratio) || isnan(ratio)) {
+        float rs_over_r = schwarzschild_r / separation;
+        ratio = rs_over_r * rs_over_r;
+    }
+    return DST_PI * ratio;
 }
 
 // Port of dst-math::gravity::dst_gravity_velocity_delta.
@@ -131,14 +136,19 @@ vec3 dst_gravity_velocity_delta(
     float epsilon
 ) {
     float distance_sq = dot(diff, diff);
-    if (distance_sq < epsilon || mass_i <= 0.0) {
+    if (mass_i <= 0.0) {
         return vec3(0.0);
     }
-    float distance = sqrt(distance_sq);
+    float r_soft_sq = distance_sq + epsilon * epsilon;
+    if (r_soft_sq <= 0.0) {
+        return vec3(0.0);
+    }
+    float distance = sqrt(r_soft_sq);
     float rs = schwarzschild_radius(mass_i, mass_j, g, light_speed);
-    float momentum_per_mass_i = g * mass_j / distance_sq * delta_seconds;
-    float angle = momentum_to_s3_angle(momentum_per_mass_i, distance, rs);
-    vec3 ln = s3_log_from_rotation_angle(angle, diff);
+    float momentum_per_mass_i = g * mass_j / r_soft_sq * delta_seconds;
+    float momentum_magnitude = momentum_per_mass_i * mass_i; // SIM_DST_GRAVITY
+    float angle = momentum_to_s3_angle(momentum_magnitude, distance, rs); // SIM_DST_GRAVITY
+    vec3 ln = s3_log_from_rotation_angle(angle, diff); // SIM_DST_GRAVITY
     return ln * momentum_per_mass_i;
 }
 
@@ -178,7 +188,7 @@ void main() {
                 continue;
             }
             vec3 diff = particles[j].position.xyz - pos_i;
-            delta_v += dst_gravity_velocity_delta(
+            delta_v += dst_gravity_velocity_delta( // SIM_DST_GRAVITY
                 mass_i,
                 particles[j].attrs.x,
                 diff,

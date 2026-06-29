@@ -237,7 +237,6 @@ pub fn horizon_reference_momentum(
 ///
 /// At `separation == schwarzschild_radius` we have `p == p_horizon` and the angle equals π,
 /// placing the quaternion on the equator of S³ where the logarithm branch flips.
-/// Algebraically `p/p_horizon = (r_s/r)²`; the separation form avoids `m_i·m_j` overflow in f32 GPU.
 pub fn momentum_to_s3_angle(
     momentum_magnitude: f64,
     separation: f64,
@@ -246,12 +245,8 @@ pub fn momentum_to_s3_angle(
     if separation <= 0.0 || schwarzschild_r <= 0.0 || momentum_magnitude <= 0.0 {
         return 0.0;
     }
-    let ratio = (schwarzschild_r / separation).powi(2);
     let p_horizon = horizon_reference_momentum(momentum_magnitude, separation, schwarzschild_r);
-    debug_assert!(
-        (momentum_magnitude / p_horizon - ratio).abs() < 1e-9 * ratio.max(1.0)
-    );
-    std::f64::consts::PI * ratio
+    std::f64::consts::PI * momentum_magnitude / p_horizon
 }
 
 /// Builds a unit quaternion on S³ from a momentum-exchange direction and S³ rotation angle.
@@ -285,13 +280,17 @@ pub fn dst_gravity_velocity_delta(
     epsilon: f64,
 ) -> DVec3 {
     let distance_sq = diff.length_squared();
-    if distance_sq < epsilon || mass_i <= 0.0 {
+    if mass_i <= 0.0 {
         return DVec3::ZERO;
     }
-    let distance = distance_sq.sqrt();
+    let r_soft_sq = distance_sq + epsilon * epsilon;
+    if r_soft_sq <= 0.0 {
+        return DVec3::ZERO;
+    }
+    let distance = r_soft_sq.sqrt();
     let rs = schwarzschild_radius(mass_i, mass_j, g, light_speed);
     // p = G m_i m_j / r² dt  and  p/m_i = G m_j / r² dt — avoid m_i·m_j product for f32 GPU parity.
-    let momentum_per_mass_i = g * mass_j / distance_sq * delta_seconds;
+    let momentum_per_mass_i = g * mass_j / r_soft_sq * delta_seconds;
     let angle = momentum_to_s3_angle(
         momentum_per_mass_i * mass_i,
         distance,

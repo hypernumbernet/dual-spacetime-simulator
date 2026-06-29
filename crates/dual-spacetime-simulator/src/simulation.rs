@@ -290,7 +290,7 @@ impl SimulationEngine for SimulationDstGravity {
                         continue;
                     }
                     let diff = pos_j - pos_i;
-                    delta_v += dst_gravity_velocity_delta(
+                    delta_v += dst_gravity_velocity_delta( // SIM_DST_GRAVITY
                         mass_i,
                         mass_j,
                         diff,
