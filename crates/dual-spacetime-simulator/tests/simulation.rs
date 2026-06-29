@@ -4,6 +4,7 @@ use dual_spacetime_simulator::simulation::{
     max_subluminal_speed_m_s,
 };
 use dual_spacetime_simulator::ui_state::SimulationType as UiSimType;
+use dst_math::gravity::{dst_gravity_velocity_delta, schwarzschild_radius};
 use glam::DVec3;
 
 fn total_energy(particles: &[Particle]) -> f64 {
@@ -329,35 +330,78 @@ fn dst_gravity_random_sphere_stays_finite_short_run() {
 }
 
 #[test]
-fn torsion_star_shell_expands_under_central_mass() {
-    let scale = 1e10;
-    let ic = ObjectInput::TorsionStar {
+fn dst_gravity_ln_inversion_via_update() {
+    let mass = 1.0e30;
+    let rs = schwarzschild_radius(mass, mass, G, LIGHT_SPEED);
+    let scale = 1.0;
+    let particles = SimulationManager::convert_to_dst_gravity(
+        vec![
+            Particle::from_kinematics(DVec3::ZERO, DVec3::ZERO, mass, [1.0; 4]),
+            Particle::from_kinematics(
+                DVec3::new(0.4 * rs, 0.0, 0.0),
+                DVec3::ZERO,
+                mass,
+                [1.0; 4],
+            ),
+        ],
         scale,
-        central_mass: 1.989e32,
-        shell_radius: 5.0e9,
-        shell_particle_count: 8,
-        shell_mass: 1.0e28,
-        shell_phi_magnitude: 1.0,
-    };
-    let state = SimulationManager::create_simulation(ic, UiSimType::DstGravity, 9, scale);
-    let mgr = SimulationManager {
-        state: std::sync::Arc::new(std::sync::RwLock::new(state)),
-    };
-    let r0 = {
-        let p = &mgr.particles()[1];
-        p.position.length()
-    };
-    for _ in 0..30 {
-        mgr.advance(100.0);
-    }
-    let r1 = {
-        let p = &mgr.particles()[1];
-        p.position.length()
-    };
-    assert!(
-        r1 > r0 * 1.05,
-        "repulsion shell should expand: r0={r0} r1={r1}"
     );
+    let mgr = SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(
+            dual_spacetime_simulator::simulation::SimulationState::DstGravity(
+                dual_spacetime_simulator::simulation::SimulationDstGravity { particles, scale },
+            ),
+        )),
+    };
+    let v0 = mgr.particles()[0].velocity;
+    mgr.advance(1.0);
+    let v1 = mgr.particles()[0].velocity;
+    let dv = v1 - v0;
+    assert!(dv.x < 0.0, "horizon-scale pair should repel: dv={dv:?}");
+    assert!(dv.is_finite());
+    assert!(dv.length() > 0.0);
+
+    let expected = dst_gravity_velocity_delta(
+        mass,
+        mass,
+        DVec3::new(0.4 * rs, 0.0, 0.0),
+        G,
+        LIGHT_SPEED,
+        1.0,
+        dual_spacetime_simulator::simulation::EPSILON,
+    );
+    assert!((dv - expected).length() < 1e-6 * expected.length().max(1.0));
+}
+
+#[test]
+fn dst_gravity_weak_field_attracts_via_update() {
+    let mass = 1.0e30;
+    let rs = schwarzschild_radius(mass, mass, G, LIGHT_SPEED);
+    let scale = 1.0;
+    let particles = SimulationManager::convert_to_dst_gravity(
+        vec![
+            Particle::from_kinematics(DVec3::ZERO, DVec3::ZERO, mass, [1.0; 4]),
+            Particle::from_kinematics(
+                DVec3::new(10.0 * rs, 0.0, 0.0),
+                DVec3::ZERO,
+                mass,
+                [1.0; 4],
+            ),
+        ],
+        scale,
+    );
+    let mgr = SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(
+            dual_spacetime_simulator::simulation::SimulationState::DstGravity(
+                dual_spacetime_simulator::simulation::SimulationDstGravity { particles, scale },
+            ),
+        )),
+    };
+    let v0 = mgr.particles()[0].velocity;
+    mgr.advance(1.0);
+    let dv = mgr.particles()[0].velocity - v0;
+    assert!(dv.x > 0.0, "weak-field pair should attract: dv={dv:?}");
+    assert!(dv.length() > 0.0);
 }
 
 #[test]

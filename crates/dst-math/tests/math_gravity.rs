@@ -1,11 +1,14 @@
 use dst_math::gravity::{
-    acceleration_at, dual_rotor_accel_at, killing_scalar, proper_time_rate,
-    repulsion_shell_dual_rotor, signed_interaction_weight, strong_field_gate,
-    torsion_mismatch, usual_boost_from_velocity,
+    acceleration_at, dst_gravity_velocity_delta, dual_rotor_accel_at, killing_scalar,
+    momentum_to_s3_angle, proper_time_rate, repulsion_shell_dual_rotor,
+    schwarzschild_radius, signed_interaction_weight, strong_field_gate, torsion_mismatch,
+    s3_log_from_rotation_angle, unit_quaternion_from_momentum_axis, unit_quaternion_ln,
+    usual_boost_from_velocity,
 };
 use glam::DVec3;
 
 const G: f64 = 6.6743e-11;
+const C: f64 = 299_792_458.0;
 const EPSILON: f64 = 1e-10;
 
 #[test]
@@ -79,6 +82,57 @@ fn repulsion_shell_pushes_outward_in_strong_field() {
         EPSILON,
     );
     assert!(accel.x > 0.0, "shell particle should be repelled from center");
+}
+
+#[test]
+fn momentum_to_s3_angle_equals_pi_at_event_horizon() {
+    let rs = schwarzschild_radius(1.0e30, 1.0e30, G, C);
+    let angle = momentum_to_s3_angle(1.0, rs, rs);
+    assert!((angle - std::f64::consts::PI).abs() < 1e-12);
+}
+
+#[test]
+fn unit_quaternion_ln_flips_sign_past_antipodal_hemisphere() {
+    let angle = 2.5 * std::f64::consts::PI;
+    let q_neg = unit_quaternion_from_momentum_axis(DVec3::X, angle);
+    assert!(q_neg.w < 0.0);
+    let ln = unit_quaternion_ln(q_neg, angle, DVec3::X);
+    assert!(ln.x < 0.0, "ln should point opposite to momentum axis past horizon");
+    let direct = s3_log_from_rotation_angle(angle, DVec3::X);
+    assert!((ln - direct).length() < 1e-12);
+}
+
+#[test]
+fn dst_gravity_velocity_inverts_direction_inside_event_horizon() {
+    let mass = 1.0e30;
+    let rs = schwarzschild_radius(mass, mass, G, C);
+    let dt = 1.0;
+
+    let dv_far = dst_gravity_velocity_delta(
+        mass,
+        mass,
+        DVec3::new(10.0 * rs, 0.0, 0.0),
+        G,
+        C,
+        dt,
+        EPSILON,
+    );
+    let dv_near = dst_gravity_velocity_delta(
+        mass,
+        mass,
+        DVec3::new(0.4 * rs, 0.0, 0.0),
+        G,
+        C,
+        dt,
+        EPSILON,
+    );
+
+    assert!(dv_far.x > 0.0, "weak field should attract along +x");
+    assert!(dv_near.x < 0.0, "inside horizon scale should repel along -x");
+    assert!(dv_far.is_finite());
+    assert!(dv_near.is_finite());
+    assert!(dv_far.length() > 0.0);
+    assert!(dv_near.length() > 0.0);
 }
 
 #[test]

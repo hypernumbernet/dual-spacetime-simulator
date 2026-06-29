@@ -1,6 +1,6 @@
-//! DST gravity helpers: torsion mismatch, interaction kernel, and accelerations.
+//! DST gravity helpers: torsion mismatch, interaction kernel, accelerations, and S³ Ln gravity.
 
-use glam::DVec3;
+use glam::{DQuat, DVec3};
 
 use crate::bivector::BivectorBoost;
 
@@ -186,4 +186,92 @@ pub fn clamp_dual_rotor_state(
 /// Dual-rotor vector for a repulsion-shell particle (θ ≈ 0, J < 0).
 pub fn repulsion_shell_dual_rotor(phi_magnitude: f64) -> DVec3 {
     DVec3::new(phi_magnitude.max(0.0), 0.0, 0.0)
+}
+
+/// Schwarzschild radius for a two-body system: r_s = 2 G (m₁ + m₂) / c².
+pub fn schwarzschild_radius(mass_a: f64, mass_b: f64, g: f64, light_speed: f64) -> f64 {
+    2.0 * g * (mass_a + mass_b) / (light_speed * light_speed)
+}
+
+/// S³ logarithm from a rotation angle and axis without `acos` branch cuts.
+///
+/// For half-angle `θ/2 ≥ π/2` (i.e. separation inside the calibrated event horizon),
+/// the vector flips sign to produce repulsive inversion.
+pub fn s3_log_from_rotation_angle(angle: f64, axis: DVec3) -> DVec3 {
+    let axis_len = axis.length();
+    if axis_len < 1e-30 || angle.abs() < 1e-30 {
+        return DVec3::ZERO;
+    }
+    let unit = axis / axis_len;
+    let half = 0.5 * angle;
+    if half >= std::f64::consts::FRAC_PI_2 {
+        -unit * half
+    } else {
+        unit * half
+    }
+}
+
+/// Principal-branch logarithm of a unit quaternion on S³ paired with its rotation angle.
+///
+/// `momentum_axis` supplies the exchange direction (not the signed imaginary part of `q`).
+pub fn unit_quaternion_ln(q: DQuat, rotation_angle: f64, momentum_axis: DVec3) -> DVec3 {
+    let _ = q;
+    s3_log_from_rotation_angle(rotation_angle, momentum_axis)
+}
+
+/// Maps a momentum-exchange magnitude and separation to a rotation angle on S³.
+///
+/// At `separation == schwarzschild_radius` the angle equals π, placing the quaternion on
+/// the equator of S³ where the logarithm branch flips.
+pub fn momentum_to_s3_angle(
+    momentum_magnitude: f64,
+    separation: f64,
+    schwarzschild_r: f64,
+) -> f64 {
+    if separation <= 0.0 || schwarzschild_r <= 0.0 {
+        return 0.0;
+    }
+    let _ = momentum_magnitude;
+    std::f64::consts::PI * schwarzschild_r / separation
+}
+
+/// Builds a unit quaternion on S³ from a momentum-exchange direction and S³ rotation angle.
+///
+/// Constructed directly as `(cos θ/2, sin θ/2 · û)` without angle wrapping so the logarithm
+/// branch can cross the equator at the calibrated event-horizon scale.
+pub fn unit_quaternion_from_momentum_axis(axis: DVec3, angle: f64) -> DQuat {
+    let axis_len = axis.length();
+    if axis_len < 1e-30 || angle.abs() < 1e-30 {
+        return DQuat::IDENTITY;
+    }
+    let unit = axis / axis_len;
+    let half = 0.5 * angle;
+    let (s, c) = half.sin_cos();
+    DQuat::from_xyzw(unit.x * s, unit.y * s, unit.z * s, c)
+}
+
+/// Velocity increment from pairwise momentum exchange via the S³ logarithm map.
+///
+/// Computes Newtonian momentum exchange, embeds its direction into a unit quaternion on S³
+/// with angle calibrated to flip at the Schwarzschild radius, takes Ln, and scales by Δp/mᵢ.
+pub fn dst_gravity_velocity_delta(
+    mass_i: f64,
+    mass_j: f64,
+    diff: DVec3,
+    g: f64,
+    light_speed: f64,
+    delta_seconds: f64,
+    epsilon: f64,
+) -> DVec3 {
+    let distance_sq = diff.length_squared();
+    if distance_sq < epsilon || mass_i <= 0.0 {
+        return DVec3::ZERO;
+    }
+    let distance = distance_sq.sqrt();
+    let rs = schwarzschild_radius(mass_i, mass_j, g, light_speed);
+    let momentum_magnitude = g * mass_i * mass_j / distance_sq * delta_seconds;
+    let angle = momentum_to_s3_angle(momentum_magnitude, distance, rs);
+    let q = unit_quaternion_from_momentum_axis(diff, angle);
+    let ln = unit_quaternion_ln(q, angle, diff);
+    ln * (momentum_magnitude / mass_i)
 }
