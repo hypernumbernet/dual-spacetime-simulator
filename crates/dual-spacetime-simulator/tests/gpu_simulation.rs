@@ -1,5 +1,6 @@
 mod common;
 
+use ash::vk;
 use dual_spacetime_simulator::gpu_simulation::{
     GpuParticle, GpuParticleSimulation, create_particle_descriptor_set_layout,
 };
@@ -86,6 +87,31 @@ fn mass_sim_from_physical_kg(physical_kg: f64, scale: f64) -> f64 {
     physical_kg / scale.powi(3)
 }
 
+fn submit_graphics<F>(v: &common::HeadlessVulkan, record: F)
+where
+    F: FnOnce(vk::CommandBuffer),
+{
+    let alloc_info = vk::CommandBufferAllocateInfo::default()
+        .command_pool(v.command_pool)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .command_buffer_count(1);
+    let cmd_bufs = unsafe { v.device.allocate_command_buffers(&alloc_info) }.unwrap();
+    let cmd = cmd_bufs[0];
+    let begin_info = vk::CommandBufferBeginInfo::default()
+        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    unsafe {
+        v.device.begin_command_buffer(cmd, &begin_info).unwrap();
+        record(cmd);
+        v.device.end_command_buffer(cmd).unwrap();
+        let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
+        v.device
+            .queue_submit(v.graphics_queue, &[submit_info], vk::Fence::null())
+            .unwrap();
+        v.device.queue_wait_idle(v.graphics_queue).unwrap();
+        v.device.free_command_buffers(v.command_pool, &cmd_bufs);
+    }
+}
+
 struct DstGravityParityCase {
     scale: f64,
     physical_mass_kg: f64,
@@ -136,7 +162,7 @@ fn run_dst_gravity_gpu_parity_case(
     gpu_sim.upload_from_cpu(&particles, SimulationType::DstGravity);
     let v0 = particles[0].velocity;
 
-    common::submit_graphics(v, |cmd| {
+    submit_graphics(v, |cmd| {
         gpu_sim.dispatch(cmd, SimulationType::DstGravity, 1.0, case.scale, 1);
     });
 

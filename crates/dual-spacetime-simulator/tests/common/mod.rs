@@ -104,29 +104,3 @@ pub fn try_create_headless_vulkan() -> Option<HeadlessVulkan> {
         allocator: Some(Arc::new(Mutex::new(allocator))),
     })
 }
-
-/// Records and submits a one-shot primary command buffer on the graphics queue.
-pub fn submit_graphics<F>(v: &HeadlessVulkan, record: F)
-where
-    F: FnOnce(vk::CommandBuffer),
-{
-    let alloc_info = vk::CommandBufferAllocateInfo::default()
-        .command_pool(v.command_pool)
-        .level(vk::CommandBufferLevel::PRIMARY)
-        .command_buffer_count(1);
-    let cmd_bufs = unsafe { v.device.allocate_command_buffers(&alloc_info) }.unwrap();
-    let cmd = cmd_bufs[0];
-    let begin_info = vk::CommandBufferBeginInfo::default()
-        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-    unsafe {
-        v.device.begin_command_buffer(cmd, &begin_info).unwrap();
-        record(cmd);
-        v.device.end_command_buffer(cmd).unwrap();
-        let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
-        v.device
-            .queue_submit(v.graphics_queue, &[submit_info], vk::Fence::null())
-            .unwrap();
-        v.device.queue_wait_idle(v.graphics_queue).unwrap();
-        v.device.free_command_buffers(v.command_pool, &cmd_bufs);
-    }
-}
