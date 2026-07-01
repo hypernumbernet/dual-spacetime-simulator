@@ -7,8 +7,7 @@ use crate::object_input::ObjectInput;
 use crate::particle_snapshot::ParticleSnapshot;
 use crate::ui_state::SimulationType;
 use dst_math::gravity::{
-    gravitational_potential_at, gravity_sign_from_time_dilation, k_scale_from_light_speed,
-    time_dilation,
+    dst_gravity_step_at, k_scale_from_light_speed, newtonian_gravity_pair,
 };
 use dst_math::spacetime::{
     Spacetime, momentum_from_velocity, position_delta_from_momentum, rapidity_from_momentum,
@@ -145,18 +144,14 @@ fn newtonian_velocity_update(particles: &mut [Particle], delta_seconds: f64) {
         .par_iter_mut()
         .enumerate()
         .for_each(|(i, particle)| {
+            let pos_i = particle.position;
             let mut acceleration = DVec3::ZERO;
-            for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
-                if i == j {
+            for (j, &pos_j) in positions.iter().enumerate() {
+                if j == i {
                     continue;
                 }
-                let diff = pos_j - particle.position;
-                let r_squared = diff.length_squared();
-                if r_squared < EPSILON {
-                    continue;
-                }
-                let accel_magnitude = time_g * mass_j / r_squared;
-                acceleration += accel_magnitude * diff.normalize();
+                acceleration +=
+                    newtonian_gravity_pair(pos_i, pos_j, masses[j], G, time_g, EPSILON).1;
             }
             particle.velocity += acceleration;
         });
@@ -171,27 +166,19 @@ fn dst_gravity_velocity_update(particles: &mut [Particle], delta_seconds: f64, k
         .par_iter_mut()
         .enumerate()
         .for_each(|(i, particle)| {
-            let phi = gravitational_potential_at(i, &positions, &masses, G, EPSILON);
-            let lambda_eff = k_scale * phi;
-            let dilation = time_dilation(lambda_eff);
-            let gravity_sign = gravity_sign_from_time_dilation(dilation);
-
-            let mut acceleration = DVec3::ZERO;
-            for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
-                if i == j {
-                    continue;
-                }
-                let diff = pos_j - particle.position;
-                let r_squared = diff.length_squared();
-                if r_squared < EPSILON {
-                    continue;
-                }
-                let accel_magnitude = time_g * mass_j / r_squared;
-                acceleration += accel_magnitude * diff.normalize();
-            }
-            particle.velocity += gravity_sign * acceleration;
+            let (velocity_delta, lambda_eff, proper_time_delta) = dst_gravity_step_at(
+                i,
+                &positions,
+                &masses,
+                G,
+                time_g,
+                k_scale,
+                EPSILON,
+                delta_seconds,
+            );
+            particle.velocity += velocity_delta;
             particle.lambda_eff = lambda_eff;
-            particle.proper_time += delta_seconds * dilation;
+            particle.proper_time += proper_time_delta;
         });
 }
 

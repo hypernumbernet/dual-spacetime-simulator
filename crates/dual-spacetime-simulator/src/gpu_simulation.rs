@@ -210,8 +210,8 @@ impl GpuParticleSimulation {
 
     /// Records compute dispatches that advance `steps` simulation steps on the GPU.
     ///
-    /// Each step runs phase 0 (position integration) then phase 1 (velocity update),
-    /// and for DST gravity an additional phase 2 (time delay update).
+    /// Each step runs phase 0 (position integration) then phase 1 (velocity update).
+    /// DstGravity folds time-delay into phase 1 in a single neighbor pass.
     /// keeping the GPU step count in lockstep with the simulation frame counter.
     /// `scale` is only consulted for the relativistic simulation types.
     pub fn dispatch(
@@ -233,11 +233,10 @@ impl GpuParticleSimulation {
             gravity_dt: (G * delta_seconds) as f32,
             epsilon: EPSILON_F32,
             light_speed_per_scale,
-            k_scale: 2.0 / (light_speed_per_scale * light_speed_per_scale),
+            k_scale: (2.0 / (light_speed_per_scale * light_speed_per_scale)),
             sim_type: simulation_type.gpu_code(),
             phase: 0,
         };
-        let dst_gravity = simulation_type == SimulationType::DstGravity;
         let workgroups = (self.particle_count + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
 
         unsafe {
@@ -269,21 +268,6 @@ impl GpuParticleSimulation {
                     workgroups,
                     ComputePushConstants { phase: 1, ..step },
                 );
-
-                if dst_gravity {
-                    shader_rw_barrier(
-                        &self.device,
-                        command_buffer,
-                        vk::PipelineStageFlags::COMPUTE_SHADER,
-                        vk::PipelineStageFlags::COMPUTE_SHADER,
-                    );
-
-                    self.dispatch_phase(
-                        command_buffer,
-                        workgroups,
-                        ComputePushConstants { phase: 2, ..step },
-                    );
-                }
 
                 // Between steps the next dispatch reads the buffer in COMPUTE again;
                 // only the final step hands the data off to the vertex stage.

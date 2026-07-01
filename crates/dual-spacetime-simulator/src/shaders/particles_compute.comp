@@ -81,19 +81,32 @@ vec3 lorentz_position_delta(vec3 rapidity, float ct) {
     return xyz * (ct / t);
 }
 
-// Port of dst-math::gravity::gravitational_potential_at (linear softening).
-float gravitational_potential(uint i) {
+// Port of dst-math::gravity::dst_gravity_step_at (single pass over neighbors).
+void dst_gravity_velocity_update(uint i) {
     float g = pc.gravity_dt / pc.delta_seconds;
-    float phi = 0.0;
     vec3 pos_i = particles[i].position.xyz;
+    float phi = 0.0;
+    vec3 acceleration = vec3(0.0);
+
     for (uint j = 0u; j < pc.particle_count; ++j) {
         if (i == j) {
             continue;
         }
-        float r = length(particles[j].position.xyz - pos_i) + pc.epsilon;
-        phi -= g * particles[j].attrs.x / r;
+        vec3 diff = particles[j].position.xyz - pos_i;
+        float distance_sq = dot(diff, diff);
+        float distance = sqrt(distance_sq);
+        phi -= g * particles[j].attrs.x / (distance + pc.epsilon);
+        if (distance_sq >= pc.epsilon) {
+            acceleration += pc.gravity_dt * particles[j].attrs.x / distance_sq * (diff / distance);
+        }
     }
-    return phi;
+
+    float lambda_eff = pc.k_scale * phi;
+    float dilation = cos(lambda_eff);
+    float gravity_sign = dilation < 0.0 ? -1.0 : 1.0;
+    particles[i].attrs.z = lambda_eff;
+    particles[i].attrs.y += pc.delta_seconds * dilation;
+    particles[i].velocity.xyz += gravity_sign * acceleration;
 }
 
 void main() {
@@ -117,37 +130,8 @@ void main() {
         return;
     }
 
-    if (pc.phase == 2u) {
-        if (pc.sim_type != SIM_DST_GRAVITY) {
-            return;
-        }
-        float lambda_eff = particles[i].attrs.z;
-        particles[i].attrs.y += pc.delta_seconds * cos(lambda_eff);
-        return;
-    }
-
     if (pc.sim_type == SIM_DST_GRAVITY) {
-        float phi = gravitational_potential(i);
-        float lambda_eff = pc.k_scale * phi;
-        float dilation = cos(lambda_eff);
-        float gravity_sign = dilation < 0.0 ? -1.0 : 1.0;
-        particles[i].attrs.z = lambda_eff;
-
-        vec3 acceleration = vec3(0.0);
-        vec3 pos_i = particles[i].position.xyz;
-        for (uint j = 0u; j < pc.particle_count; ++j) {
-            if (i == j) {
-                continue;
-            }
-            vec3 diff = particles[j].position.xyz - pos_i;
-            float r_squared = dot(diff, diff);
-            if (r_squared < pc.epsilon) {
-                continue;
-            }
-            float accel_magnitude = pc.gravity_dt * particles[j].attrs.x / r_squared;
-            acceleration += accel_magnitude * normalize(diff);
-        }
-        particles[i].velocity.xyz += gravity_sign * acceleration;
+        dst_gravity_velocity_update(i);
         return;
     }
 
