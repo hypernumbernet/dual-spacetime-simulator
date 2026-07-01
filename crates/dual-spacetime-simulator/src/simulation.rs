@@ -6,6 +6,7 @@ use std::sync::{Arc, RwLock};
 use crate::object_input::ObjectInput;
 use crate::particle_snapshot::ParticleSnapshot;
 use crate::ui_state::SimulationType;
+use dst_math::gravity::dst_gravity_velocity_delta;
 use dst_math::spacetime::{
     Spacetime, momentum_from_velocity, position_delta_from_momentum, rapidity_from_momentum,
     velocity_from_momentum,
@@ -252,11 +253,43 @@ impl SimulationEngine for SimulationLorentzTransformation {
 }
 
 impl SimulationEngine for SimulationDstGravity {
-    /// Stub: DST gravity physics is not implemented yet.
-    fn update_velocities(&mut self, _delta_seconds: f64) {}
+    /// Advances positions using current velocities.
+    fn advance_time(&mut self, delta_seconds: f64) {
+        self.particles.par_iter_mut().for_each(|particle| {
+            particle.position += particle.velocity * delta_seconds;
+        });
+    }
 
-    /// Stub: DST gravity physics is not implemented yet.
-    fn advance_time(&mut self, _delta_seconds: f64) {}
+    /// Updates velocities from pairwise momentum exchange mapped through S³ Ln.
+    fn update_velocities(&mut self, delta_seconds: f64) {
+        let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
+        let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
+        let light_speed_sim = LIGHT_SPEED / self.scale;
+
+        self.particles
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(i, particle)| {
+                let mass_i = particle.mass;
+                let mut delta_v = DVec3::ZERO;
+                for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
+                    if i == j {
+                        continue;
+                    }
+                    let diff = pos_j - particle.position;
+                    delta_v += dst_gravity_velocity_delta(
+                        mass_i,
+                        mass_j,
+                        diff,
+                        G,
+                        light_speed_sim,
+                        delta_seconds,
+                        EPSILON,
+                    );
+                }
+                particle.velocity += delta_v;
+            });
+    }
 }
 
 impl SimulationEngine for SimulationState {

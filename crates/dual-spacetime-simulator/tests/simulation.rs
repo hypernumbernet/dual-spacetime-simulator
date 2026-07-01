@@ -4,6 +4,7 @@ use dual_spacetime_simulator::simulation::{
     max_subluminal_speed_m_s,
 };
 use dual_spacetime_simulator::ui_state::SimulationType as UiSimType;
+use dst_math::gravity::dst_gravity_velocity_delta;
 use glam::DVec3;
 
 fn total_energy(particles: &[Particle]) -> f64 {
@@ -212,6 +213,172 @@ fn remove_particle_at_deletes_index_and_shifts_remaining() {
     assert_eq!(mgr.particle_count(), 1);
     assert!(mgr.remove_particle_at(0));
     assert_eq!(mgr.particle_count(), 0);
+}
+
+fn dst_gravity_manager(particles: Vec<Particle>, scale: f64) -> SimulationManager {
+    SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(
+            dual_spacetime_simulator::simulation::SimulationState::DstGravity(
+                dual_spacetime_simulator::simulation::SimulationDstGravity { particles, scale },
+            ),
+        )),
+    }
+}
+
+#[test]
+fn dst_gravity_weak_field_attracts_via_update() {
+    let mass = 1.0e24;
+    let scale = 1e10;
+    let mgr = dst_gravity_manager(
+        vec![
+            Particle::from_kinematics(DVec3::ZERO, DVec3::ZERO, mass, [1.0; 4]),
+            Particle::from_kinematics(
+                DVec3::new(1.0e11, 0.0, 0.0),
+                DVec3::ZERO,
+                mass,
+                [1.0; 4],
+            ),
+        ],
+        scale,
+    );
+    let v0 = mgr.particles()[0].velocity;
+    mgr.advance(1.0);
+    let dv = mgr.particles()[0].velocity - v0;
+    assert!(dv.x > 0.0, "weak field should attract: dv={dv:?}");
+    assert!(dv.is_finite());
+}
+
+#[test]
+fn dst_gravity_strong_field_repels_via_update() {
+    let mass = 1.0e30;
+    let scale = 1.0;
+    let mgr = dst_gravity_manager(
+        vec![
+            Particle::from_kinematics(DVec3::ZERO, DVec3::ZERO, mass, [1.0; 4]),
+            Particle::from_kinematics(
+                DVec3::new(1.0e5, 0.0, 0.0),
+                DVec3::ZERO,
+                mass,
+                [1.0; 4],
+            ),
+        ],
+        scale,
+    );
+    let v0 = mgr.particles()[0].velocity;
+    mgr.advance(1.0);
+    let dv = mgr.particles()[0].velocity - v0;
+    assert!(dv.x < 0.0, "strong field should repel: dv={dv:?}");
+    assert!(dv.is_finite());
+
+    let light_speed_sim = LIGHT_SPEED / scale;
+    let expected = dst_gravity_velocity_delta(
+        mass,
+        mass,
+        DVec3::new(1.0e5, 0.0, 0.0),
+        G,
+        light_speed_sim,
+        1.0,
+        dual_spacetime_simulator::simulation::EPSILON,
+    );
+    assert!((dv - expected).length() < 1e-6 * expected.length().max(1.0));
+}
+
+#[test]
+fn dst_gravity_torsion_star_vertical_oscillation() {
+    let central_mass = 1.0e30;
+    let shell_mass = 1.0e24;
+    let scale = 1.0;
+    let light_speed_sim = LIGHT_SPEED / scale;
+    // Begin inside the repulsive shell, then let weak-field attraction at larger y pull it back.
+    let offset_y = 2.0e5;
+    let mgr = dst_gravity_manager(
+        vec![
+            Particle::from_kinematics(DVec3::ZERO, DVec3::ZERO, central_mass, [1.0; 4]),
+            Particle::from_kinematics(
+                DVec3::new(0.0, offset_y, 0.0),
+                DVec3::ZERO,
+                shell_mass,
+                [0.8, 0.8, 1.0, 1.0],
+            ),
+        ],
+        scale,
+    );
+
+    let initial_dv = dst_gravity_velocity_delta(
+        shell_mass,
+        central_mass,
+        DVec3::new(0.0, -offset_y, 0.0),
+        G,
+        light_speed_sim,
+        1.0,
+        dual_spacetime_simulator::simulation::EPSILON,
+    );
+    assert!(
+        initial_dv.y > 0.0,
+        "shell should start in the repulsive layer: initial_dv={initial_dv:?}"
+    );
+
+    let mut sign_changes = 0;
+    let mut last_sign = 0.0f64;
+    let mut saw_positive_vy = false;
+    let mut saw_negative_vy = false;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for _ in 0..30_000 {
+        mgr.advance(1e-3);
+        let shell = &mgr.particles()[1];
+        assert!(shell.position.y.is_finite());
+        min_y = min_y.min(shell.position.y);
+        max_y = max_y.max(shell.position.y);
+        let vy = shell.velocity.y;
+        if vy > 0.0 {
+            saw_positive_vy = true;
+        }
+        if vy < 0.0 {
+            saw_negative_vy = true;
+        }
+        let sign = vy.signum();
+        if sign != 0.0 && last_sign != 0.0 && sign != last_sign {
+            sign_changes += 1;
+        }
+        if sign != 0.0 {
+            last_sign = sign;
+        }
+    }
+    assert!(
+        saw_positive_vy && saw_negative_vy,
+        "shell should move up under repulsion and fall back under attraction (vy signs, y=[{min_y:.3e}, {max_y:.3e}])"
+    );
+    assert!(
+        sign_changes >= 1,
+        "vertical bounce should reverse velocity at least once (sign_changes={sign_changes}, y=[{min_y:.3e}, {max_y:.3e}])"
+    );
+    assert!(
+        min_y > 0.0 && max_y > offset_y,
+        "repulsion should push the shell outward before attraction pulls it back (y=[{min_y:.3e}, {max_y:.3e}])"
+    );
+}
+
+#[test]
+fn dst_gravity_random_sphere_stays_finite_short_run() {
+    let scale = dual_spacetime_simulator::simulation::DEFAULT_WORLD_SCALE;
+    let ic = ObjectInput::RandomSphere {
+        scale,
+        radius: 1e10,
+        mass_range: (1e29, 1e31),
+        velocity_std: 1e6,
+    };
+    let state = SimulationManager::create_simulation(ic, UiSimType::DstGravity, 16, scale);
+    let mgr = SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(state)),
+    };
+    for frame in 1..=25 {
+        mgr.advance(10.0);
+        for p in mgr.particles() {
+            assert!(p.position.x.is_finite(), "diverged frame {frame} pos={:?}", p.position);
+            assert!(p.velocity.x.is_finite());
+        }
+    }
 }
 
 #[test]
