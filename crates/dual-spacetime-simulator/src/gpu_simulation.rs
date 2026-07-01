@@ -43,7 +43,12 @@ impl GpuParticle {
                 kinematic.z as f32,
                 0.0,
             ],
-            attrs: [particle.mass as f32, 0.0, 0.0, 0.0],
+            attrs: [
+                particle.mass as f32,
+                particle.proper_time as f32,
+                particle.lambda_eff as f32,
+                0.0,
+            ],
             color: particle.color,
         }
     }
@@ -87,6 +92,8 @@ impl GpuParticle {
             momentum,
             mass,
             color: self.color,
+            proper_time: self.attrs[1] as f64,
+            lambda_eff: self.attrs[2] as f64,
         }
     }
 }
@@ -99,6 +106,7 @@ struct ComputePushConstants {
     gravity_dt: f32,
     epsilon: f32,
     light_speed_per_scale: f32,
+    k_scale: f32,
     sim_type: u32,
     phase: u32,
 }
@@ -203,6 +211,7 @@ impl GpuParticleSimulation {
     /// Records compute dispatches that advance `steps` simulation steps on the GPU.
     ///
     /// Each step runs phase 0 (position integration) then phase 1 (velocity update),
+    /// and for DST gravity an additional phase 2 (time delay update).
     /// keeping the GPU step count in lockstep with the simulation frame counter.
     /// `scale` is only consulted for the relativistic simulation types.
     pub fn dispatch(
@@ -217,15 +226,18 @@ impl GpuParticleSimulation {
             return;
         }
 
+        let light_speed_per_scale = (LIGHT_SPEED / scale) as f32;
         let step = ComputePushConstants {
             particle_count: self.particle_count,
             delta_seconds: delta_seconds as f32,
             gravity_dt: (G * delta_seconds) as f32,
             epsilon: EPSILON_F32,
-            light_speed_per_scale: (LIGHT_SPEED / scale) as f32,
+            light_speed_per_scale,
+            k_scale: 2.0 / (light_speed_per_scale * light_speed_per_scale),
             sim_type: simulation_type.gpu_code(),
             phase: 0,
         };
+        let dst_gravity = simulation_type == SimulationType::DstGravity;
         let workgroups = (self.particle_count + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
 
         unsafe {
@@ -257,6 +269,21 @@ impl GpuParticleSimulation {
                     workgroups,
                     ComputePushConstants { phase: 1, ..step },
                 );
+
+                if dst_gravity {
+                    shader_rw_barrier(
+                        &self.device,
+                        command_buffer,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                    );
+
+                    self.dispatch_phase(
+                        command_buffer,
+                        workgroups,
+                        ComputePushConstants { phase: 2, ..step },
+                    );
+                }
 
                 // Between steps the next dispatch reads the buffer in COMPUTE again;
                 // only the final step hands the data off to the vertex stage.

@@ -6,7 +6,7 @@ layout(local_size_x = 64) in;
 struct Particle {
     vec4 position;
     vec4 velocity;
-    vec4 attrs;
+    vec4 attrs; // x: mass, y: proper_time, z: lambda_eff
     vec4 color;
 };
 
@@ -20,6 +20,7 @@ layout(push_constant) uniform PushConstants {
     float gravity_dt;
     float epsilon;
     float light_speed_per_scale; // c / scale
+    float k_scale;               // 2 / c_sim² for DST gravity time delay
     uint sim_type;               // 0:Normal 1:SpeedOfLightLimit 2:Lorentz 3:DstGravity
     uint phase;
 } pc;
@@ -60,69 +61,6 @@ vec3 position_delta_from_momentum(vec3 momentum, float mass, float c, float dt) 
     return momentum * (mass * dt / denom);
 }
 
-// Port of dst-math::spacetime::Spacetime::velocities.
-vec3 velocities_from_rapidity(vec3 versor_angle, float speed_of_light) {
-    float a = dot(versor_angle, versor_angle);
-    if (a == 0.0) {
-        return vec3(0.0);
-    }
-    float beta = tanh(a);
-    float v = beta * speed_of_light / a;
-    return v * versor_angle;
-}
-
-// Port of dst-math::gravity::s3_log_from_rotation_angle.
-vec3 s3_log_from_rotation_angle(float angle, vec3 axis) {
-    float axis_len = length(axis);
-    if (axis_len < 1e-30 || abs(angle) < 1e-30) {
-        return vec3(0.0);
-    }
-    vec3 unit = axis / axis_len;
-    float half_angle = 0.5 * angle;
-    if (half_angle >= 1.5707963267948966) {
-        return -unit * half_angle;
-    }
-    return unit * half_angle;
-}
-
-// Port of dst-math::gravity::unit_quaternion_ln.
-vec3 unit_quaternion_ln(float rotation_angle, vec3 momentum_axis) {
-    return s3_log_from_rotation_angle(rotation_angle, momentum_axis);
-}
-
-// Port of dst-math::gravity::dst_gravity_velocity_delta.
-vec3 dst_gravity_velocity_delta(
-    float mass_i,
-    float mass_j,
-    vec3 diff,
-    float g,
-    float light_speed,
-    float delta_seconds,
-    float epsilon
-) {
-    float distance_sq = dot(diff, diff);
-    if (mass_i <= 0.0 || mass_j <= 0.0) {
-        return vec3(0.0);
-    }
-    float r_soft_sq = distance_sq + epsilon * epsilon;
-    if (r_soft_sq <= 0.0) {
-        return vec3(0.0);
-    }
-    float distance = sqrt(r_soft_sq);
-    if (distance < 1e-30) {
-        return vec3(0.0);
-    }
-    vec3 impulse = diff * (g * mass_i * mass_j / r_soft_sq * delta_seconds / distance);
-    vec3 rapidity = rapidity_from_momentum(impulse, mass_i, light_speed);
-    float theta = dot(rapidity, rapidity);
-    if (theta < 1e-30) {
-        return vec3(0.0);
-    }
-    vec3 axis = rapidity / theta;
-    vec3 xi = unit_quaternion_ln(theta, axis);
-    return velocities_from_rapidity(2.0 * xi, light_speed);
-}
-
 // Applies apply_lorentz_transform_by_rapidity to Spacetime::from_t(ct) and
 // returns the resulting spatial displacement (st.xyz * tau). Mirrors the CPU
 // length_squared() convention used in dst-math.
@@ -143,6 +81,21 @@ vec3 lorentz_position_delta(vec3 rapidity, float ct) {
     return xyz * (ct / t);
 }
 
+// Port of dst-math::gravity::gravitational_potential_at (linear softening).
+float gravitational_potential(uint i) {
+    float g = pc.gravity_dt / pc.delta_seconds;
+    float phi = 0.0;
+    vec3 pos_i = particles[i].position.xyz;
+    for (uint j = 0u; j < pc.particle_count; ++j) {
+        if (i == j) {
+            continue;
+        }
+        float r = length(particles[j].position.xyz - pos_i) + pc.epsilon;
+        phi -= g * particles[j].attrs.x / r;
+    }
+    return phi;
+}
+
 void main() {
     uint i = gl_GlobalInvocationID.x;
     if (i >= pc.particle_count) {
@@ -151,9 +104,7 @@ void main() {
 
     if (pc.phase == 0u) {
         vec3 vel = particles[i].velocity.xyz;
-        if (pc.sim_type == SIM_DST_GRAVITY) {
-            particles[i].position.xyz += vel * pc.delta_seconds;
-        } else if (pc.sim_type == SIM_LORENTZ) {
+        if (pc.sim_type == SIM_LORENTZ) {
             float ct = pc.delta_seconds * pc.light_speed_per_scale;
             particles[i].position.xyz += lorentz_position_delta(vel, ct);
         } else if (pc.sim_type == SIM_SPEED_OF_LIGHT_LIMIT) {
@@ -166,30 +117,37 @@ void main() {
         return;
     }
 
-    if (pc.sim_type == SIM_DST_GRAVITY) {
-        vec3 pos_i = particles[i].position.xyz;
-        float mass_i = particles[i].attrs.x;
-        float g = pc.gravity_dt / pc.delta_seconds;
-        float light_speed_sim = pc.light_speed_per_scale;
-        vec3 delta_v = vec3(0.0);
+    if (pc.phase == 2u) {
+        if (pc.sim_type != SIM_DST_GRAVITY) {
+            return;
+        }
+        float lambda_eff = particles[i].attrs.z;
+        particles[i].attrs.y += pc.delta_seconds * cos(lambda_eff);
+        return;
+    }
 
+    if (pc.sim_type == SIM_DST_GRAVITY) {
+        float phi = gravitational_potential(i);
+        float lambda_eff = pc.k_scale * phi;
+        float dilation = cos(lambda_eff);
+        float gravity_sign = dilation < 0.0 ? -1.0 : 1.0;
+        particles[i].attrs.z = lambda_eff;
+
+        vec3 acceleration = vec3(0.0);
+        vec3 pos_i = particles[i].position.xyz;
         for (uint j = 0u; j < pc.particle_count; ++j) {
             if (i == j) {
                 continue;
             }
             vec3 diff = particles[j].position.xyz - pos_i;
-            delta_v += dst_gravity_velocity_delta(
-                mass_i,
-                particles[j].attrs.x,
-                diff,
-                g,
-                light_speed_sim,
-                pc.delta_seconds,
-                pc.epsilon
-            );
+            float r_squared = dot(diff, diff);
+            if (r_squared < pc.epsilon) {
+                continue;
+            }
+            float accel_magnitude = pc.gravity_dt * particles[j].attrs.x / r_squared;
+            acceleration += accel_magnitude * normalize(diff);
         }
-
-        particles[i].velocity.xyz += delta_v;
+        particles[i].velocity.xyz += gravity_sign * acceleration;
         return;
     }
 

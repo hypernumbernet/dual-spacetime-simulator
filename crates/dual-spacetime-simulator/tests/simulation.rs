@@ -1,10 +1,12 @@
 use dual_spacetime_simulator::object_input::ObjectInput;
 use dual_spacetime_simulator::simulation::{
-    G, LIGHT_SPEED, Particle, SimulationManager, clamp_scalar_speed_m_s, clamp_velocity_m_s,
+    EPSILON, G, LIGHT_SPEED, Particle, SimulationManager, clamp_scalar_speed_m_s, clamp_velocity_m_s,
     max_subluminal_speed_m_s,
 };
 use dual_spacetime_simulator::ui_state::SimulationType as UiSimType;
-use dst_math::gravity::dst_gravity_velocity_delta;
+use dst_math::gravity::{
+    gravitational_potential_at, k_scale_from_light_speed, time_dilation,
+};
 use glam::DVec3;
 
 fn total_energy(particles: &[Particle]) -> f64 {
@@ -249,114 +251,85 @@ fn dst_gravity_weak_field_attracts_via_update() {
 }
 
 #[test]
-fn dst_gravity_strong_field_repels_via_update() {
-    let mass = 1.0e30;
-    let scale = 1.0;
+fn dst_gravity_updates_proper_time_and_lambda_eff() {
+    let scale = 1e10_f64;
+    let central_mass = 1.989e30 / scale.powi(3);
+    let test_mass = 1.0e24 / scale.powi(3);
+    let separation = 1.496e11 / scale;
     let mgr = dst_gravity_manager(
         vec![
-            Particle::from_kinematics(DVec3::ZERO, DVec3::ZERO, mass, [1.0; 4]),
+            Particle::from_kinematics(DVec3::ZERO, DVec3::ZERO, central_mass, [1.0; 4]),
             Particle::from_kinematics(
-                DVec3::new(1.0e5, 0.0, 0.0),
+                DVec3::new(separation, 0.0, 0.0),
                 DVec3::ZERO,
-                mass,
+                test_mass,
                 [1.0; 4],
             ),
         ],
         scale,
     );
-    let v0 = mgr.particles()[0].velocity;
-    mgr.advance(1.0);
-    let dv = mgr.particles()[0].velocity - v0;
-    assert!(dv.x < 0.0, "strong field should repel: dv={dv:?}");
-    assert!(dv.is_finite());
 
+    let dt = 1.0;
+    mgr.advance(dt);
+    let test = &mgr.particles()[1];
     let light_speed_sim = LIGHT_SPEED / scale;
-    let expected = dst_gravity_velocity_delta(
-        mass,
-        mass,
-        DVec3::new(1.0e5, 0.0, 0.0),
-        G,
-        light_speed_sim,
-        1.0,
-        dual_spacetime_simulator::simulation::EPSILON,
+    let k_scale = k_scale_from_light_speed(light_speed_sim);
+    let expected_phi = -G * central_mass / (separation + EPSILON);
+    let expected_lambda = k_scale * expected_phi;
+    let expected_proper_time = dt * time_dilation(expected_lambda);
+
+    assert!(
+        (test.lambda_eff - expected_lambda).abs() < 1e-12 * expected_lambda.abs().max(1.0),
+        "lambda_eff={} expected={expected_lambda}",
+        test.lambda_eff
     );
-    assert!((dv - expected).length() < 1e-6 * expected.length().max(1.0));
+    assert!(
+        (test.proper_time - expected_proper_time).abs() < 1e-12 * expected_proper_time.abs().max(1.0),
+        "proper_time={} expected={expected_proper_time}",
+        test.proper_time
+    );
 }
 
 #[test]
-fn dst_gravity_torsion_star_vertical_oscillation() {
-    let central_mass = 1.0e30;
-    let shell_mass = 1.0e24;
-    let scale = 1.0;
+fn dst_gravity_reverses_when_time_dilation_negative() {
+    let scale = 1.0_f64;
+    let separation = 1.0;
     let light_speed_sim = LIGHT_SPEED / scale;
-    // Begin inside the repulsive shell, then let weak-field attraction at larger y pull it back.
-    let offset_y = 2.0e5;
+    let k_scale = k_scale_from_light_speed(light_speed_sim);
+    // lambda_eff = k_scale * (-G M / r) = -2.0 => cos(lambda_eff) < 0
+    let central_mass = 2.0 * separation / (k_scale * G);
+
     let mgr = dst_gravity_manager(
         vec![
             Particle::from_kinematics(DVec3::ZERO, DVec3::ZERO, central_mass, [1.0; 4]),
             Particle::from_kinematics(
-                DVec3::new(0.0, offset_y, 0.0),
+                DVec3::new(separation, 0.0, 0.0),
                 DVec3::ZERO,
-                shell_mass,
-                [0.8, 0.8, 1.0, 1.0],
+                1.0,
+                [1.0; 4],
             ),
         ],
         scale,
     );
 
-    let initial_dv = dst_gravity_velocity_delta(
-        shell_mass,
-        central_mass,
-        DVec3::new(0.0, -offset_y, 0.0),
-        G,
-        light_speed_sim,
-        1.0,
-        dual_spacetime_simulator::simulation::EPSILON,
-    );
+    let positions = vec![DVec3::ZERO, DVec3::new(separation, 0.0, 0.0)];
+    let masses = vec![central_mass, 1.0];
+    let phi = gravitational_potential_at(1, &positions, &masses, G, EPSILON);
+    let lambda_eff = k_scale * phi;
     assert!(
-        initial_dv.y > 0.0,
-        "shell should start in the repulsive layer: initial_dv={initial_dv:?}"
+        time_dilation(lambda_eff) < 0.0,
+        "expected negative dilation, lambda_eff={lambda_eff}"
     );
 
-    let mut sign_changes = 0;
-    let mut last_sign = 0.0f64;
-    let mut saw_positive_vy = false;
-    let mut saw_negative_vy = false;
-    let mut min_y = f64::INFINITY;
-    let mut max_y = f64::NEG_INFINITY;
-    for _ in 0..30_000 {
-        mgr.advance(1e-3);
-        let shell = &mgr.particles()[1];
-        assert!(shell.position.y.is_finite());
-        min_y = min_y.min(shell.position.y);
-        max_y = max_y.max(shell.position.y);
-        let vy = shell.velocity.y;
-        if vy > 0.0 {
-            saw_positive_vy = true;
-        }
-        if vy < 0.0 {
-            saw_negative_vy = true;
-        }
-        let sign = vy.signum();
-        if sign != 0.0 && last_sign != 0.0 && sign != last_sign {
-            sign_changes += 1;
-        }
-        if sign != 0.0 {
-            last_sign = sign;
-        }
-    }
+    let v0 = mgr.particles()[1].velocity;
+    mgr.advance(1.0);
+    let dv = mgr.particles()[1].velocity - v0;
     assert!(
-        saw_positive_vy && saw_negative_vy,
-        "shell should move up under repulsion and fall back under attraction (vy signs, y=[{min_y:.3e}, {max_y:.3e}])"
+        dv.x > 0.0,
+        "gravity should repel when cos(lambda_eff) < 0: dv={dv:?}, lambda_eff={}",
+        mgr.particles()[1].lambda_eff
     );
-    assert!(
-        sign_changes >= 1,
-        "vertical bounce should reverse velocity at least once (sign_changes={sign_changes}, y=[{min_y:.3e}, {max_y:.3e}])"
-    );
-    assert!(
-        min_y > 0.0 && max_y > offset_y,
-        "repulsion should push the shell outward before attraction pulls it back (y=[{min_y:.3e}, {max_y:.3e}])"
-    );
+    assert!(time_dilation(mgr.particles()[1].lambda_eff) < 0.0);
 }
 
 #[test]

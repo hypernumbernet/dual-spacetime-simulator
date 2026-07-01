@@ -6,7 +6,10 @@ use std::sync::{Arc, RwLock};
 use crate::object_input::ObjectInput;
 use crate::particle_snapshot::ParticleSnapshot;
 use crate::ui_state::SimulationType;
-use dst_math::gravity::dst_gravity_velocity_delta;
+use dst_math::gravity::{
+    gravitational_potential_at, gravity_sign_from_time_dilation, k_scale_from_light_speed,
+    time_dilation,
+};
 use dst_math::spacetime::{
     Spacetime, momentum_from_velocity, position_delta_from_momentum, rapidity_from_momentum,
     velocity_from_momentum,
@@ -108,6 +111,10 @@ pub struct Particle {
     pub momentum: DVec3,
     pub mass: f64,
     pub color: [f32; 4],
+    #[serde(default)]
+    pub proper_time: f64,
+    #[serde(default)]
+    pub lambda_eff: f64,
 }
 
 impl Particle {
@@ -124,35 +131,74 @@ impl Particle {
             momentum: DVec3::ZERO,
             mass,
             color,
+            proper_time: 0.0,
+            lambda_eff: 0.0,
         }
     }
+}
+
+fn newtonian_velocity_update(particles: &mut [Particle], delta_seconds: f64) {
+    let positions: Vec<DVec3> = particles.iter().map(|p| p.position).collect();
+    let masses: Vec<f64> = particles.iter().map(|p| p.mass).collect();
+    let time_g = G * delta_seconds;
+    particles
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(i, particle)| {
+            let mut acceleration = DVec3::ZERO;
+            for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
+                if i == j {
+                    continue;
+                }
+                let diff = pos_j - particle.position;
+                let r_squared = diff.length_squared();
+                if r_squared < EPSILON {
+                    continue;
+                }
+                let accel_magnitude = time_g * mass_j / r_squared;
+                acceleration += accel_magnitude * diff.normalize();
+            }
+            particle.velocity += acceleration;
+        });
+}
+
+fn dst_gravity_velocity_update(particles: &mut [Particle], delta_seconds: f64, k_scale: f64) {
+    let positions: Vec<DVec3> = particles.iter().map(|p| p.position).collect();
+    let masses: Vec<f64> = particles.iter().map(|p| p.mass).collect();
+    let time_g = G * delta_seconds;
+
+    particles
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(i, particle)| {
+            let phi = gravitational_potential_at(i, &positions, &masses, G, EPSILON);
+            let lambda_eff = k_scale * phi;
+            let dilation = time_dilation(lambda_eff);
+            let gravity_sign = gravity_sign_from_time_dilation(dilation);
+
+            let mut acceleration = DVec3::ZERO;
+            for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
+                if i == j {
+                    continue;
+                }
+                let diff = pos_j - particle.position;
+                let r_squared = diff.length_squared();
+                if r_squared < EPSILON {
+                    continue;
+                }
+                let accel_magnitude = time_g * mass_j / r_squared;
+                acceleration += accel_magnitude * diff.normalize();
+            }
+            particle.velocity += gravity_sign * acceleration;
+            particle.lambda_eff = lambda_eff;
+            particle.proper_time += delta_seconds * dilation;
+        });
 }
 
 impl SimulationEngine for SimulationNormal {
     /// Applies Newtonian gravity to update velocities for all particles.
     fn update_velocities(&mut self, delta_seconds: f64) {
-        let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
-        let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
-        let time_g = G * delta_seconds;
-        self.particles
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(i, particle)| {
-                let mut acceleration = DVec3::ZERO;
-                for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
-                    if i == j {
-                        continue;
-                    }
-                    let diff = pos_j - particle.position;
-                    let r_squared = diff.length_squared();
-                    if r_squared < EPSILON {
-                        continue;
-                    }
-                    let accel_magnitude = time_g * mass_j / r_squared;
-                    acceleration += accel_magnitude * diff.normalize();
-                }
-                particle.velocity += acceleration;
-            });
+        newtonian_velocity_update(&mut self.particles, delta_seconds);
     }
 
     /// Advances positions using current velocities under classical kinematics.
@@ -260,35 +306,10 @@ impl SimulationEngine for SimulationDstGravity {
         });
     }
 
-    /// Updates velocities from pairwise momentum exchange mapped through S³ Ln.
+    /// Applies sign-flipped Newtonian gravity when dτ/dt < 0, then updates time delay state.
     fn update_velocities(&mut self, delta_seconds: f64) {
-        let positions: Vec<DVec3> = self.particles.iter().map(|p| p.position).collect();
-        let masses: Vec<f64> = self.particles.iter().map(|p| p.mass).collect();
-        let light_speed_sim = LIGHT_SPEED / self.scale;
-
-        self.particles
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(i, particle)| {
-                let mass_i = particle.mass;
-                let mut delta_v = DVec3::ZERO;
-                for (j, (&pos_j, &mass_j)) in positions.iter().zip(masses.iter()).enumerate() {
-                    if i == j {
-                        continue;
-                    }
-                    let diff = pos_j - particle.position;
-                    delta_v += dst_gravity_velocity_delta(
-                        mass_i,
-                        mass_j,
-                        diff,
-                        G,
-                        light_speed_sim,
-                        delta_seconds,
-                        EPSILON,
-                    );
-                }
-                particle.velocity += delta_v;
-            });
+        let k_scale = k_scale_from_light_speed(LIGHT_SPEED / self.scale);
+        dst_gravity_velocity_update(&mut self.particles, delta_seconds, k_scale);
     }
 }
 
@@ -452,6 +473,8 @@ impl SimulationManager {
                 momentum: p.momentum,
                 mass: p.mass,
                 color: p.color,
+                proper_time: p.proper_time,
+                lambda_eff: p.lambda_eff,
             })
             .collect()
     }
@@ -473,6 +496,8 @@ impl SimulationManager {
                     momentum,
                     mass: p.mass,
                     color: p.color,
+                    proper_time: p.proper_time,
+                    lambda_eff: p.lambda_eff,
                 }
             })
             .collect()

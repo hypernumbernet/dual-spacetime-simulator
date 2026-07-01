@@ -437,6 +437,7 @@ fn particle_info_window(ctx: &egui::Context, uis: &mut UiState, selection: Optio
         _ => "Speed |v|",
     };
     let show_momentum = simulation_type == SimulationType::SpeedOfLightLimit;
+    let show_time_delay = simulation_type == SimulationType::DstGravity;
 
     let position = particle.position;
     let velocity = particle.velocity;
@@ -514,6 +515,22 @@ fn particle_info_window(ctx: &egui::Context, uis: &mut UiState, selection: Optio
                 ui.horizontal(|ui| {
                     label_normal(ui, "|p|");
                     label_indicator(ui, &format_particle_info_value(momentum.length()));
+                });
+            }
+            if show_time_delay {
+                ui.separator();
+                label_normal(ui, "DST Time Delay");
+                ui.horizontal(|ui| {
+                    label_normal(ui, "Proper Time τ");
+                    label_indicator(ui, &format_particle_info_value(particle.proper_time));
+                });
+                ui.horizontal(|ui| {
+                    label_normal(ui, "λ_eff");
+                    label_indicator(ui, &format_particle_info_value(particle.lambda_eff));
+                });
+                ui.horizontal(|ui| {
+                    label_normal(ui, "dτ/dt = cos(λ_eff)");
+                    label_indicator(ui, &format_particle_info_value(particle.lambda_eff.cos()));
                 });
             }
             ui.separator();
