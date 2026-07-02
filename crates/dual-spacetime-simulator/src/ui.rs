@@ -242,6 +242,12 @@ pub fn draw_ui(
         |window| window,
         |ui| {
             combobox_simulation_type(ui, &mut uis);
+            if uis.simulation_type == SimulationType::DstGalaxy {
+                label_normal(
+                    ui,
+                    "DST Galaxy physics is not implemented yet. Particles remain stationary after Reset.",
+                );
+            }
             ui.separator();
             computing_unit_gpu_checkbox(ui, &mut uis);
             ui.separator();

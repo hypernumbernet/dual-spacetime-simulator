@@ -95,11 +95,17 @@ pub struct SimulationDstGravity {
     pub scale: f64,
 }
 
+pub struct SimulationDstGalaxy {
+    pub particles: Vec<Particle>,
+    pub scale: f64,
+}
+
 pub enum SimulationState {
     Normal(SimulationNormal),
     SpeedOfLightLimit(SimulationSpeedOfLightLimit),
     LorentzTransformation(SimulationLorentzTransformation),
     DstGravity(SimulationDstGravity),
+    DstGalaxy(SimulationDstGalaxy),
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq)]
@@ -300,6 +306,14 @@ impl SimulationEngine for SimulationDstGravity {
     }
 }
 
+impl SimulationEngine for SimulationDstGalaxy {
+    /// No-op until S³ galaxy gravity is implemented.
+    fn advance_time(&mut self, _delta_seconds: f64) {}
+
+    /// No-op until S³ galaxy gravity is implemented.
+    fn update_velocities(&mut self, _delta_seconds: f64) {}
+}
+
 impl SimulationEngine for SimulationState {
     /// Delegates velocity updates to the active simulation variant.
     fn update_velocities(&mut self, delta_seconds: f64) {
@@ -308,6 +322,7 @@ impl SimulationEngine for SimulationState {
             SimulationState::SpeedOfLightLimit(s) => s.update_velocities(delta_seconds),
             SimulationState::LorentzTransformation(s) => s.update_velocities(delta_seconds),
             SimulationState::DstGravity(s) => s.update_velocities(delta_seconds),
+            SimulationState::DstGalaxy(s) => s.update_velocities(delta_seconds),
         }
     }
 
@@ -318,6 +333,7 @@ impl SimulationEngine for SimulationState {
             SimulationState::SpeedOfLightLimit(s) => s.advance_time(delta_seconds),
             SimulationState::LorentzTransformation(s) => s.advance_time(delta_seconds),
             SimulationState::DstGravity(s) => s.advance_time(delta_seconds),
+            SimulationState::DstGalaxy(s) => s.advance_time(delta_seconds),
         }
     }
 }
@@ -358,6 +374,15 @@ impl Default for SimulationDstGravity {
     }
 }
 
+impl Default for SimulationDstGalaxy {
+    fn default() -> Self {
+        Self {
+            particles: vec![],
+            scale: DEFAULT_WORLD_SCALE,
+        }
+    }
+}
+
 impl SimulationState {
     /// Returns an immutable reference to particles in the active simulation variant.
     pub fn particles(&self) -> &Vec<Particle> {
@@ -366,6 +391,7 @@ impl SimulationState {
             SimulationState::SpeedOfLightLimit(s) => &s.particles,
             SimulationState::LorentzTransformation(s) => &s.particles,
             SimulationState::DstGravity(s) => &s.particles,
+            SimulationState::DstGalaxy(s) => &s.particles,
         }
     }
 
@@ -375,6 +401,7 @@ impl SimulationState {
             SimulationState::SpeedOfLightLimit(s) => &mut s.particles,
             SimulationState::LorentzTransformation(s) => &mut s.particles,
             SimulationState::DstGravity(s) => &mut s.particles,
+            SimulationState::DstGalaxy(s) => &mut s.particles,
         }
     }
 }
@@ -445,6 +472,9 @@ impl SimulationManager {
             }
             SimulationType::DstGravity => {
                 SimulationState::DstGravity(SimulationDstGravity { particles, scale })
+            }
+            SimulationType::DstGalaxy => {
+                SimulationState::DstGalaxy(SimulationDstGalaxy { particles, scale })
             }
         }
     }

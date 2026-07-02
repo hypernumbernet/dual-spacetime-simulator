@@ -220,15 +220,17 @@ pub enum SimulationType {
     SpeedOfLightLimit = 1,
     LorentzTransformation = 2,
     DstGravity = 3,
+    DstGalaxy = 4,
 }
 
 impl SimulationType {
     /// All simulation types in UI display order (must match `repr(u32)` discriminants).
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Normal,
         Self::SpeedOfLightLimit,
         Self::LorentzTransformation,
         Self::DstGravity,
+        Self::DstGalaxy,
     ];
 
     /// Returns the discriminant passed to the GPU compute shader push constants.
@@ -248,7 +250,7 @@ impl SimulationType {
 
     /// Whether particle velocities must stay below light speed.
     pub fn requires_subluminal_velocity(self) -> bool {
-        !matches!(self, Self::Normal)
+        !matches!(self, Self::Normal | Self::DstGalaxy)
     }
 }
 
@@ -278,6 +280,7 @@ impl std::fmt::Display for SimulationType {
             SimulationType::SpeedOfLightLimit => "Speed of Light Limit",
             SimulationType::LorentzTransformation => "Lorentz Transformation",
             SimulationType::DstGravity => "DST Gravity",
+            SimulationType::DstGalaxy => "DST Galaxy",
         };
         write!(f, "{}", text)
     }
