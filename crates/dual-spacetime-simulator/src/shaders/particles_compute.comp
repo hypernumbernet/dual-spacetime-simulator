@@ -71,12 +71,10 @@ vec4 quaternion_exp(vec3 v) {
     return vec4(u * sin(vmag), cos(vmag));
 }
 
+// No small-angle cutoff: scenes far below the galaxy radius live at tiny |v|,
+// and zeroing them would collapse every particle to the origin.
 vec3 orientation_to_display(vec4 q, float r_galaxy) {
-    vec3 v = quaternion_log(q);
-    if (dot(v, v) < 1e-20) {
-        return vec3(0.0);
-    }
-    return v * (2.0 * r_galaxy / PI);
+    return quaternion_log(q) * (2.0 * r_galaxy / PI);
 }
 
 // Gravity in the Ln-projected display chart: distance and direction both come

@@ -730,7 +730,6 @@ fn object_input_type_conditions(ui: &mut egui::Ui, uis: &mut UiState) {
         ObjectInputType::RandomSphere => condition_random_sphere(ui, uis),
         ObjectInputType::RandomCube => condition_random_cube(ui, uis),
         ObjectInputType::SpiralDisk => condition_spiral_disk(ui, uis),
-        ObjectInputType::GalaxyBaryonDisk => condition_galaxy_baryon_disk(ui, uis),
         ObjectInputType::EllipticalOrbit => condition_elliptical_orbit(ui, uis),
         ObjectInputType::SingleParticle => condition_single_particle(ui, uis),
     }
@@ -778,22 +777,6 @@ fn condition_random_cube(ui: &mut egui::Ui, uis: &mut UiState) {
 fn condition_spiral_disk(ui: &mut egui::Ui, uis: &mut UiState) {
     dragvalue_normal(ui, &mut uis.spiral_disk.disk_radius, 1e7, "Disk Radius (m)");
     dragvalue_normal(ui, &mut uis.spiral_disk.mass_fixed, 1e20, "Mass Fixed (kg)");
-}
-
-/// Renders parameter controls for the galaxy baryon disk object input (zero initial velocity).
-fn condition_galaxy_baryon_disk(ui: &mut egui::Ui, uis: &mut UiState) {
-    dragvalue_normal(
-        ui,
-        &mut uis.galaxy_baryon_disk.disk_radius,
-        1e19,
-        "Disk Radius (m)",
-    );
-    dragvalue_normal(
-        ui,
-        &mut uis.galaxy_baryon_disk.mass_fixed,
-        1e35,
-        "Mass Fixed (kg)",
-    );
 }
 
 /// Renders start-date controls for the solar-system object input.

@@ -1,21 +1,24 @@
-use dual_spacetime_simulator::object_input::{ObjectInput, ObjectInputType};
+use dual_spacetime_simulator::object_input::ObjectInput;
 use dual_spacetime_simulator::simulation::{G, LY, Particle, SimulationManager};
 use dual_spacetime_simulator::ui_state::SimulationType as UiSimType;
 use dst_math::s3_galaxy::{GALAXY_RADIUS_LY, galaxy_radius_sim};
 use glam::DVec3;
 
-fn galaxy_baryon_input(scale: f64) -> ObjectInput {
-    ObjectInput::GalaxyBaryonDisk {
+/// Galaxy-scale baryon sphere: DST galaxy runs excite disk structure from
+/// sphere/cube initial conditions, so no disk-shaped preset exists.
+fn galaxy_sphere_input(scale: f64) -> ObjectInput {
+    ObjectInput::RandomSphere {
         scale,
-        disk_radius: GALAXY_RADIUS_LY * LY * 0.9,
-        mass_fixed: 1e36,
+        radius: GALAXY_RADIUS_LY * LY * 0.9,
+        mass_range: (1e35, 1e36),
+        velocity_std: 1.0,
     }
 }
 
 #[test]
 fn dst_galaxy_particles_move_after_advance() {
     let scale = 1e20;
-    let ic = galaxy_baryon_input(scale);
+    let ic = galaxy_sphere_input(scale);
     let mgr = SimulationManager {
         state: std::sync::Arc::new(std::sync::RwLock::new(
             SimulationManager::create_simulation(ic, UiSimType::DstGalaxy, 32, scale),
@@ -36,16 +39,22 @@ fn dst_galaxy_particles_move_after_advance() {
 }
 
 #[test]
-fn galaxy_baryon_disk_initial_velocity_is_zero() {
+fn dst_galaxy_sphere_input_derives_orientations() {
+    // Non-disk initial conditions must get their S³ coordinate derived from
+    // the 3D position when the DstGalaxy simulation is built.
     let scale = 1e20;
-    let ic = galaxy_baryon_input(scale);
+    let ic = galaxy_sphere_input(scale);
     let state = SimulationManager::create_simulation(ic, UiSimType::DstGalaxy, 16, scale);
     let particles = match state {
         dual_spacetime_simulator::simulation::SimulationState::DstGalaxy(s) => s.particles,
         _ => panic!("expected DstGalaxy"),
     };
+    assert!(!particles.is_empty());
     for p in &particles {
-        assert!(p.velocity.length_squared() < 1e-30);
+        assert!(p.orientation.w.is_finite());
+        let has_rotation =
+            p.orientation.x != 0.0 || p.orientation.y != 0.0 || p.orientation.z != 0.0;
+        assert!(has_rotation, "orientation must be derived from position");
     }
 }
 
@@ -79,7 +88,7 @@ pub fn measure_rotation_curve(particles: &[Particle], r_galaxy: f64) -> Vec<(f64
 #[test]
 fn rotation_curve_smoke_after_short_evolution() {
     let scale = 1e20;
-    let ic = galaxy_baryon_input(scale);
+    let ic = galaxy_sphere_input(scale);
     let mgr = SimulationManager {
         state: std::sync::Arc::new(std::sync::RwLock::new(
             SimulationManager::create_simulation(ic, UiSimType::DstGalaxy, 64, scale),
@@ -94,16 +103,6 @@ fn rotation_curve_smoke_after_short_evolution() {
         curve.len() >= 2,
         "expected at least two radial bins in rotation curve"
     );
-}
-
-#[test]
-fn galaxy_baryon_disk_object_input_type_generates_orientations() {
-    let input = ObjectInputType::GalaxyBaryonDisk.to_object_input(1e20);
-    let sim = input.generate_particles(8);
-    for p in &sim.particles {
-        assert!(p.orientation.w.is_finite());
-        assert!(p.velocity.length_squared() < 1e-30);
-    }
 }
 
 #[test]
@@ -154,7 +153,7 @@ fn dst_galaxy_zero_particles_advance_is_noop() {
     let mgr = SimulationManager {
         state: std::sync::Arc::new(std::sync::RwLock::new(
             SimulationManager::create_simulation(
-                galaxy_baryon_input(1e20),
+                galaxy_sphere_input(1e20),
                 UiSimType::DstGalaxy,
                 0,
                 1e20,

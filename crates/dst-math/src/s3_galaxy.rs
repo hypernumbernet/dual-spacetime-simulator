@@ -129,20 +129,14 @@ pub fn integrate_orientation(q: DQuat, velocity: DVec3, r_galaxy: f64, dt: f64) 
 }
 
 /// Builds unit quaternion from a 3D position: v = p·π/(2R), q = exp(v).
+/// No small-angle cutoff: exp/log stay exact inverses even for scenes far
+/// below the galaxy radius (|v| ≪ 1).
 pub fn orientation_from_disk_position(pos: DVec3, r_galaxy: f64) -> DQuat {
     let scale = std::f64::consts::PI / (2.0 * r_galaxy);
-    let v = pos * scale;
-    if v.length_squared() < 1e-40 {
-        return DQuat::IDENTITY;
-    }
-    quaternion_exp(v)
+    quaternion_exp(pos * scale)
 }
 
 /// Maps S³ orientation back to 3D display position: p = Ln(q)·(2R/π).
 pub fn orientation_to_display_position(q: DQuat, r_galaxy: f64) -> DVec3 {
-    let v = quaternion_log(q);
-    if v.length_squared() < 1e-40 {
-        return DVec3::ZERO;
-    }
-    v * (2.0 * r_galaxy / std::f64::consts::PI)
+    quaternion_log(q) * (2.0 * r_galaxy / std::f64::consts::PI)
 }

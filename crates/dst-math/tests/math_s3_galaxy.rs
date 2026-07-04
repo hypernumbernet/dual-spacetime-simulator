@@ -108,6 +108,20 @@ fn integrate_orientation_matches_linear_motion_near_field() {
 }
 
 #[test]
+fn display_roundtrip_small_scene_far_below_galaxy_radius() {
+    // A solar-system-sized scene (|v| ~ 3e-11) must survive the S³ round trip;
+    // small-angle cutoffs here would collapse every particle to the origin.
+    let r_galaxy = galaxy_radius_sim(1e10);
+    let pos = DVec3::new(1.0, -0.5, 0.25);
+    let q = orientation_from_disk_position(pos, r_galaxy);
+    let restored = orientation_to_display_position(q, r_galaxy);
+    assert!(
+        (restored - pos).length() < 1e-9 * pos.length(),
+        "expected {pos:?}, got {restored:?}"
+    );
+}
+
+#[test]
 fn radial_distance_at_galaxy_radius() {
     let r_galaxy = galaxy_radius_sim(1e20);
     let v = DVec3::new(PI * 0.5, 0.0, 0.0);

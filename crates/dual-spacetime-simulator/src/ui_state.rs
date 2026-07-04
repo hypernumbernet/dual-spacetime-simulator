@@ -23,6 +23,8 @@ pub const INPUT_PANEL_WIDTH: f32 = 220.0;
 pub const BASE_SCALE_DRAG_SPEED: f64 = 0.01;
 /// Default satellite count for Satellite Orbit reset (Earth is added separately).
 pub const DEFAULT_SATELLITE_COUNT: u32 = 1000;
+/// Default world scale (m per sim unit) applied when switching to DST Galaxy.
+pub const DST_GALAXY_DEFAULT_BASE_SCALE: f64 = 1e20;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum BaseScaleUnit {
@@ -423,7 +425,6 @@ pub struct UiState {
     pub random_sphere: RandomSphereParameters,
     pub random_cube: RandomCubeParameters,
     pub spiral_disk: SpiralDiskParameters,
-    pub galaxy_baryon_disk: GalaxyBaryonDiskParameters,
     pub solar_system: SolarSystemParameters,
     pub satellite_orbit: SatelliteOrbitParameters,
     pub elliptical_orbit: EllipticalOrbitParameters,
@@ -490,7 +491,6 @@ impl Default for UiState {
             random_sphere: RandomSphereParameters::default(),
             random_cube: RandomCubeParameters::default(),
             spiral_disk: SpiralDiskParameters::default(),
-            galaxy_baryon_disk: GalaxyBaryonDiskParameters::default(),
             solar_system: SolarSystemParameters::default(),
             satellite_orbit: SatelliteOrbitParameters::default(),
             elliptical_orbit: EllipticalOrbitParameters::default(),
@@ -629,8 +629,9 @@ impl UiState {
             self.disable_add_until_reset();
             self.clamp_velocity_inputs();
             if self.simulation_type == SimulationType::DstGalaxy {
-                self.object_input_type = ObjectInputType::GalaxyBaryonDisk;
-                self.set_base_scale(ObjectInputType::GalaxyBaryonDisk.default_base_scale());
+                // Galaxy-scale world so scenes span a meaningful fraction of the
+                // fixed galaxy radius R; initial conditions stay user-selectable.
+                self.set_base_scale(DST_GALAXY_DEFAULT_BASE_SCALE);
             }
         }
     }
@@ -870,16 +871,6 @@ impl UiState {
                     mass_fixed,
                 };
             }
-            ObjectInput::GalaxyBaryonDisk {
-                disk_radius,
-                mass_fixed,
-                ..
-            } => {
-                self.galaxy_baryon_disk = GalaxyBaryonDiskParameters {
-                    disk_radius,
-                    mass_fixed,
-                };
-            }
             ObjectInput::EllipticalOrbit {
                 central_mass,
                 planetary_mass,
@@ -919,7 +910,6 @@ impl UiState {
             ObjectInputType::RandomSphere => self.random_sphere.to_object_input(scale),
             ObjectInputType::RandomCube => self.random_cube.to_object_input(scale),
             ObjectInputType::SpiralDisk => self.spiral_disk.to_object_input(scale),
-            ObjectInputType::GalaxyBaryonDisk => self.galaxy_baryon_disk.to_object_input(scale),
             ObjectInputType::EllipticalOrbit => self.elliptical_orbit.to_object_input(scale),
             ObjectInputType::SingleParticle => self.single_particle.to_object_input(scale),
         }
@@ -1062,40 +1052,6 @@ impl Default for SpiralDiskParameters {
             mass_fixed,
             ..
         } = ObjectInputType::SpiralDisk.to_object_input(1e7)
-        {
-            Self {
-                disk_radius,
-                mass_fixed,
-            }
-        } else {
-            panic!();
-        }
-    }
-}
-
-pub struct GalaxyBaryonDiskParameters {
-    pub disk_radius: f64,
-    pub mass_fixed: f64,
-}
-
-impl GalaxyBaryonDiskParameters {
-    /// Builds a galaxy baryon disk object input from panel parameters.
-    pub fn to_object_input(&self, scale: f64) -> ObjectInput {
-        ObjectInput::GalaxyBaryonDisk {
-            scale,
-            disk_radius: self.disk_radius,
-            mass_fixed: self.mass_fixed,
-        }
-    }
-}
-
-impl Default for GalaxyBaryonDiskParameters {
-    fn default() -> Self {
-        if let ObjectInput::GalaxyBaryonDisk {
-            disk_radius,
-            mass_fixed,
-            ..
-        } = ObjectInputType::GalaxyBaryonDisk.to_object_input(1e20)
         {
             Self {
                 disk_radius,
