@@ -1,5 +1,8 @@
-use crate::simulation::{Particle, SimulationNormal};
+use crate::simulation::{Particle, SimulationNormal, LY};
 use crate::solar_system_data::{UpdateDataError, update_datafiles_with_log};
+use dst_math::s3_galaxy::{
+    galaxy_radius_sim, orientation_from_disk_position, orientation_to_display_position,
+};
 use glam::DVec3;
 use rand::Rng;
 use rand_distr::Distribution;
@@ -98,6 +101,11 @@ pub enum ObjectInput {
         disk_radius: f64,
         mass_fixed: f64,
     },
+    GalaxyBaryonDisk {
+        scale: f64,
+        disk_radius: f64,
+        mass_fixed: f64,
+    },
     SolarSystem {
         scale: f64,
         start_year: i32,
@@ -134,6 +142,7 @@ impl std::fmt::Display for ObjectInput {
             ObjectInput::RandomSphere { .. } => write!(f, "Random Sphere"),
             ObjectInput::RandomCube { .. } => write!(f, "Random Cube"),
             ObjectInput::SpiralDisk { .. } => write!(f, "Spiral Disk"),
+            ObjectInput::GalaxyBaryonDisk { .. } => write!(f, "Galaxy Baryon Disk"),
             ObjectInput::SolarSystem { .. } => write!(f, "Solar System"),
             ObjectInput::SatelliteOrbit { .. } => write!(f, "Satellite Orbit"),
             ObjectInput::EllipticalOrbit { .. } => write!(f, "Elliptical Orbit"),
@@ -147,6 +156,7 @@ pub enum ObjectInputType {
     RandomSphere,
     RandomCube,
     SpiralDisk,
+    GalaxyBaryonDisk,
     EllipticalOrbit,
     SingleParticle,
 }
@@ -165,6 +175,7 @@ impl std::fmt::Display for ObjectInputType {
             ObjectInputType::RandomSphere => write!(f, "Random Sphere"),
             ObjectInputType::RandomCube => write!(f, "Random Cube"),
             ObjectInputType::SpiralDisk => write!(f, "Spiral Disk"),
+            ObjectInputType::GalaxyBaryonDisk => write!(f, "Galaxy Baryon Disk"),
             ObjectInputType::EllipticalOrbit => write!(f, "Elliptical Orbit"),
             ObjectInputType::SingleParticle => write!(f, "Single Particle"),
         }
@@ -173,10 +184,11 @@ impl std::fmt::Display for ObjectInputType {
 
 impl ObjectInputType {
     /// All add-type variants in UI display order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::RandomSphere,
         Self::RandomCube,
         Self::SpiralDisk,
+        Self::GalaxyBaryonDisk,
         Self::EllipticalOrbit,
         Self::SingleParticle,
     ];
@@ -185,7 +197,7 @@ impl ObjectInputType {
     pub fn uses_add_particle_count(self) -> bool {
         matches!(
             self,
-            Self::RandomSphere | Self::RandomCube | Self::SpiralDisk
+            Self::RandomSphere | Self::RandomCube | Self::SpiralDisk | Self::GalaxyBaryonDisk
         )
     }
 
@@ -195,6 +207,7 @@ impl ObjectInputType {
             ObjectInputType::RandomSphere => 1e10,
             ObjectInputType::RandomCube => 1e10,
             ObjectInputType::SpiralDisk => 1e7,
+            ObjectInputType::GalaxyBaryonDisk => 1e20,
             ObjectInputType::EllipticalOrbit => 1.5e11,
             ObjectInputType::SingleParticle => 1e10,
         }
@@ -223,6 +236,11 @@ impl ObjectInputType {
                 scale,
                 disk_radius: 1.5e7 * factor,
                 mass_fixed: 1e20 * factor_cubed,
+            },
+            ObjectInputType::GalaxyBaryonDisk => ObjectInput::GalaxyBaryonDisk {
+                scale,
+                disk_radius: dst_math::s3_galaxy::GALAXY_RADIUS_LY * LY * 0.9 * factor,
+                mass_fixed: 1e36 * factor_cubed,
             },
             ObjectInputType::EllipticalOrbit => ObjectInput::EllipticalOrbit {
                 scale,
@@ -386,6 +404,7 @@ impl ObjectInput {
             ObjectInput::RandomSphere { scale, .. } => *scale,
             ObjectInput::RandomCube { scale, .. } => *scale,
             ObjectInput::SpiralDisk { scale, .. } => *scale,
+            ObjectInput::GalaxyBaryonDisk { scale, .. } => *scale,
             ObjectInput::SolarSystem { scale, .. } => *scale,
             ObjectInput::SatelliteOrbit { scale, .. } => *scale,
             ObjectInput::EllipticalOrbit { scale, .. } => *scale,
@@ -401,6 +420,7 @@ impl ObjectInput {
             ObjectInput::RandomSphere { radius, .. } => radius * correct.m,
             ObjectInput::RandomCube { cube_size, .. } => cube_size * 0.5 * correct.m,
             ObjectInput::SpiralDisk { disk_radius, .. } => disk_radius * correct.m,
+            ObjectInput::GalaxyBaryonDisk { disk_radius, .. } => disk_radius * correct.m,
             ObjectInput::SolarSystem { .. } => crate::simulation::AU * correct.m,
             ObjectInput::SatelliteOrbit {
                 orbit_altitude_max, ..
@@ -468,8 +488,22 @@ impl ObjectInput {
     ) -> SimulationNormal {
         let mut sim = self.generate_particles(particle_count);
         let offset = Self::add_center_world_position(center, base_scale);
-        for particle in &mut sim.particles {
-            particle.position += offset;
+        match self {
+            ObjectInput::GalaxyBaryonDisk { scale, .. } => {
+                let r_galaxy = galaxy_radius_sim(*scale);
+                for particle in &mut sim.particles {
+                    particle.position += offset;
+                    particle.orientation =
+                        orientation_from_disk_position(particle.position, r_galaxy);
+                    particle.position =
+                        orientation_to_display_position(particle.orientation, r_galaxy);
+                }
+            }
+            _ => {
+                for particle in &mut sim.particles {
+                    particle.position += offset;
+                }
+            }
         }
         sim
     }
@@ -574,6 +608,38 @@ impl ObjectInput {
                         };
                         let color = Self::basic_particle_color(i);
                         Particle::from_kinematics(pos, vel, mass, color)
+                    })
+                    .collect();
+                SimulationNormal { particles }
+            }
+            ObjectInput::GalaxyBaryonDisk {
+                scale,
+                disk_radius,
+                mass_fixed,
+            } => {
+                let correct = Correct::new(*scale);
+                let radius = (*disk_radius).abs() * correct.m;
+                let radius = if radius <= 0.1 { 0.1 } else { radius };
+                let mass = *mass_fixed * correct.kg;
+                let r_galaxy = galaxy_radius_sim(*scale);
+                let normal = rand_distr::Normal::new(0.0, radius * 0.05).unwrap();
+                let particles = (0..particle_count)
+                    .map(|i| {
+                        let theta = (i as f64) * TAU / (particle_count as f64);
+                        let r = rng.random_range(radius * 0.1..radius);
+                        let y_thickness = normal.sample(&mut rng);
+                        let pos = DVec3 {
+                            x: r * theta.cos(),
+                            y: y_thickness,
+                            z: r * theta.sin(),
+                        };
+                        let color = Self::basic_particle_color(i);
+                        let mut particle = Particle::from_kinematics(pos, DVec3::ZERO, mass, color);
+                        particle.orientation =
+                            orientation_from_disk_position(pos, r_galaxy);
+                        particle.position =
+                            orientation_to_display_position(particle.orientation, r_galaxy);
+                        particle
                     })
                     .collect();
                 SimulationNormal { particles }

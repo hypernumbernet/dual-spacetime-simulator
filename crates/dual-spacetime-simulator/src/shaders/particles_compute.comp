@@ -23,6 +23,7 @@ layout(push_constant) uniform PushConstants {
     float k_scale;               // 2 / c_sim² for DST gravity time delay
     uint sim_type;               // 0:Normal 1:SpeedOfLightLimit 2:Lorentz 3:DstGravity 4:DstGalaxy
     uint phase;
+    float galaxy_radius;         // R in sim units (DstGalaxy only)
 } pc;
 
 const uint SIM_NORMAL = 0u;
@@ -30,6 +31,109 @@ const uint SIM_SPEED_OF_LIGHT_LIMIT = 1u;
 const uint SIM_LORENTZ = 2u;
 const uint SIM_DST_GRAVITY = 3u;
 const uint SIM_DST_GALAXY = 4u;
+const float PI = 3.14159265358979323846;
+
+// --- S³ galaxy (DstGalaxy): quaternion log/exp and Ln-space gravity ---
+
+vec4 quat_mul(vec4 a, vec4 b) {
+    return vec4(
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z
+    );
+}
+
+vec4 quat_conjugate(vec4 q) {
+    return vec4(-q.x, -q.y, -q.z, q.w);
+}
+
+vec4 quat_normalize(vec4 q) {
+    return q / length(q);
+}
+
+// atan2-based log map: keeps precision at small angles where acos(w) collapses.
+vec3 quaternion_log(vec4 q) {
+    float vnorm = length(q.xyz);
+    if (vnorm < 1e-30) {
+        return vec3(0.0);
+    }
+    float half_angle = atan(vnorm, q.w);
+    return q.xyz * (half_angle / vnorm);
+}
+
+vec4 quaternion_exp(vec3 v) {
+    float vmag = length(v);
+    if (vmag < 1e-30) {
+        return vec4(0.0, 0.0, 0.0, 1.0);
+    }
+    vec3 u = v / vmag;
+    return vec4(u * sin(vmag), cos(vmag));
+}
+
+vec3 orientation_to_display(vec4 q, float r_galaxy) {
+    vec3 v = quaternion_log(q);
+    if (dot(v, v) < 1e-20) {
+        return vec3(0.0);
+    }
+    return v * (2.0 * r_galaxy / PI);
+}
+
+vec3 galaxy_gravity_pair_ln(vec4 q_i, vec4 q_j, float mass_j) {
+    // Space-frame displacement i → j: q_j * q_i^-1 (matches the left-multiply integrator).
+    vec4 q_rel = quat_mul(q_j, quat_conjugate(q_i));
+    vec3 v = quaternion_log(q_rel);
+    float vmag = length(v);
+    if (vmag < 1e-30) {
+        return vec3(0.0);
+    }
+    float r = (2.0 * vmag / PI) * pc.galaxy_radius;
+    float r_eff = max(r, pc.epsilon);
+    // v points from i toward j: attractive (+v) within R, repulsive beyond R.
+    float sign = r > pc.galaxy_radius ? -1.0 : 1.0;
+    float accel_mag = sign * pc.gravity_dt * mass_j / (r_eff * r_eff);
+    return accel_mag * (v / vmag);
+}
+
+void dst_galaxy_advance(uint i) {
+    vec3 vel = particles[i].velocity.xyz;
+    vec4 q = vec4(
+        particles[i].attrs.y,
+        particles[i].attrs.z,
+        particles[i].attrs.w,
+        particles[i].position.w
+    );
+    // Linear velocity (sim units/s) → Ln-space displacement: Δv = vel·π/(2R)·dt,
+    // inverse of the display map p = Ln(q)·(2R/π).
+    vec4 delta = quaternion_exp(vel * (pc.delta_seconds * PI / (2.0 * pc.galaxy_radius)));
+    q = quat_normalize(quat_mul(delta, q));
+    particles[i].attrs.yzw = q.xyz;
+    particles[i].position.w = q.w;
+    particles[i].position.xyz = orientation_to_display(q, pc.galaxy_radius);
+}
+
+void dst_galaxy_velocity_update(uint i) {
+    vec4 q_i = vec4(
+        particles[i].attrs.y,
+        particles[i].attrs.z,
+        particles[i].attrs.w,
+        particles[i].position.w
+    );
+    vec3 acceleration = vec3(0.0);
+    for (uint j = 0u; j < pc.particle_count; ++j) {
+        if (i == j) {
+            continue;
+        }
+        vec4 q_j = vec4(
+            particles[j].attrs.y,
+            particles[j].attrs.z,
+            particles[j].attrs.w,
+            particles[j].position.w
+        );
+        acceleration += galaxy_gravity_pair_ln(q_i, q_j, particles[j].attrs.x);
+    }
+    particles[i].velocity.xyz += acceleration;
+}
 
 // Port of dst-math::spacetime::rapidity_from_momentum.
 vec3 rapidity_from_momentum(vec3 momentum, float mass, float c) {
@@ -117,6 +221,11 @@ void main() {
     }
 
     if (pc.sim_type == SIM_DST_GALAXY) {
+        if (pc.phase == 0u) {
+            dst_galaxy_advance(i);
+        } else {
+            dst_galaxy_velocity_update(i);
+        }
         return;
     }
 

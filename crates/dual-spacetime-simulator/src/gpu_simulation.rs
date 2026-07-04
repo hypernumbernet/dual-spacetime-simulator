@@ -1,8 +1,9 @@
 use crate::simulation::{EPSILON, G, LIGHT_SPEED, Particle};
 use crate::ui_state::SimulationType;
 use ash::vk;
+use dst_math::s3_galaxy::galaxy_radius_sim;
 use dst_math::spacetime::velocity_from_momentum;
-use glam::DVec3;
+use glam::{DQuat, DVec3};
 use gpu_allocator::vulkan::Allocator;
 use std::sync::{Arc, Mutex};
 use vulkanvil::{AllocatedBuffer, create_shader_module};
@@ -30,6 +31,29 @@ impl GpuParticle {
         } else {
             particle.velocity
         };
+        if simulation_type == SimulationType::DstGalaxy {
+            return Self {
+                position: [
+                    particle.position.x as f32,
+                    particle.position.y as f32,
+                    particle.position.z as f32,
+                    particle.orientation.w as f32,
+                ],
+                velocity: [
+                    kinematic.x as f32,
+                    kinematic.y as f32,
+                    kinematic.z as f32,
+                    0.0,
+                ],
+                attrs: [
+                    particle.mass as f32,
+                    particle.orientation.x as f32,
+                    particle.orientation.y as f32,
+                    particle.orientation.z as f32,
+                ],
+                color: particle.color,
+            };
+        }
         Self {
             position: [
                 particle.position.x as f32,
@@ -63,6 +87,31 @@ impl GpuParticle {
     }
 
     pub fn to_cpu(self, simulation_type: SimulationType, scale: f64) -> Particle {
+        if simulation_type == SimulationType::DstGalaxy {
+            return Particle {
+                position: DVec3::new(
+                    self.position[0] as f64,
+                    self.position[1] as f64,
+                    self.position[2] as f64,
+                ),
+                velocity: DVec3::new(
+                    self.velocity[0] as f64,
+                    self.velocity[1] as f64,
+                    self.velocity[2] as f64,
+                ),
+                momentum: DVec3::ZERO,
+                mass: self.attrs[0] as f64,
+                color: self.color,
+                proper_time: 0.0,
+                lambda_eff: 0.0,
+                orientation: DQuat::from_xyzw(
+                    self.attrs[1] as f64,
+                    self.attrs[2] as f64,
+                    self.attrs[3] as f64,
+                    self.position[3] as f64,
+                ),
+            };
+        }
         let mass = self.attrs[0] as f64;
         let momentum = if simulation_type.uses_momentum_particles() {
             DVec3::new(
@@ -94,6 +143,7 @@ impl GpuParticle {
             color: self.color,
             proper_time: self.attrs[1] as f64,
             lambda_eff: self.attrs[2] as f64,
+            orientation: DQuat::IDENTITY,
         }
     }
 }
@@ -109,6 +159,7 @@ struct ComputePushConstants {
     k_scale: f32,
     sim_type: u32,
     phase: u32,
+    galaxy_radius: f32,
 }
 
 pub struct GpuParticleSimulation {
@@ -227,6 +278,11 @@ impl GpuParticleSimulation {
         }
 
         let light_speed_per_scale = (LIGHT_SPEED / scale) as f32;
+        let galaxy_radius = if simulation_type == SimulationType::DstGalaxy {
+            galaxy_radius_sim(scale) as f32
+        } else {
+            0.0
+        };
         let step = ComputePushConstants {
             particle_count: self.particle_count,
             delta_seconds: delta_seconds as f32,
@@ -236,6 +292,7 @@ impl GpuParticleSimulation {
             k_scale: (2.0 / (light_speed_per_scale * light_speed_per_scale)),
             sim_type: simulation_type.gpu_code(),
             phase: 0,
+            galaxy_radius,
         };
         let workgroups = (self.particle_count + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
 

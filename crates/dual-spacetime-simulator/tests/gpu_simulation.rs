@@ -1,7 +1,7 @@
 use dual_spacetime_simulator::gpu_simulation::GpuParticle;
 use dual_spacetime_simulator::simulation::Particle;
 use dual_spacetime_simulator::ui_state::SimulationType;
-use glam::DVec3;
+use glam::{DQuat, DVec3};
 
 #[test]
 fn gpu_particle_matches_std430_vec4_layout() {
@@ -50,4 +50,22 @@ fn gpu_particle_from_display_sets_position_and_color_only() {
     assert_eq!(gpu.velocity, [0.0; 4]);
     assert_eq!(gpu.attrs, [0.0; 4]);
     assert_eq!(gpu.color, [0.2, 0.4, 0.6, 1.0]);
+}
+
+#[test]
+fn gpu_particle_dst_galaxy_roundtrip_preserves_quaternion() {
+    let mut particle = Particle::from_kinematics(
+        DVec3::new(1.0e18, 2.0e17, 0.0),
+        DVec3::new(1.0e-10, -2.0e-10, 0.0),
+        1.0e35,
+        [0.8, 0.2, 0.1, 1.0],
+    );
+    particle.orientation = DQuat::from_xyzw(0.1, 0.2, 0.3, 0.9).normalize();
+    let gpu = GpuParticle::from_cpu(&particle, SimulationType::DstGalaxy);
+    assert!((gpu.position[3] - particle.orientation.w as f32).abs() < 1e-6);
+    assert!((gpu.attrs[1] - particle.orientation.x as f32).abs() < 1e-6);
+    let restored = gpu.to_cpu(SimulationType::DstGalaxy, 1e20);
+    assert!((restored.orientation.x - particle.orientation.x).abs() < 1e-6);
+    assert!((restored.orientation.w - particle.orientation.w).abs() < 1e-6);
+    assert!((restored.mass - particle.mass).abs() / particle.mass < 1e-6);
 }

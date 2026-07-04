@@ -1,4 +1,4 @@
-use glam::DVec3;
+use glam::{DQuat, DVec3};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
@@ -8,6 +8,10 @@ use crate::particle_snapshot::ParticleSnapshot;
 use crate::ui_state::SimulationType;
 use dst_math::gravity::{
     dst_gravity_step_at, k_scale_from_light_speed, newtonian_gravity_pair,
+};
+use dst_math::s3_galaxy::{
+    galaxy_gravity_step_at, galaxy_radius_sim, integrate_orientation,
+    orientation_from_disk_position, orientation_to_display_position,
 };
 use dst_math::spacetime::{
     Spacetime, momentum_from_velocity, position_delta_from_momentum, rapidity_from_momentum,
@@ -98,6 +102,7 @@ pub struct SimulationDstGravity {
 pub struct SimulationDstGalaxy {
     pub particles: Vec<Particle>,
     pub scale: f64,
+    pub galaxy_radius: f64,
 }
 
 pub enum SimulationState {
@@ -106,6 +111,10 @@ pub enum SimulationState {
     LorentzTransformation(SimulationLorentzTransformation),
     DstGravity(SimulationDstGravity),
     DstGalaxy(SimulationDstGalaxy),
+}
+
+fn default_orientation() -> DQuat {
+    DQuat::IDENTITY
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq)]
@@ -120,6 +129,8 @@ pub struct Particle {
     pub proper_time: f64,
     #[serde(default)]
     pub lambda_eff: f64,
+    #[serde(default = "default_orientation")]
+    pub orientation: DQuat,
 }
 
 impl Particle {
@@ -138,6 +149,7 @@ impl Particle {
             color,
             proper_time: 0.0,
             lambda_eff: 0.0,
+            orientation: DQuat::IDENTITY,
         }
     }
 }
@@ -306,12 +318,51 @@ impl SimulationEngine for SimulationDstGravity {
     }
 }
 
-impl SimulationEngine for SimulationDstGalaxy {
-    /// No-op until S³ galaxy gravity is implemented.
-    fn advance_time(&mut self, _delta_seconds: f64) {}
+fn dst_galaxy_velocity_update(
+    particles: &mut [Particle],
+    delta_seconds: f64,
+    galaxy_radius: f64,
+) {
+    let orientations: Vec<DQuat> = particles.iter().map(|p| p.orientation).collect();
+    let masses: Vec<f64> = particles.iter().map(|p| p.mass).collect();
+    let time_g = G * delta_seconds;
 
-    /// No-op until S³ galaxy gravity is implemented.
-    fn update_velocities(&mut self, _delta_seconds: f64) {}
+    particles
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(i, particle)| {
+            let acceleration = galaxy_gravity_step_at(
+                i,
+                &orientations,
+                &masses,
+                galaxy_radius,
+                time_g,
+                EPSILON,
+            );
+            particle.velocity += acceleration;
+        });
+}
+
+impl SimulationEngine for SimulationDstGalaxy {
+    /// Integrates S³ orientations and updates display positions.
+    fn advance_time(&mut self, delta_seconds: f64) {
+        let galaxy_radius = self.galaxy_radius;
+        self.particles.par_iter_mut().for_each(|particle| {
+            particle.orientation = integrate_orientation(
+                particle.orientation,
+                particle.velocity,
+                galaxy_radius,
+                delta_seconds,
+            );
+            particle.position =
+                orientation_to_display_position(particle.orientation, galaxy_radius);
+        });
+    }
+
+    /// Applies Ln-space galaxy gravity to angular velocities.
+    fn update_velocities(&mut self, delta_seconds: f64) {
+        dst_galaxy_velocity_update(&mut self.particles, delta_seconds, self.galaxy_radius);
+    }
 }
 
 impl SimulationEngine for SimulationState {
@@ -376,9 +427,11 @@ impl Default for SimulationDstGravity {
 
 impl Default for SimulationDstGalaxy {
     fn default() -> Self {
+        let scale = DEFAULT_WORLD_SCALE;
         Self {
             particles: vec![],
-            scale: DEFAULT_WORLD_SCALE,
+            scale,
+            galaxy_radius: galaxy_radius_sim(scale),
         }
     }
 }
@@ -445,6 +498,19 @@ impl SimulationManager {
         if simulation_type.requires_subluminal_velocity() {
             clamp_particle_velocities_sim(&mut particles, scale);
         }
+        if simulation_type == SimulationType::DstGalaxy {
+            // Initial conditions that carry only 3D positions (identity orientation)
+            // need their S³ coordinate derived before the orientation integrator runs.
+            let r_galaxy = galaxy_radius_sim(scale);
+            for particle in particles.iter_mut() {
+                if particle.orientation == DQuat::IDENTITY && particle.position != DVec3::ZERO {
+                    particle.orientation =
+                        orientation_from_disk_position(particle.position, r_galaxy);
+                }
+                particle.position =
+                    orientation_to_display_position(particle.orientation, r_galaxy);
+            }
+        }
         if simulation_type.uses_rapidity_particles() {
             Self::convert_to_lorentz(particles, scale)
         } else if simulation_type.uses_momentum_particles() {
@@ -474,7 +540,11 @@ impl SimulationManager {
                 SimulationState::DstGravity(SimulationDstGravity { particles, scale })
             }
             SimulationType::DstGalaxy => {
-                SimulationState::DstGalaxy(SimulationDstGalaxy { particles, scale })
+                SimulationState::DstGalaxy(SimulationDstGalaxy {
+                    particles,
+                    scale,
+                    galaxy_radius: galaxy_radius_sim(scale),
+                })
             }
         }
     }
@@ -492,6 +562,7 @@ impl SimulationManager {
                 color: p.color,
                 proper_time: p.proper_time,
                 lambda_eff: p.lambda_eff,
+                orientation: p.orientation,
             })
             .collect()
     }
@@ -515,6 +586,7 @@ impl SimulationManager {
                     color: p.color,
                     proper_time: p.proper_time,
                     lambda_eff: p.lambda_eff,
+                    orientation: p.orientation,
                 }
             })
             .collect()
