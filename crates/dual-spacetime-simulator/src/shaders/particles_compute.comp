@@ -79,20 +79,18 @@ vec3 orientation_to_display(vec4 q, float r_galaxy) {
     return v * (2.0 * r_galaxy / PI);
 }
 
-vec3 galaxy_gravity_pair_ln(vec4 q_i, vec4 q_j, float mass_j) {
-    // Space-frame displacement i → j: q_j * q_i^-1 (matches the left-multiply integrator).
-    vec4 q_rel = quat_mul(q_j, quat_conjugate(q_i));
-    vec3 v = quaternion_log(q_rel);
-    float vmag = length(v);
-    if (vmag < 1e-30) {
+// Gravity in the Ln-projected display chart: distance and direction both come
+// from the projected positions p = Ln(q)*(2R/PI), preserving the S3 projection
+// distortion. Attractive within R, repulsive beyond R (DST sign reversal).
+vec3 galaxy_gravity_pair_chart(vec3 p_i, vec3 p_j, float mass_j) {
+    vec3 d = p_j - p_i;
+    float r = length(d);
+    if (r < 1e-30) {
         return vec3(0.0);
     }
-    float r = (2.0 * vmag / PI) * pc.galaxy_radius;
     float r_eff = max(r, pc.epsilon);
-    // v points from i toward j: attractive (+v) within R, repulsive beyond R.
     float sign = r > pc.galaxy_radius ? -1.0 : 1.0;
-    float accel_mag = sign * pc.gravity_dt * mass_j / (r_eff * r_eff);
-    return accel_mag * (v / vmag);
+    return (sign * pc.gravity_dt * mass_j / (r_eff * r_eff)) * (d / r);
 }
 
 void dst_galaxy_advance(uint i) {
@@ -113,24 +111,16 @@ void dst_galaxy_advance(uint i) {
 }
 
 void dst_galaxy_velocity_update(uint i) {
-    vec4 q_i = vec4(
-        particles[i].attrs.y,
-        particles[i].attrs.z,
-        particles[i].attrs.w,
-        particles[i].position.w
-    );
+    // position.xyz holds the Ln-projected display position, refreshed by
+    // dst_galaxy_advance (phase 0) before this phase runs.
+    vec3 p_i = particles[i].position.xyz;
     vec3 acceleration = vec3(0.0);
     for (uint j = 0u; j < pc.particle_count; ++j) {
         if (i == j) {
             continue;
         }
-        vec4 q_j = vec4(
-            particles[j].attrs.y,
-            particles[j].attrs.z,
-            particles[j].attrs.w,
-            particles[j].position.w
-        );
-        acceleration += galaxy_gravity_pair_ln(q_i, q_j, particles[j].attrs.x);
+        acceleration += galaxy_gravity_pair_chart(
+            p_i, particles[j].position.xyz, particles[j].attrs.x);
     }
     particles[i].velocity.xyz += acceleration;
 }

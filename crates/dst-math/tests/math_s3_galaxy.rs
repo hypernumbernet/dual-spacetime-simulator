@@ -50,27 +50,42 @@ fn near_field_pair_matches_newtonian() {
 }
 
 #[test]
-fn local_pair_far_from_identity_matches_newtonian() {
-    // A close pair anywhere on S³ (not just near identity) must feel Newtonian
-    // attraction along the space-frame displacement the integrator moves in.
+fn gravity_computed_in_projected_chart() {
+    // Gravity must act on the Ln-projected display positions (the on-screen
+    // coordinates), not on S³ geodesic quantities.
     let r_galaxy = 1000.0;
     let q_i = quaternion_exp(DVec3::new(0.4, 0.7, -0.2));
-    let d = DVec3::new(1.0, -2.0, 0.5).normalize();
-    let eps_ang = 1e-3;
-    let q_j = (quaternion_exp(d * eps_ang) * q_i).normalize();
+    let q_j = quaternion_exp(DVec3::new(0.5, 0.6, -0.1));
+    let p_i = orientation_to_display_position(q_i, r_galaxy);
+    let p_j = orientation_to_display_position(q_j, r_galaxy);
     let mass_j = 1.0e6;
     let a = galaxy_gravity_pair_ln(q_i, q_j, mass_j, r_galaxy, 1.0, 1e-12);
 
-    let r = 2.0 * eps_ang / PI * r_galaxy;
-    let expected_mag = mass_j / (r * r);
+    let d = p_j - p_i;
+    let expected = mass_j / d.length_squared() * d.normalize();
     assert!(
-        (a.length() - expected_mag).abs() < 1e-9 * expected_mag,
-        "expected |a| = {expected_mag}, got {}",
-        a.length()
+        (a - expected).length() < 1e-9 * expected.length(),
+        "expected chart-space {expected:?}, got {a:?}"
     );
+}
+
+#[test]
+fn chart_gravity_distorted_far_from_origin() {
+    // The projection distortion is the point of the model: for a close pair far
+    // from the origin, the chart-space force direction must deviate from the
+    // true S³ geodesic direction (while still pulling broadly toward j).
+    let r_galaxy = 1000.0;
+    let q_i = quaternion_exp(DVec3::new(0.4, 0.7, -0.2));
+    let d_geo = DVec3::new(1.0, -2.0, 0.5).normalize();
+    let eps_ang = 0.05;
+    let q_j = (quaternion_exp(d_geo * eps_ang) * q_i).normalize();
+    let a = galaxy_gravity_pair_ln(q_i, q_j, 1.0e6, r_galaxy, 1.0, 1e-12);
+
+    let alignment = a.normalize().dot(d_geo);
+    assert!(alignment > 0.0, "force should still point broadly toward j");
     assert!(
-        a.normalize().dot(d) > 1.0 - 1e-9,
-        "acceleration must point toward j along the space-frame displacement"
+        alignment < 1.0 - 1e-6,
+        "distortion vanished: chart force aligns exactly with the geodesic ({alignment})"
     );
 }
 

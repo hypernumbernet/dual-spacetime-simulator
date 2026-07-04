@@ -323,7 +323,9 @@ fn dst_galaxy_velocity_update(
     delta_seconds: f64,
     galaxy_radius: f64,
 ) {
-    let orientations: Vec<DQuat> = particles.iter().map(|p| p.orientation).collect();
+    // Gravity acts on the Ln-projected display positions (kept in sync with
+    // orientations by advance_time), so the projection distortion is preserved.
+    let positions: Vec<DVec3> = particles.iter().map(|p| p.position).collect();
     let masses: Vec<f64> = particles.iter().map(|p| p.mass).collect();
     let time_g = G * delta_seconds;
 
@@ -333,7 +335,7 @@ fn dst_galaxy_velocity_update(
         .for_each(|(i, particle)| {
             let acceleration = galaxy_gravity_step_at(
                 i,
-                &orientations,
+                &positions,
                 &masses,
                 galaxy_radius,
                 time_g,

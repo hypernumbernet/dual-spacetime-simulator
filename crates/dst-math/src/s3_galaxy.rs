@@ -57,7 +57,34 @@ pub fn radial_distance_ln(v: DVec3, r_galaxy: f64) -> f64 {
     (2.0 * v.length() / std::f64::consts::PI) * r_galaxy
 }
 
-/// Pairwise Ln-space gravity acceleration toward j (tangent space, per-unit-mass scaled by time_g).
+/// Pairwise gravity in the Ln-projected chart, from display positions
+/// p = Ln(q)·(2R/π). Both distance and direction are taken in the projected
+/// 3D space — NOT along the S³ geodesic — so the projection distortion of
+/// magnitude and direction feeds the dynamics untouched. Combined with the
+/// exp-map integrator on S³ this produces the DST distortion and chirality
+/// effects; near the origin the chart is flat and this reduces exactly to
+/// Newtonian gravity.
+pub fn galaxy_gravity_pair_chart(
+    p_i: DVec3,
+    p_j: DVec3,
+    mass_j: f64,
+    r_galaxy: f64,
+    time_g: f64,
+    epsilon: f64,
+) -> DVec3 {
+    let d = p_j - p_i;
+    let r = d.length();
+    if r == 0.0 {
+        return DVec3::ZERO;
+    }
+    let r_eff = r.max(epsilon);
+    // Attractive within R, repulsive beyond R (DST sign reversal).
+    let sign = if r > r_galaxy { -1.0 } else { 1.0 };
+    (sign * time_g * mass_j / (r_eff * r_eff)) * (d / r)
+}
+
+/// Quaternion wrapper over [`galaxy_gravity_pair_chart`]: projects both
+/// orientations to the display chart via the log map first.
 pub fn galaxy_gravity_pair_ln(
     q_i: DQuat,
     q_j: DQuat,
@@ -66,36 +93,29 @@ pub fn galaxy_gravity_pair_ln(
     time_g: f64,
     epsilon: f64,
 ) -> DVec3 {
-    let q_rel = relative_quaternion(q_i, q_j);
-    let v = quaternion_log(q_rel);
-    let vmag = v.length();
-    if vmag == 0.0 {
-        return DVec3::ZERO;
-    }
-    let r = radial_distance_ln(v, r_galaxy);
-    let r_eff = r.max(epsilon);
-    // v points from i toward j: attractive (+v̂) within R, repulsive beyond R.
-    let sign = if r > r_galaxy { -1.0 } else { 1.0 };
-    let accel_mag = sign * time_g * mass_j / (r_eff * r_eff);
-    accel_mag * (v / vmag)
+    let p_i = orientation_to_display_position(q_i, r_galaxy);
+    let p_j = orientation_to_display_position(q_j, r_galaxy);
+    galaxy_gravity_pair_chart(p_i, p_j, mass_j, r_galaxy, time_g, epsilon)
 }
 
-/// Total Ln-space gravity acceleration at particle i from all neighbors.
+/// Total chart-space gravity at particle i from all neighbors.
+/// `positions` are display positions p = Ln(q)·(2R/π), kept in sync with the
+/// orientations by the integrator.
 pub fn galaxy_gravity_step_at(
     i: usize,
-    orientations: &[DQuat],
+    positions: &[DVec3],
     masses: &[f64],
     r_galaxy: f64,
     time_g: f64,
     epsilon: f64,
 ) -> DVec3 {
-    let q_i = orientations[i];
-    orientations
+    let p_i = positions[i];
+    positions
         .iter()
         .enumerate()
         .filter(|(j, _)| *j != i)
-        .map(|(j, &q_j)| {
-            galaxy_gravity_pair_ln(q_i, q_j, masses[j], r_galaxy, time_g, epsilon)
+        .map(|(j, &p_j)| {
+            galaxy_gravity_pair_chart(p_i, p_j, masses[j], r_galaxy, time_g, epsilon)
         })
         .sum()
 }
