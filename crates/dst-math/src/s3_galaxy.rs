@@ -18,6 +18,7 @@ pub fn galaxy_radius_sim(scale_m: f64) -> f64 {
 
 /// Log map S³ → su(2) ≅ ℝ³. Does not force shortest-path branch selection.
 /// atan2-based: keeps full precision at small angles where acos(w) collapses to 0.
+#[inline]
 pub fn quaternion_log(q: DQuat) -> DVec3 {
     let xyz = DVec3::new(q.x, q.y, q.z);
     let vnorm = xyz.length();
@@ -30,18 +31,14 @@ pub fn quaternion_log(q: DQuat) -> DVec3 {
 }
 
 /// Exp map ℝ³ → S³. For v = (θ/2)·û, returns cos(θ/2) + sin(θ/2)·û.
+#[inline]
 pub fn quaternion_exp(v: DVec3) -> DQuat {
     let vmag = v.length();
     if vmag == 0.0 {
         return DQuat::IDENTITY;
     }
-    let u = v / vmag;
-    DQuat::from_xyzw(
-        u.x * vmag.sin(),
-        u.y * vmag.sin(),
-        u.z * vmag.sin(),
-        vmag.cos(),
-    )
+    let s = vmag.sin() / vmag;
+    DQuat::from_xyzw(v.x * s, v.y * s, v.z * s, vmag.cos())
 }
 
 /// Space-frame displacement quaternion from particle i to j: q_j · q_i⁻¹.
@@ -64,6 +61,7 @@ pub fn radial_distance_ln(v: DVec3, r_galaxy: f64) -> f64 {
 /// exp-map integrator on S³ this produces the DST distortion and chirality
 /// effects; near the origin the chart is flat and this reduces exactly to
 /// Newtonian gravity.
+#[inline]
 pub fn galaxy_gravity_pair_chart(
     p_i: DVec3,
     p_j: DVec3,
@@ -80,7 +78,7 @@ pub fn galaxy_gravity_pair_chart(
     let r_eff = r.max(epsilon);
     // Attractive within R, repulsive beyond R (DST sign reversal).
     let sign = if r > r_galaxy { -1.0 } else { 1.0 };
-    (sign * time_g * mass_j / (r_eff * r_eff)) * (d / r)
+    d * (sign * time_g * mass_j / (r_eff * r_eff * r))
 }
 
 /// Quaternion wrapper over [`galaxy_gravity_pair_chart`]: projects both
@@ -123,6 +121,7 @@ pub fn galaxy_gravity_step_at(
 /// Integrates orientation on S³ from a linear velocity in sim units per second:
 /// q ← exp(vel·π/(2R)·dt) · q. Inverse-consistent with the display map
 /// p = Ln(q)·(2R/π), so near-field motion satisfies Δp = vel·dt exactly.
+#[inline]
 pub fn integrate_orientation(q: DQuat, velocity: DVec3, r_galaxy: f64, dt: f64) -> DQuat {
     let v = velocity * (std::f64::consts::PI / (2.0 * r_galaxy) * dt);
     (quaternion_exp(v) * q).normalize()
@@ -131,12 +130,14 @@ pub fn integrate_orientation(q: DQuat, velocity: DVec3, r_galaxy: f64, dt: f64) 
 /// Builds unit quaternion from a 3D position: v = p·π/(2R), q = exp(v).
 /// No small-angle cutoff: exp/log stay exact inverses even for scenes far
 /// below the galaxy radius (|v| ≪ 1).
+#[inline]
 pub fn orientation_from_disk_position(pos: DVec3, r_galaxy: f64) -> DQuat {
     let scale = std::f64::consts::PI / (2.0 * r_galaxy);
     quaternion_exp(pos * scale)
 }
 
 /// Maps S³ orientation back to 3D display position: p = Ln(q)·(2R/π).
+#[inline]
 pub fn orientation_to_display_position(q: DQuat, r_galaxy: f64) -> DVec3 {
     quaternion_log(q) * (2.0 * r_galaxy / std::f64::consts::PI)
 }

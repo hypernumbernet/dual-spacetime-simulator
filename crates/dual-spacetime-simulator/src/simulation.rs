@@ -18,9 +18,11 @@ use dst_math::spacetime::{
     velocity_from_momentum,
 };
 
-pub const LIGHT_SPEED: f64 = 299_792_458.0; // Speed of light in meters per second
+// Speed of light and Julian light year: single source of truth in dst-math,
+// shared with the S³ galaxy radius so both sides can never drift apart.
+pub const LIGHT_SPEED: f64 = dst_math::s3_galaxy::LIGHT_SPEED;
 pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
-pub const LY: f64 = LIGHT_SPEED * 365.25 * 86_400.0; // Julian light year in meters
+pub const LY: f64 = dst_math::s3_galaxy::LY; // Julian light year in meters
 pub const PC: f64 = AU * 648_000.0 / std::f64::consts::PI; // Parsec in meters
 pub const MPC: f64 = PC * 1_000_000.0; // Megaparsec in meters
 pub const LIGHT_SPEED_SQUARED: f64 = LIGHT_SPEED * LIGHT_SPEED;
