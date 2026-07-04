@@ -53,6 +53,29 @@ fn gpu_particle_from_display_sets_position_and_color_only() {
 }
 
 #[test]
+fn gpu_particle_is_dead_requires_zero_mass_and_zero_alpha() {
+    let alive = Particle::from_kinematics(DVec3::ZERO, DVec3::ZERO, 1.0e30, [1.0, 1.0, 1.0, 1.0]);
+    let gpu = GpuParticle::from_cpu(&alive, SimulationType::DstGalaxy);
+    assert!(!gpu.is_dead());
+
+    // The compute shader marks death by zeroing both mass and color alpha.
+    let mut dead = gpu;
+    dead.attrs[0] = 0.0;
+    dead.color[3] = 0.0;
+    assert!(dead.is_dead());
+
+    // A zero-mass but visible particle is not dead (user-entered mass 0).
+    let mut zero_mass = gpu;
+    zero_mass.attrs[0] = 0.0;
+    assert!(!zero_mass.is_dead());
+
+    // A transparent but massive particle is not dead either.
+    let mut transparent = gpu;
+    transparent.color[3] = 0.0;
+    assert!(!transparent.is_dead());
+}
+
+#[test]
 fn gpu_particle_dst_galaxy_roundtrip_preserves_quaternion() {
     let mut particle = Particle::from_kinematics(
         DVec3::new(1.0e18, 2.0e17, 0.0),

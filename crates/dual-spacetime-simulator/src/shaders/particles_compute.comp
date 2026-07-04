@@ -24,6 +24,7 @@ layout(push_constant) uniform PushConstants {
     uint sim_type;               // 0:Normal 1:SpeedOfLightLimit 2:Lorentz 3:DstGravity 4:DstGalaxy
     uint phase;
     float galaxy_radius;         // R in sim units (DstGalaxy only)
+    float cull_max_angle;        // S³ cull threshold in radians; 0 disables (DstGalaxy only)
 } pc;
 
 const uint SIM_NORMAL = 0u;
@@ -86,7 +87,18 @@ vec3 galaxy_gravity_pair_chart(vec3 p_i, vec3 p_j, float mass_j) {
     return d * (sign * pc.gravity_dt * mass_j / (r_eff * r_eff * r));
 }
 
+// Dead particles (culled by S³ angle) are parked in place: mass 0 so they exert
+// no gravity, alpha 0 so the vertex shader clips them. Marking instead of
+// removing keeps CPU/GPU index correspondence without any pipeline stall;
+// slots are reclaimed later by a rare host-side compaction.
+bool dst_galaxy_is_dead(uint i) {
+    return particles[i].attrs.x == 0.0;
+}
+
 void dst_galaxy_advance(uint i) {
+    if (dst_galaxy_is_dead(i)) {
+        return;
+    }
     vec3 vel = particles[i].velocity.xyz;
     vec4 q = vec4(
         particles[i].attrs.y,
@@ -101,9 +113,22 @@ void dst_galaxy_advance(uint i) {
     particles[i].attrs.yzw = q.xyz;
     particles[i].position.w = q.w;
     particles[i].position.xyz = orientation_to_display(q, pc.galaxy_radius);
+
+    // Geodesic angle from the S³ origin: α = atan2(|q.xyz|, q.w) ∈ [0, π].
+    if (pc.cull_max_angle > 0.0) {
+        float angle = atan(length(q.xyz), q.w);
+        if (angle > pc.cull_max_angle) {
+            particles[i].attrs.x = 0.0;
+            particles[i].velocity.xyz = vec3(0.0);
+            particles[i].color.a = 0.0;
+        }
+    }
 }
 
 void dst_galaxy_velocity_update(uint i) {
+    if (dst_galaxy_is_dead(i)) {
+        return;
+    }
     // position.xyz holds the Ln-projected display position, refreshed by
     // dst_galaxy_advance (phase 0) before this phase runs.
     vec3 p_i = particles[i].position.xyz;

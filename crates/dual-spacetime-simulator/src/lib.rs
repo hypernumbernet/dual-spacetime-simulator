@@ -49,9 +49,14 @@ const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
 
 /// Coordinates CPU→GPU particle buffer synchronization between the UI, worker, and render loop.
 const GPU_REMOVE_NONE: usize = usize::MAX;
-/// DST Galaxy: advancing frames between S³-angle culling passes. Throttled so the
-/// device-idle stall from mutating the mapped SSBO does not run every frame.
+/// DST Galaxy: advancing frames between S³-angle culling passes. On the CPU path
+/// this is the retain interval; on the GPU path it is the interval of the stall-free
+/// dead-slot scan (the shader itself marks particles dead every step).
 const GALAXY_CULL_INTERVAL: u32 = 60;
+/// DST Galaxy, GPU path: minimum dead slots before compaction. Compacting requires a
+/// full device-idle stall, so it only pays off once enough slots can be reclaimed;
+/// below this, dead particles just stay parked (massless and invisible).
+const GALAXY_COMPACT_MIN_DEAD: usize = 64;
 
 #[derive(Clone)]
 pub(crate) struct GpuParticleSync {
@@ -655,40 +660,50 @@ impl ApplicationHandler for App {
                 } else {
                     0
                 };
-                // Cull particles that circled too far on S³ before recording this
-                // frame's advance. The previous batch's compute has completed, so the
-                // mapped SSBO holds current orientations; the reduced count then feeds
-                // record_gpu_advance below.
-                if uses_gpu
-                    && galaxy_cull_enabled
-                    && simulation_type == SimulationType::DstGalaxy
-                    && pending_steps > 0
+                // The compute shader marks particles beyond the S³ cull angle dead
+                // in-place (mass 0, invisible) with no CPU-GPU sync. Slot reclamation
+                // below is the only stalling step, so it runs rarely: a periodic
+                // stall-free scan of the mapped SSBO, then compaction only once
+                // enough dead slots accumulated to be worth one pipeline drain.
+                if uses_gpu && simulation_type == SimulationType::DstGalaxy && pending_steps > 0
                 {
                     self.gpu_cull_accumulated_steps += pending_steps;
                     if self.gpu_cull_accumulated_steps >= GALAXY_CULL_INTERVAL {
                         self.gpu_cull_accumulated_steps = 0;
-                        let removed = pipeline.cull_galaxy_particles(galaxy_cull_max_angle);
-                        if !removed.is_empty() {
-                            // Mirror onto the CPU list so index correspondence holds and
-                            // culled particles are not resurrected on the next add.
-                            self.simulation_manager
-                                .write()
-                                .unwrap()
-                                .remove_particles_at_sorted(&removed);
-                            self.ui_state
-                                .write()
-                                .unwrap()
-                                .adjust_selection_after_removal(&removed);
+                        let dead = pipeline.count_dead_galaxy_particles();
+                        let total = pipeline.gpu_particle_count() as usize;
+                        if dead >= GALAXY_COMPACT_MIN_DEAD && dead * 8 >= total {
+                            let removed = pipeline.compact_dead_galaxy_particles();
+                            if !removed.is_empty() {
+                                // Mirror onto the CPU list so index correspondence holds
+                                // and culled particles are not resurrected on the next add.
+                                self.simulation_manager
+                                    .write()
+                                    .unwrap()
+                                    .remove_particles_at_sorted(&removed);
+                                self.ui_state
+                                    .write()
+                                    .unwrap()
+                                    .adjust_selection_after_removal(&removed);
+                            }
                         }
                     }
                 }
                 if pending_steps > 0 {
+                    let cull_max_angle = if galaxy_cull_enabled
+                        && simulation_type == SimulationType::DstGalaxy
+                    {
+                        galaxy_cull_max_angle as f32
+                    } else {
+                        0.0
+                    };
                     pipeline.record_gpu_advance(
                         cb,
                         simulation_type,
                         time_per_frame,
                         sim_scale,
                         pending_steps,
+                        cull_max_angle,
                     );
                 }
 
