@@ -1,4 +1,4 @@
-use glam::DVec3;
+use glam::{DQuat, DVec3};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
@@ -9,15 +9,22 @@ use crate::ui_state::SimulationType;
 use dst_math::gravity::{
     dst_gravity_step_at, k_scale_from_light_speed, newtonian_gravity_pair,
 };
+use dst_math::s3_galaxy::{
+    galaxy_gravity_step_at, galaxy_radius_sim, integrate_orientation,
+    orientation_from_disk_position, orientation_to_display_position, s3_angle_from_origin,
+};
 use dst_math::spacetime::{
     Spacetime, momentum_from_velocity, position_delta_from_momentum, rapidity_from_momentum,
     velocity_from_momentum,
 };
 
-pub const LIGHT_SPEED: f64 = 299_792_458.0; // Speed of light in meters per second
+// Speed of light and Julian light year: single source of truth in dst-math,
+// shared with the S³ galaxy radius so both sides can never drift apart.
+pub const LIGHT_SPEED: f64 = dst_math::s3_galaxy::LIGHT_SPEED;
 pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
-pub const LY: f64 = LIGHT_SPEED * 365.25 * 86_400.0; // Julian light year in meters
+pub const LY: f64 = dst_math::s3_galaxy::LY; // Julian light year in meters
 pub const PC: f64 = AU * 648_000.0 / std::f64::consts::PI; // Parsec in meters
+pub const KPC: f64 = PC * 1_000.0; // Kiloparsec in meters
 pub const MPC: f64 = PC * 1_000_000.0; // Megaparsec in meters
 pub const LIGHT_SPEED_SQUARED: f64 = LIGHT_SPEED * LIGHT_SPEED;
 /// Maximum allowed speed as a fraction of light speed for non-Normal simulation types.
@@ -95,11 +102,22 @@ pub struct SimulationDstGravity {
     pub scale: f64,
 }
 
+pub struct SimulationDstGalaxy {
+    pub particles: Vec<Particle>,
+    pub scale: f64,
+    pub galaxy_radius: f64,
+}
+
 pub enum SimulationState {
     Normal(SimulationNormal),
     SpeedOfLightLimit(SimulationSpeedOfLightLimit),
     LorentzTransformation(SimulationLorentzTransformation),
     DstGravity(SimulationDstGravity),
+    DstGalaxy(SimulationDstGalaxy),
+}
+
+fn default_orientation() -> DQuat {
+    DQuat::IDENTITY
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq)]
@@ -114,6 +132,8 @@ pub struct Particle {
     pub proper_time: f64,
     #[serde(default)]
     pub lambda_eff: f64,
+    #[serde(default = "default_orientation")]
+    pub orientation: DQuat,
 }
 
 impl Particle {
@@ -132,6 +152,7 @@ impl Particle {
             color,
             proper_time: 0.0,
             lambda_eff: 0.0,
+            orientation: DQuat::IDENTITY,
         }
     }
 }
@@ -300,6 +321,55 @@ impl SimulationEngine for SimulationDstGravity {
     }
 }
 
+fn dst_galaxy_velocity_update(
+    particles: &mut [Particle],
+    delta_seconds: f64,
+    galaxy_radius: f64,
+) {
+    // Gravity acts on the Ln-projected display positions (kept in sync with
+    // orientations by advance_time), so the projection distortion is preserved.
+    let positions: Vec<DVec3> = particles.iter().map(|p| p.position).collect();
+    let masses: Vec<f64> = particles.iter().map(|p| p.mass).collect();
+    let time_g = G * delta_seconds;
+
+    particles
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(i, particle)| {
+            let acceleration = galaxy_gravity_step_at(
+                i,
+                &positions,
+                &masses,
+                galaxy_radius,
+                time_g,
+                EPSILON,
+            );
+            particle.velocity += acceleration;
+        });
+}
+
+impl SimulationEngine for SimulationDstGalaxy {
+    /// Integrates S³ orientations and updates display positions.
+    fn advance_time(&mut self, delta_seconds: f64) {
+        let galaxy_radius = self.galaxy_radius;
+        self.particles.par_iter_mut().for_each(|particle| {
+            particle.orientation = integrate_orientation(
+                particle.orientation,
+                particle.velocity,
+                galaxy_radius,
+                delta_seconds,
+            );
+            particle.position =
+                orientation_to_display_position(particle.orientation, galaxy_radius);
+        });
+    }
+
+    /// Applies Ln-space galaxy gravity to angular velocities.
+    fn update_velocities(&mut self, delta_seconds: f64) {
+        dst_galaxy_velocity_update(&mut self.particles, delta_seconds, self.galaxy_radius);
+    }
+}
+
 impl SimulationEngine for SimulationState {
     /// Delegates velocity updates to the active simulation variant.
     fn update_velocities(&mut self, delta_seconds: f64) {
@@ -308,6 +378,7 @@ impl SimulationEngine for SimulationState {
             SimulationState::SpeedOfLightLimit(s) => s.update_velocities(delta_seconds),
             SimulationState::LorentzTransformation(s) => s.update_velocities(delta_seconds),
             SimulationState::DstGravity(s) => s.update_velocities(delta_seconds),
+            SimulationState::DstGalaxy(s) => s.update_velocities(delta_seconds),
         }
     }
 
@@ -318,6 +389,7 @@ impl SimulationEngine for SimulationState {
             SimulationState::SpeedOfLightLimit(s) => s.advance_time(delta_seconds),
             SimulationState::LorentzTransformation(s) => s.advance_time(delta_seconds),
             SimulationState::DstGravity(s) => s.advance_time(delta_seconds),
+            SimulationState::DstGalaxy(s) => s.advance_time(delta_seconds),
         }
     }
 }
@@ -358,6 +430,17 @@ impl Default for SimulationDstGravity {
     }
 }
 
+impl Default for SimulationDstGalaxy {
+    fn default() -> Self {
+        let scale = DEFAULT_WORLD_SCALE;
+        Self {
+            particles: vec![],
+            scale,
+            galaxy_radius: galaxy_radius_sim(scale),
+        }
+    }
+}
+
 impl SimulationState {
     /// Returns an immutable reference to particles in the active simulation variant.
     pub fn particles(&self) -> &Vec<Particle> {
@@ -366,6 +449,7 @@ impl SimulationState {
             SimulationState::SpeedOfLightLimit(s) => &s.particles,
             SimulationState::LorentzTransformation(s) => &s.particles,
             SimulationState::DstGravity(s) => &s.particles,
+            SimulationState::DstGalaxy(s) => &s.particles,
         }
     }
 
@@ -375,6 +459,7 @@ impl SimulationState {
             SimulationState::SpeedOfLightLimit(s) => &mut s.particles,
             SimulationState::LorentzTransformation(s) => &mut s.particles,
             SimulationState::DstGravity(s) => &mut s.particles,
+            SimulationState::DstGalaxy(s) => &mut s.particles,
         }
     }
 }
@@ -418,6 +503,19 @@ impl SimulationManager {
         if simulation_type.requires_subluminal_velocity() {
             clamp_particle_velocities_sim(&mut particles, scale);
         }
+        if simulation_type == SimulationType::DstGalaxy {
+            // Initial conditions that carry only 3D positions (identity orientation)
+            // need their S³ coordinate derived before the orientation integrator runs.
+            let r_galaxy = galaxy_radius_sim(scale);
+            for particle in particles.iter_mut() {
+                if particle.orientation == DQuat::IDENTITY && particle.position != DVec3::ZERO {
+                    particle.orientation =
+                        orientation_from_disk_position(particle.position, r_galaxy);
+                }
+                particle.position =
+                    orientation_to_display_position(particle.orientation, r_galaxy);
+            }
+        }
         if simulation_type.uses_rapidity_particles() {
             Self::convert_to_lorentz(particles, scale)
         } else if simulation_type.uses_momentum_particles() {
@@ -446,6 +544,13 @@ impl SimulationManager {
             SimulationType::DstGravity => {
                 SimulationState::DstGravity(SimulationDstGravity { particles, scale })
             }
+            SimulationType::DstGalaxy => {
+                SimulationState::DstGalaxy(SimulationDstGalaxy {
+                    particles,
+                    scale,
+                    galaxy_radius: galaxy_radius_sim(scale),
+                })
+            }
         }
     }
 
@@ -462,6 +567,7 @@ impl SimulationManager {
                 color: p.color,
                 proper_time: p.proper_time,
                 lambda_eff: p.lambda_eff,
+                orientation: p.orientation,
             })
             .collect()
     }
@@ -485,6 +591,7 @@ impl SimulationManager {
                     color: p.color,
                     proper_time: p.proper_time,
                     lambda_eff: p.lambda_eff,
+                    orientation: p.orientation,
                 }
             })
             .collect()
@@ -589,6 +696,42 @@ impl SimulationManager {
         }
         particles.remove(index);
         true
+    }
+
+    /// Removes DstGalaxy particles whose S³ angle from the origin exceeds `max_angle`.
+    /// No-op for other simulation types. Returns the removed indices in ascending order.
+    pub fn cull_galaxy_by_angle(&self, max_angle: f64) -> Vec<usize> {
+        let mut state_guard = self.state.write().unwrap();
+        if !matches!(&*state_guard, SimulationState::DstGalaxy(_)) {
+            return Vec::new();
+        }
+        let particles = state_guard.particles_mut();
+        let mut removed = Vec::new();
+        let mut index = 0usize;
+        particles.retain(|p| {
+            let keep = s3_angle_from_origin(p.orientation) <= max_angle;
+            if !keep {
+                removed.push(index);
+            }
+            index += 1;
+            keep
+        });
+        removed
+    }
+
+    /// Removes particles at the given ascending indices. Out-of-range indices are
+    /// skipped. Used to mirror a GPU-side cull onto the CPU particle list.
+    pub fn remove_particles_at_sorted(&self, sorted_asc: &[usize]) {
+        if sorted_asc.is_empty() {
+            return;
+        }
+        let mut state_guard = self.state.write().unwrap();
+        let particles = state_guard.particles_mut();
+        for &index in sorted_asc.iter().rev() {
+            if index < particles.len() {
+                particles.remove(index);
+            }
+        }
     }
 }
 

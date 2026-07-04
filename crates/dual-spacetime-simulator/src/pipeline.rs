@@ -181,6 +181,10 @@ impl ParticleRenderPipeline {
     }
 
     /// Records `steps` GPU simulation steps before rendering when GPU mode is active.
+    ///
+    /// `cull_max_angle` is the DstGalaxy S³ cull threshold in radians (0 disables);
+    /// the compute shader marks particles beyond it dead in-place, so no CPU-GPU
+    /// synchronization is needed on the hot path.
     pub fn record_gpu_advance(
         &self,
         command_buffer: vk::CommandBuffer,
@@ -188,10 +192,17 @@ impl ParticleRenderPipeline {
         delta_seconds: f64,
         scale: f64,
         steps: u32,
+        cull_max_angle: f32,
     ) {
         if self.use_gpu_sim {
-            self.gpu_sim
-                .dispatch(command_buffer, simulation_type, delta_seconds, scale, steps);
+            self.gpu_sim.dispatch(
+                command_buffer,
+                simulation_type,
+                delta_seconds,
+                scale,
+                steps,
+                cull_max_angle,
+            );
         }
     }
 
@@ -246,6 +257,26 @@ impl ParticleRenderPipeline {
     pub fn remove_particle_preserving_simulated(&mut self, index: usize) -> bool {
         self.wait_device_idle("remove_particle_preserving_simulated");
         self.gpu_sim.remove_particle_at(index)
+    }
+
+    /// Returns the current GPU particle count (including dead slots).
+    pub fn gpu_particle_count(&self) -> u32 {
+        self.gpu_sim.particle_count()
+    }
+
+    /// Counts dead (S³-culled) particle slots without stalling the GPU pipeline.
+    pub fn count_dead_galaxy_particles(&self) -> usize {
+        self.gpu_sim.count_dead_particles()
+    }
+
+    /// Reclaims dead (S³-culled) particle slots from the SSBO.
+    ///
+    /// Compacts the mapped buffer in place after the GPU queue is idle — a pipeline
+    /// stall, so call rarely (threshold-gated or long fixed interval). Returns the
+    /// removed slot indices (ascending) so the caller can mirror them onto the CPU list.
+    pub fn compact_dead_galaxy_particles(&mut self) -> Vec<usize> {
+        self.wait_device_idle("compact_dead_galaxy_particles");
+        self.gpu_sim.compact_dead_particles()
     }
 
     fn wait_device_idle(&self, context: &str) {
@@ -594,6 +625,10 @@ impl ParticleRenderPipeline {
 
         let mut best: Option<(usize, f32)> = None;
         for (i, p) in particles.iter().enumerate() {
+            // Skip dead (S³-culled) particles: invisible, so unclickable.
+            if p.color[3] == 0.0 {
+                continue;
+            }
             let Some(screen_px) = project_particle_screen_px(p, mvp, width, height) else {
                 continue;
             };

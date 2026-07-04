@@ -21,14 +21,127 @@ layout(push_constant) uniform PushConstants {
     float epsilon;
     float light_speed_per_scale; // c / scale
     float k_scale;               // 2 / c_sim² for DST gravity time delay
-    uint sim_type;               // 0:Normal 1:SpeedOfLightLimit 2:Lorentz 3:DstGravity
+    uint sim_type;               // 0:Normal 1:SpeedOfLightLimit 2:Lorentz 3:DstGravity 4:DstGalaxy
     uint phase;
+    float galaxy_radius;         // R in sim units (DstGalaxy only)
+    float cull_max_angle;        // S³ cull threshold in radians; 0 disables (DstGalaxy only)
 } pc;
 
 const uint SIM_NORMAL = 0u;
 const uint SIM_SPEED_OF_LIGHT_LIMIT = 1u;
 const uint SIM_LORENTZ = 2u;
 const uint SIM_DST_GRAVITY = 3u;
+const uint SIM_DST_GALAXY = 4u;
+const float PI = 3.14159265358979323846;
+
+// --- S³ galaxy (DstGalaxy): quaternion log/exp and Ln-space gravity ---
+
+vec4 quat_mul(vec4 a, vec4 b) {
+    return vec4(
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z
+    );
+}
+
+vec4 quat_normalize(vec4 q) {
+    return q / length(q);
+}
+
+// atan2-based log map: keeps precision at small angles where acos(w) collapses.
+vec3 quaternion_log(vec4 q) {
+    float vnorm = length(q.xyz);
+    if (vnorm < 1e-30) {
+        return vec3(0.0);
+    }
+    float half_angle = atan(vnorm, q.w);
+    return q.xyz * (half_angle / vnorm);
+}
+
+vec4 quaternion_exp(vec3 v) {
+    float vmag = length(v);
+    if (vmag < 1e-30) {
+        return vec4(0.0, 0.0, 0.0, 1.0);
+    }
+    return vec4(v * (sin(vmag) / vmag), cos(vmag));
+}
+
+// No small-angle cutoff: scenes far below the galaxy radius live at tiny |v|,
+// and zeroing them would collapse every particle to the origin.
+vec3 orientation_to_display(vec4 q, float r_galaxy) {
+    return quaternion_log(q) * (2.0 * r_galaxy / PI);
+}
+
+// Gravity in the Ln-projected display chart: distance and direction both come
+// from the projected positions p = Ln(q)*(2R/PI), preserving the S3 projection
+// distortion. Attractive within R, repulsive beyond R (DST sign reversal).
+vec3 galaxy_gravity_pair_chart(vec3 p_i, vec3 p_j, float mass_j) {
+    vec3 d = p_j - p_i;
+    float r = length(d);
+    if (r < 1e-30) {
+        return vec3(0.0);
+    }
+    float r_eff = max(r, pc.epsilon);
+    float sign = r > pc.galaxy_radius ? -1.0 : 1.0;
+    return d * (sign * pc.gravity_dt * mass_j / (r_eff * r_eff * r));
+}
+
+// Dead particles (culled by S³ angle) are parked in place: mass 0 so they exert
+// no gravity, alpha 0 so the vertex shader clips them. Marking instead of
+// removing keeps CPU/GPU index correspondence without any pipeline stall;
+// slots are reclaimed later by a rare host-side compaction.
+bool dst_galaxy_is_dead(uint i) {
+    return particles[i].attrs.x == 0.0;
+}
+
+void dst_galaxy_advance(uint i) {
+    if (dst_galaxy_is_dead(i)) {
+        return;
+    }
+    vec3 vel = particles[i].velocity.xyz;
+    vec4 q = vec4(
+        particles[i].attrs.y,
+        particles[i].attrs.z,
+        particles[i].attrs.w,
+        particles[i].position.w
+    );
+    // Linear velocity (sim units/s) → Ln-space displacement: Δv = vel·π/(2R)·dt,
+    // inverse of the display map p = Ln(q)·(2R/π).
+    vec4 delta = quaternion_exp(vel * (pc.delta_seconds * PI / (2.0 * pc.galaxy_radius)));
+    q = quat_normalize(quat_mul(delta, q));
+    particles[i].attrs.yzw = q.xyz;
+    particles[i].position.w = q.w;
+    particles[i].position.xyz = orientation_to_display(q, pc.galaxy_radius);
+
+    // Geodesic angle from the S³ origin: α = atan2(|q.xyz|, q.w) ∈ [0, π].
+    if (pc.cull_max_angle > 0.0) {
+        float angle = atan(length(q.xyz), q.w);
+        if (angle > pc.cull_max_angle) {
+            particles[i].attrs.x = 0.0;
+            particles[i].velocity.xyz = vec3(0.0);
+            particles[i].color.a = 0.0;
+        }
+    }
+}
+
+void dst_galaxy_velocity_update(uint i) {
+    if (dst_galaxy_is_dead(i)) {
+        return;
+    }
+    // position.xyz holds the Ln-projected display position, refreshed by
+    // dst_galaxy_advance (phase 0) before this phase runs.
+    vec3 p_i = particles[i].position.xyz;
+    vec3 acceleration = vec3(0.0);
+    for (uint j = 0u; j < pc.particle_count; ++j) {
+        if (i == j) {
+            continue;
+        }
+        acceleration += galaxy_gravity_pair_chart(
+            p_i, particles[j].position.xyz, particles[j].attrs.x);
+    }
+    particles[i].velocity.xyz += acceleration;
+}
 
 // Port of dst-math::spacetime::rapidity_from_momentum.
 vec3 rapidity_from_momentum(vec3 momentum, float mass, float c) {
@@ -112,6 +225,15 @@ void dst_gravity_velocity_update(uint i) {
 void main() {
     uint i = gl_GlobalInvocationID.x;
     if (i >= pc.particle_count) {
+        return;
+    }
+
+    if (pc.sim_type == SIM_DST_GALAXY) {
+        if (pc.phase == 0u) {
+            dst_galaxy_advance(i);
+        } else {
+            dst_galaxy_velocity_update(i);
+        }
         return;
     }
 

@@ -227,6 +227,71 @@ fn dst_gravity_manager(particles: Vec<Particle>, scale: f64) -> SimulationManage
     }
 }
 
+fn dst_galaxy_manager(particles: Vec<Particle>, scale: f64) -> SimulationManager {
+    let galaxy_radius = dst_math::s3_galaxy::galaxy_radius_sim(scale);
+    SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(
+            dual_spacetime_simulator::simulation::SimulationState::DstGalaxy(
+                dual_spacetime_simulator::simulation::SimulationDstGalaxy {
+                    particles,
+                    scale,
+                    galaxy_radius,
+                },
+            ),
+        )),
+    }
+}
+
+fn galaxy_particle_at_angle(alpha: f64) -> Particle {
+    let axis = DVec3::new(0.0, 0.0, 1.0);
+    let mut p = Particle::from_kinematics(DVec3::ZERO, DVec3::ZERO, 1.0e30, [1.0; 4]);
+    p.orientation = dst_math::s3_galaxy::quaternion_exp(axis * alpha);
+    p
+}
+
+#[test]
+fn cull_galaxy_by_angle_removes_particles_beyond_threshold() {
+    use dst_math::s3_galaxy::s3_angle_from_origin;
+    use std::f64::consts::{FRAC_PI_2, PI};
+
+    let mgr = dst_galaxy_manager(
+        vec![
+            galaxy_particle_at_angle(0.1),               // keep
+            galaxy_particle_at_angle(FRAC_PI_2 - 0.01),  // keep (just under)
+            galaxy_particle_at_angle(FRAC_PI_2 + 0.01),  // cull
+            galaxy_particle_at_angle(2.5),               // cull
+            galaxy_particle_at_angle(PI - 0.01),         // cull (near antipode)
+        ],
+        1e10,
+    );
+    assert_eq!(mgr.particle_count(), 5);
+
+    let removed = mgr.cull_galaxy_by_angle(FRAC_PI_2);
+    assert_eq!(removed, vec![2, 3, 4]);
+    assert_eq!(mgr.particle_count(), 2);
+
+    // Every survivor is within the threshold.
+    for p in mgr.particles() {
+        assert!(s3_angle_from_origin(p.orientation) <= FRAC_PI_2 + 1e-9);
+    }
+}
+
+#[test]
+fn cull_galaxy_by_angle_is_noop_for_other_types() {
+    let ic = ObjectInput::RandomSphere {
+        scale: 1e10,
+        radius: 1e9,
+        mass_range: (1e28, 1e29),
+        velocity_std: 1e5,
+    };
+    let state = SimulationManager::create_simulation(ic, UiSimType::Normal, 4, 1e10);
+    let mgr = SimulationManager {
+        state: std::sync::Arc::new(std::sync::RwLock::new(state)),
+    };
+    assert!(mgr.cull_galaxy_by_angle(0.0).is_empty());
+    assert_eq!(mgr.particle_count(), 4);
+}
+
 #[test]
 fn dst_gravity_weak_field_attracts_via_update() {
     let mass = 1.0e24;

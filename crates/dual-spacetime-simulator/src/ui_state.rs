@@ -3,7 +3,7 @@ use crate::object_input::{
     SOLAR_SYSTEM_SCALE, clamp_world_scale,
 };
 use crate::settings::AppSettings;
-use crate::simulation::{AU, LY, MPC, PC, clamp_scalar_speed_m_s, clamp_velocity_m_s};
+use crate::simulation::{AU, KPC, LY, MPC, PC, clamp_scalar_speed_m_s, clamp_velocity_m_s};
 use glam::DVec3;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,10 +23,13 @@ pub const INPUT_PANEL_WIDTH: f32 = 220.0;
 pub const BASE_SCALE_DRAG_SPEED: f64 = 0.01;
 /// Default satellite count for Satellite Orbit reset (Earth is added separately).
 pub const DEFAULT_SATELLITE_COUNT: u32 = 1000;
+/// Default world scale (m per sim unit) applied when switching to DST Galaxy.
+pub const DST_GALAXY_DEFAULT_BASE_SCALE: f64 = 1e20;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum BaseScaleUnit {
     Mpc,
+    Kpc,
     Pc,
     Ly,
     Au,
@@ -42,6 +45,7 @@ impl std::fmt::Display for BaseScaleUnit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
             BaseScaleUnit::Mpc => "Mpc",
+            BaseScaleUnit::Kpc => "kpc",
             BaseScaleUnit::Pc => "pc",
             BaseScaleUnit::Ly => "ly",
             BaseScaleUnit::Au => "au",
@@ -57,8 +61,9 @@ impl std::fmt::Display for BaseScaleUnit {
 
 impl BaseScaleUnit {
     /// All units in descending size order (largest first).
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Mpc,
+        Self::Kpc,
         Self::Pc,
         Self::Ly,
         Self::Au,
@@ -73,6 +78,7 @@ impl BaseScaleUnit {
     pub fn meters_per_unit(self) -> f64 {
         match self {
             BaseScaleUnit::Mpc => MPC,
+            BaseScaleUnit::Kpc => KPC,
             BaseScaleUnit::Pc => PC,
             BaseScaleUnit::Ly => LY,
             BaseScaleUnit::Au => AU,
@@ -97,7 +103,7 @@ impl BaseScaleUnit {
     /// Decimal places used when rounding display values for this unit.
     pub fn display_decimal_places(self) -> i32 {
         match self {
-            BaseScaleUnit::Mpc | BaseScaleUnit::Pc | BaseScaleUnit::Ly | BaseScaleUnit::Au => 6,
+            BaseScaleUnit::Mpc | BaseScaleUnit::Kpc | BaseScaleUnit::Pc | BaseScaleUnit::Ly | BaseScaleUnit::Au => 6,
             BaseScaleUnit::Km | BaseScaleUnit::M => 3,
             BaseScaleUnit::Mm => 6,
             BaseScaleUnit::Nm | BaseScaleUnit::Fm => 2,
@@ -220,15 +226,17 @@ pub enum SimulationType {
     SpeedOfLightLimit = 1,
     LorentzTransformation = 2,
     DstGravity = 3,
+    DstGalaxy = 4,
 }
 
 impl SimulationType {
     /// All simulation types in UI display order (must match `repr(u32)` discriminants).
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Normal,
         Self::SpeedOfLightLimit,
         Self::LorentzTransformation,
         Self::DstGravity,
+        Self::DstGalaxy,
     ];
 
     /// Returns the discriminant passed to the GPU compute shader push constants.
@@ -248,7 +256,7 @@ impl SimulationType {
 
     /// Whether particle velocities must stay below light speed.
     pub fn requires_subluminal_velocity(self) -> bool {
-        !matches!(self, Self::Normal)
+        !matches!(self, Self::Normal | Self::DstGalaxy)
     }
 }
 
@@ -278,6 +286,7 @@ impl std::fmt::Display for SimulationType {
             SimulationType::SpeedOfLightLimit => "Speed of Light Limit",
             SimulationType::LorentzTransformation => "Lorentz Transformation",
             SimulationType::DstGravity => "DST Gravity",
+            SimulationType::DstGalaxy => "DST Galaxy",
         };
         write!(f, "{}", text)
     }
@@ -417,6 +426,10 @@ pub struct UiState {
     pub active_computing_unit: ComputingUnit,
     pub base_scale: f64,
     pub base_scale_unit: BaseScaleUnit,
+    /// DST Galaxy: remove particles whose S³ angle from the origin exceeds the threshold.
+    pub galaxy_cull_enabled: bool,
+    /// DST Galaxy: S³ geodesic-angle threshold α (radians) for culling, in (0, π].
+    pub galaxy_cull_max_angle: f64,
     pub random_sphere: RandomSphereParameters,
     pub random_cube: RandomCubeParameters,
     pub spiral_disk: SpiralDiskParameters,
@@ -483,6 +496,8 @@ impl Default for UiState {
             active_computing_unit: ComputingUnit::default(),
             base_scale: ObjectInputType::default().default_base_scale(),
             base_scale_unit: BaseScaleUnit::default(),
+            galaxy_cull_enabled: true,
+            galaxy_cull_max_angle: std::f64::consts::FRAC_PI_2,
             random_sphere: RandomSphereParameters::default(),
             random_cube: RandomCubeParameters::default(),
             spiral_disk: SpiralDiskParameters::default(),
@@ -623,6 +638,11 @@ impl UiState {
             }
             self.disable_add_until_reset();
             self.clamp_velocity_inputs();
+            if self.simulation_type == SimulationType::DstGalaxy {
+                // Galaxy-scale world so scenes span a meaningful fraction of the
+                // fixed galaxy radius R; initial conditions stay user-selectable.
+                self.set_base_scale(DST_GALAXY_DEFAULT_BASE_SCALE);
+            }
         }
     }
 
@@ -704,6 +724,27 @@ impl UiState {
     pub fn select_particle(&mut self, index: usize) {
         self.selected_particle = Some(SelectedParticleInfo { index });
         self.is_particle_info_panel_open = true;
+    }
+
+    /// Fixes up the selected-particle index after particles were removed at the given
+    /// ascending indices. Clears the selection if the selected particle itself was
+    /// removed; otherwise shifts the index down by the count removed before it so the
+    /// same particle stays selected (keeps camera tracing stable across a cull pass).
+    pub fn adjust_selection_after_removal(&mut self, removed_sorted: &[usize]) {
+        if removed_sorted.is_empty() {
+            return;
+        }
+        let Some(selected) = self.selected_particle else {
+            return;
+        };
+        if removed_sorted.binary_search(&selected.index).is_ok() {
+            self.clear_selected_particle();
+            return;
+        }
+        let shift = removed_sorted.partition_point(|&r| r < selected.index);
+        self.selected_particle = Some(SelectedParticleInfo {
+            index: selected.index - shift,
+        });
     }
 
     /// Clears any previously picked particle and closes the info panel.
