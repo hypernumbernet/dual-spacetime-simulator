@@ -1,10 +1,35 @@
 use dst_math::s3_galaxy::{
     galaxy_gravity_pair_ln, galaxy_radius_sim, integrate_orientation,
     orientation_from_disk_position, orientation_to_display_position, quaternion_exp,
-    quaternion_log, radial_distance_ln, relative_quaternion,
+    quaternion_log, radial_distance_ln, relative_quaternion, s3_angle_from_origin,
 };
 use glam::{DQuat, DVec3};
 use std::f64::consts::PI;
+
+#[test]
+fn s3_angle_from_origin_matches_known_angles() {
+    // Identity is the origin: angle 0.
+    assert!(s3_angle_from_origin(DQuat::IDENTITY).abs() < 1e-12);
+
+    // A quaternion built from exp(v) with |v| = α sits at geodesic angle α.
+    let axis = DVec3::new(1.0, -2.0, 0.5).normalize();
+    for alpha in [0.1, 0.5, PI / 2.0, 2.0, 3.0] {
+        let q = quaternion_exp(axis * alpha);
+        assert!(
+            (s3_angle_from_origin(q) - alpha).abs() < 1e-12,
+            "angle {alpha} mismatch: {}",
+            s3_angle_from_origin(q)
+        );
+    }
+
+    // Antipode (w = -1) is the maximum geodesic distance ≈ π.
+    let antipode = quaternion_exp(axis * (PI - 1e-9));
+    assert!((s3_angle_from_origin(antipode) - PI).abs() < 1e-6);
+
+    // Equal to quaternion_log(q).length().
+    let q = quaternion_exp(axis * 1.234);
+    assert!((s3_angle_from_origin(q) - quaternion_log(q).length()).abs() < 1e-12);
+}
 
 #[test]
 fn exp_log_roundtrip_small_angle() {

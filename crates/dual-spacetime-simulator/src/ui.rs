@@ -193,6 +193,10 @@ pub fn draw_ui(
             dragvalue_normal(ui, &mut uis.min_window_height, 1.0, "Min Window Height");
             dragvalue_normal(ui, &mut uis.max_particle_count, 10.0, "Max Particle Count");
             combobox_particle_display_mode(ui, &mut uis);
+            if uis.active_simulation_type() == SimulationType::DstGalaxy {
+                ui.separator();
+                galaxy_cull_controls(ui, &mut uis);
+            }
             ui.separator();
             ui.horizontal(|ui| {
                 let mut v = uis.start_maximized;
@@ -650,6 +654,33 @@ fn base_scale_input(ui: &mut egui::Ui, uis: &mut UiState) {
             });
     });
     uis.apply_base_scale_edit(display, uis.base_scale_unit != previous_unit);
+}
+
+/// Renders the DST Galaxy S³-angle culling controls (enable toggle + angle threshold).
+fn galaxy_cull_controls(ui: &mut egui::Ui, uis: &mut UiState) {
+    ui.horizontal(|ui| {
+        let mut v = uis.galaxy_cull_enabled;
+        if ui
+            .add(Checkbox::new(&mut v, "Cull Beyond S³ Angle"))
+            .changed()
+        {
+            uis.galaxy_cull_enabled = v;
+        }
+    });
+    // Radial ratio |p|/R = 2α/π gives an intuitive sense of the cutoff distance.
+    let format_angle =
+        |a: f64| format!("{:.3} rad (|p|/R={:.2})", a, 2.0 * a / std::f64::consts::PI);
+    let mut angle = uis.galaxy_cull_max_angle;
+    dragvalue_positive_f64(
+        ui,
+        &mut angle,
+        0.01,
+        0.01,
+        110.0,
+        Some("Cull Angle"),
+        Some(&format_angle),
+    );
+    uis.galaxy_cull_max_angle = angle.min(std::f64::consts::PI);
 }
 
 /// Renders the simulation-type combo box and updates dependent UI state.

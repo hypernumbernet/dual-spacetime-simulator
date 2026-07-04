@@ -259,6 +259,39 @@ impl GpuParticleSimulation {
         true
     }
 
+    /// Removes DstGalaxy particles whose S³ angle from the origin exceeds `max_angle`,
+    /// compacting the mapped SSBO in place and updating `particle_count`. Returns the
+    /// removed slot indices in ascending order (empty when nothing was removed), so the
+    /// caller can mirror the same removals onto the CPU-side particle list and keep the
+    /// two in index lockstep. `q` is stored as attrs.yzw (x,y,z) + position.w (w).
+    pub fn cull_galaxy_by_angle(&mut self, max_angle: f64) -> Vec<usize> {
+        let count = self.particle_count as usize;
+        let mut removed = Vec::new();
+        if count == 0 {
+            return removed;
+        }
+        let Some(slice) = mapped_particle_slice_mut(&self.particle_buffer, count) else {
+            return removed;
+        };
+        let max_angle = max_angle as f32;
+        let mut write = 0usize;
+        for read in 0..count {
+            let p = slice[read];
+            let (qx, qy, qz, qw) = (p.attrs[1], p.attrs[2], p.attrs[3], p.position[3]);
+            let angle = (qx * qx + qy * qy + qz * qz).sqrt().atan2(qw);
+            if angle <= max_angle {
+                if write != read {
+                    slice[write] = p;
+                }
+                write += 1;
+            } else {
+                removed.push(read);
+            }
+        }
+        self.particle_count = write as u32;
+        removed
+    }
+
     /// Records compute dispatches that advance `steps` simulation steps on the GPU.
     ///
     /// Each step runs phase 0 (position integration) then phase 1 (velocity update).

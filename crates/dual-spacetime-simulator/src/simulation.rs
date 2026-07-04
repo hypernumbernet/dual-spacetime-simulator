@@ -11,7 +11,7 @@ use dst_math::gravity::{
 };
 use dst_math::s3_galaxy::{
     galaxy_gravity_step_at, galaxy_radius_sim, integrate_orientation,
-    orientation_from_disk_position, orientation_to_display_position,
+    orientation_from_disk_position, orientation_to_display_position, s3_angle_from_origin,
 };
 use dst_math::spacetime::{
     Spacetime, momentum_from_velocity, position_delta_from_momentum, rapidity_from_momentum,
@@ -696,6 +696,42 @@ impl SimulationManager {
         }
         particles.remove(index);
         true
+    }
+
+    /// Removes DstGalaxy particles whose S³ angle from the origin exceeds `max_angle`.
+    /// No-op for other simulation types. Returns the removed indices in ascending order.
+    pub fn cull_galaxy_by_angle(&self, max_angle: f64) -> Vec<usize> {
+        let mut state_guard = self.state.write().unwrap();
+        if !matches!(&*state_guard, SimulationState::DstGalaxy(_)) {
+            return Vec::new();
+        }
+        let particles = state_guard.particles_mut();
+        let mut removed = Vec::new();
+        let mut index = 0usize;
+        particles.retain(|p| {
+            let keep = s3_angle_from_origin(p.orientation) <= max_angle;
+            if !keep {
+                removed.push(index);
+            }
+            index += 1;
+            keep
+        });
+        removed
+    }
+
+    /// Removes particles at the given ascending indices. Out-of-range indices are
+    /// skipped. Used to mirror a GPU-side cull onto the CPU particle list.
+    pub fn remove_particles_at_sorted(&self, sorted_asc: &[usize]) {
+        if sorted_asc.is_empty() {
+            return;
+        }
+        let mut state_guard = self.state.write().unwrap();
+        let particles = state_guard.particles_mut();
+        for &index in sorted_asc.iter().rev() {
+            if index < particles.len() {
+                particles.remove(index);
+            }
+        }
     }
 }
 

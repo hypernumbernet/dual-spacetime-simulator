@@ -30,6 +30,13 @@ pub fn quaternion_log(q: DQuat) -> DVec3 {
     }
 }
 
+/// Geodesic angle from the S³ origin (identity) to q: α = atan2(|q.xyz|, q.w) ∈ [0, π].
+/// Equal to `quaternion_log(q).length()`, but named for the culling threshold test.
+#[inline]
+pub fn s3_angle_from_origin(q: DQuat) -> f64 {
+    DVec3::new(q.x, q.y, q.z).length().atan2(q.w)
+}
+
 /// Exp map ℝ³ → S³. For v = (θ/2)·û, returns cos(θ/2) + sin(θ/2)·û.
 #[inline]
 pub fn quaternion_exp(v: DVec3) -> DQuat {

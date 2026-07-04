@@ -426,6 +426,10 @@ pub struct UiState {
     pub active_computing_unit: ComputingUnit,
     pub base_scale: f64,
     pub base_scale_unit: BaseScaleUnit,
+    /// DST Galaxy: remove particles whose S³ angle from the origin exceeds the threshold.
+    pub galaxy_cull_enabled: bool,
+    /// DST Galaxy: S³ geodesic-angle threshold α (radians) for culling, in (0, π].
+    pub galaxy_cull_max_angle: f64,
     pub random_sphere: RandomSphereParameters,
     pub random_cube: RandomCubeParameters,
     pub spiral_disk: SpiralDiskParameters,
@@ -492,6 +496,8 @@ impl Default for UiState {
             active_computing_unit: ComputingUnit::default(),
             base_scale: ObjectInputType::default().default_base_scale(),
             base_scale_unit: BaseScaleUnit::default(),
+            galaxy_cull_enabled: true,
+            galaxy_cull_max_angle: std::f64::consts::FRAC_PI_2,
             random_sphere: RandomSphereParameters::default(),
             random_cube: RandomCubeParameters::default(),
             spiral_disk: SpiralDiskParameters::default(),
@@ -718,6 +724,27 @@ impl UiState {
     pub fn select_particle(&mut self, index: usize) {
         self.selected_particle = Some(SelectedParticleInfo { index });
         self.is_particle_info_panel_open = true;
+    }
+
+    /// Fixes up the selected-particle index after particles were removed at the given
+    /// ascending indices. Clears the selection if the selected particle itself was
+    /// removed; otherwise shifts the index down by the count removed before it so the
+    /// same particle stays selected (keeps camera tracing stable across a cull pass).
+    pub fn adjust_selection_after_removal(&mut self, removed_sorted: &[usize]) {
+        if removed_sorted.is_empty() {
+            return;
+        }
+        let Some(selected) = self.selected_particle else {
+            return;
+        };
+        if removed_sorted.binary_search(&selected.index).is_ok() {
+            self.clear_selected_particle();
+            return;
+        }
+        let shift = removed_sorted.partition_point(|&r| r < selected.index);
+        self.selected_particle = Some(SelectedParticleInfo {
+            index: selected.index - shift,
+        });
     }
 
     /// Clears any previously picked particle and closes the info panel.

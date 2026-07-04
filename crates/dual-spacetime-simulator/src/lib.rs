@@ -22,7 +22,7 @@ use crate::settings::AppSettings;
 use crate::simulation::SimulationManager;
 use crate::ui::{draw_ui, process_pending_particle_delete, process_pending_snapshot_dialog, resolve_trace_particle_for_camera};
 use crate::trace_follow::compute_trace_follow_distance_limits;
-use crate::ui_state::{DragOwner, PlacementMode, UiState};
+use crate::ui_state::{DragOwner, PlacementMode, SimulationType, UiState};
 use ash::vk;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
@@ -49,6 +49,9 @@ const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
 
 /// Coordinates CPU→GPU particle buffer synchronization between the UI, worker, and render loop.
 const GPU_REMOVE_NONE: usize = usize::MAX;
+/// DST Galaxy: advancing frames between S³-angle culling passes. Throttled so the
+/// device-idle stall from mutating the mapped SSBO does not run every frame.
+const GALAXY_CULL_INTERVAL: u32 = 60;
 
 #[derive(Clone)]
 pub(crate) struct GpuParticleSync {
@@ -171,6 +174,7 @@ pub(crate) fn spawn_simulation_worker(
         let mut last_advance = Instant::now();
         let mut last_fps = Instant::now();
         let mut prev_frame: i64 = 1;
+        let mut cpu_cull_counter: u32 = 0;
         loop {
             {
                 let ui_state = ui_state_clone.read().unwrap();
@@ -305,6 +309,9 @@ pub(crate) fn spawn_simulation_worker(
             let time_per_frame = ui_state.time_per_frame;
             let skip = ui_state.skip;
             let uses_gpu = ui_state.uses_gpu_simulation();
+            let simulation_type = ui_state.active_simulation_type();
+            let galaxy_cull_enabled = ui_state.galaxy_cull_enabled;
+            let galaxy_cull_max_angle = ui_state.galaxy_cull_max_angle;
             drop(ui_state);
             let now = Instant::now();
             let dt = now.duration_since(last_fps).as_secs_f64();
@@ -336,6 +343,22 @@ pub(crate) fn spawn_simulation_worker(
                 thread_pool.install(|| {
                     simulation_manager.read().unwrap().advance(time_per_frame);
                 });
+                if galaxy_cull_enabled && simulation_type == SimulationType::DstGalaxy {
+                    cpu_cull_counter += 1;
+                    if cpu_cull_counter >= GALAXY_CULL_INTERVAL {
+                        cpu_cull_counter = 0;
+                        let removed = simulation_manager
+                            .read()
+                            .unwrap()
+                            .cull_galaxy_by_angle(galaxy_cull_max_angle);
+                        if !removed.is_empty() {
+                            ui_state_clone
+                                .write()
+                                .unwrap()
+                                .adjust_selection_after_removal(&removed);
+                        }
+                    }
+                }
             }
             if *skip_redraw.read().unwrap() < 1 {
                 let mut sr = skip_redraw.write().unwrap();
@@ -382,6 +405,8 @@ pub struct App {
     input: InputState,
     last_camera_tick: Option<Instant>,
     last_lock_camera_up: Option<bool>,
+    /// Accumulated GPU advance steps since the last DST Galaxy S³-angle cull pass.
+    gpu_cull_accumulated_steps: u32,
 }
 
 impl Drop for App {
@@ -434,6 +459,7 @@ impl Default for App {
             input: InputState::default(),
             last_camera_tick: None,
             last_lock_camera_up: None,
+            gpu_cull_accumulated_steps: 0,
         }
     }
 }
@@ -620,6 +646,8 @@ impl ApplicationHandler for App {
                 let time_per_frame = ui_state.time_per_frame;
                 let simulation_type = ui_state.active_simulation_type();
                 let sim_scale = ui_state.scale;
+                let galaxy_cull_enabled = ui_state.galaxy_cull_enabled;
+                let galaxy_cull_max_angle = ui_state.galaxy_cull_max_angle;
                 drop(ui_state);
 
                 let pending_steps = if uses_gpu {
@@ -627,6 +655,33 @@ impl ApplicationHandler for App {
                 } else {
                     0
                 };
+                // Cull particles that circled too far on S³ before recording this
+                // frame's advance. The previous batch's compute has completed, so the
+                // mapped SSBO holds current orientations; the reduced count then feeds
+                // record_gpu_advance below.
+                if uses_gpu
+                    && galaxy_cull_enabled
+                    && simulation_type == SimulationType::DstGalaxy
+                    && pending_steps > 0
+                {
+                    self.gpu_cull_accumulated_steps += pending_steps;
+                    if self.gpu_cull_accumulated_steps >= GALAXY_CULL_INTERVAL {
+                        self.gpu_cull_accumulated_steps = 0;
+                        let removed = pipeline.cull_galaxy_particles(galaxy_cull_max_angle);
+                        if !removed.is_empty() {
+                            // Mirror onto the CPU list so index correspondence holds and
+                            // culled particles are not resurrected on the next add.
+                            self.simulation_manager
+                                .write()
+                                .unwrap()
+                                .remove_particles_at_sorted(&removed);
+                            self.ui_state
+                                .write()
+                                .unwrap()
+                                .adjust_selection_after_removal(&removed);
+                        }
+                    }
+                }
                 if pending_steps > 0 {
                     pipeline.record_gpu_advance(
                         cb,

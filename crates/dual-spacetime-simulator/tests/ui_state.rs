@@ -9,6 +9,32 @@ use dual_spacetime_simulator::ui_state::{
 use glam::DVec3;
 
 #[test]
+fn adjust_selection_after_removal_shifts_clears_and_ignores() {
+    // Selected particle after the removed ones shifts down by the count removed before it.
+    let mut ui = UiState::default();
+    ui.select_particle(5);
+    ui.adjust_selection_after_removal(&[1, 3]);
+    assert_eq!(ui.selected_particle.map(|s| s.index), Some(3));
+
+    // Selected particle itself removed: selection cleared.
+    let mut ui = UiState::default();
+    ui.select_particle(3);
+    ui.adjust_selection_after_removal(&[1, 3, 4]);
+    assert_eq!(ui.selected_particle.map(|s| s.index), None);
+
+    // All removals after the selected index: no shift.
+    let mut ui = UiState::default();
+    ui.select_particle(2);
+    ui.adjust_selection_after_removal(&[5, 6]);
+    assert_eq!(ui.selected_particle.map(|s| s.index), Some(2));
+
+    // No selection or empty removal list: no-op.
+    let mut ui = UiState::default();
+    ui.adjust_selection_after_removal(&[0, 1]);
+    assert_eq!(ui.selected_particle.map(|s| s.index), None);
+}
+
+#[test]
 fn clamp_velocity_inputs_noop_in_normal_mode() {
     let mut ui = UiState::default();
     ui.simulation_type = SimulationType::Normal;

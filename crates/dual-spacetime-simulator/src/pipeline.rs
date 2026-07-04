@@ -248,6 +248,15 @@ impl ParticleRenderPipeline {
         self.gpu_sim.remove_particle_at(index)
     }
 
+    /// Removes DstGalaxy particles whose S³ angle from the origin exceeds `max_angle`.
+    ///
+    /// Compacts the mapped SSBO in place after the GPU queue is idle. Returns the
+    /// removed slot indices (ascending) so the caller can mirror them onto the CPU list.
+    pub fn cull_galaxy_particles(&mut self, max_angle: f64) -> Vec<usize> {
+        self.wait_device_idle("cull_galaxy_particles");
+        self.gpu_sim.cull_galaxy_by_angle(max_angle)
+    }
+
     fn wait_device_idle(&self, context: &str) {
         unsafe {
             if let Err(err) = self.device.device_wait_idle() {
