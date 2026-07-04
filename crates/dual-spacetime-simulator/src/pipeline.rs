@@ -272,7 +272,7 @@ impl ParticleRenderPipeline {
     /// Reclaims dead (S³-culled) particle slots from the SSBO.
     ///
     /// Compacts the mapped buffer in place after the GPU queue is idle — a pipeline
-    /// stall, so call rarely (only when enough dead slots accumulated). Returns the
+    /// stall, so call rarely (threshold-gated or long fixed interval). Returns the
     /// removed slot indices (ascending) so the caller can mirror them onto the CPU list.
     pub fn compact_dead_galaxy_particles(&mut self) -> Vec<usize> {
         self.wait_device_idle("compact_dead_galaxy_particles");

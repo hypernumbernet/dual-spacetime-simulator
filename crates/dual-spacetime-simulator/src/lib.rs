@@ -53,10 +53,14 @@ const GPU_REMOVE_NONE: usize = usize::MAX;
 /// this is the retain interval; on the GPU path it is the interval of the stall-free
 /// dead-slot scan (the shader itself marks particles dead every step).
 const GALAXY_CULL_INTERVAL: u32 = 60;
-/// DST Galaxy, GPU path: minimum dead slots before compaction. Compacting requires a
-/// full device-idle stall, so it only pays off once enough slots can be reclaimed;
-/// below this, dead particles just stay parked (massless and invisible).
+/// DST Galaxy, GPU path: minimum dead slots before threshold-gated compaction.
+/// Compacting stalls the GPU pipeline (device-idle wait), so it only pays off once
+/// enough slots can be reclaimed; below this, dead particles stay parked in their
+/// slots (massless and invisible) until the forced interval fires.
 const GALAXY_COMPACT_MIN_DEAD: usize = 64;
+/// DST Galaxy, GPU path: advancing frames between unconditional dead-slot
+/// compactions, so stragglers are reclaimed even when the threshold is never met.
+const GALAXY_COMPACT_INTERVAL: u32 = 10_000;
 
 #[derive(Clone)]
 pub(crate) struct GpuParticleSync {
@@ -410,8 +414,11 @@ pub struct App {
     input: InputState,
     last_camera_tick: Option<Instant>,
     last_lock_camera_up: Option<bool>,
-    /// Accumulated GPU advance steps since the last DST Galaxy S³-angle cull pass.
+    /// Accumulated GPU advance steps since the last DST Galaxy dead-slot scan.
     gpu_cull_accumulated_steps: u32,
+    /// Accumulated GPU advance steps since the last DST Galaxy compaction; drives
+    /// the unconditional garbage-collect interval.
+    gpu_forced_compact_steps: u32,
 }
 
 impl Drop for App {
@@ -465,6 +472,7 @@ impl Default for App {
             last_camera_tick: None,
             last_lock_camera_up: None,
             gpu_cull_accumulated_steps: 0,
+            gpu_forced_compact_steps: 0,
         }
     }
 }
@@ -663,16 +671,21 @@ impl ApplicationHandler for App {
                 // The compute shader marks particles beyond the S³ cull angle dead
                 // in-place (mass 0, invisible) with no CPU-GPU sync. Slot reclamation
                 // below is the only stalling step, so it runs rarely: a periodic
-                // stall-free scan of the mapped SSBO, then compaction only once
-                // enough dead slots accumulated to be worth one pipeline drain.
+                // stall-free scan of the mapped SSBO triggers compaction once enough
+                // dead slots accumulated, and a long unconditional interval sweeps up
+                // stragglers that never reach the threshold.
                 if uses_gpu && simulation_type == SimulationType::DstGalaxy && pending_steps > 0
                 {
                     self.gpu_cull_accumulated_steps += pending_steps;
+                    self.gpu_forced_compact_steps += pending_steps;
                     if self.gpu_cull_accumulated_steps >= GALAXY_CULL_INTERVAL {
                         self.gpu_cull_accumulated_steps = 0;
+                        let forced = self.gpu_forced_compact_steps >= GALAXY_COMPACT_INTERVAL;
                         let dead = pipeline.count_dead_galaxy_particles();
                         let total = pipeline.gpu_particle_count() as usize;
-                        if dead >= GALAXY_COMPACT_MIN_DEAD && dead * 8 >= total {
+                        let threshold_hit =
+                            dead >= GALAXY_COMPACT_MIN_DEAD && dead * 8 >= total;
+                        if threshold_hit || (forced && dead > 0) {
                             let removed = pipeline.compact_dead_galaxy_particles();
                             if !removed.is_empty() {
                                 // Mirror onto the CPU list so index correspondence holds
@@ -686,6 +699,11 @@ impl ApplicationHandler for App {
                                     .unwrap()
                                     .adjust_selection_after_removal(&removed);
                             }
+                        }
+                        // Any compaction (or a forced pass finding nothing) restarts
+                        // the forced-GC clock.
+                        if threshold_hit || forced {
+                            self.gpu_forced_compact_steps = 0;
                         }
                     }
                 }
