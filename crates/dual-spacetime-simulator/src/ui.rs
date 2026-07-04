@@ -2,7 +2,7 @@ use crate::object_input::{ObjectInputType, ParticleBasicColor, clamp_world_scale
 use crate::particle_snapshot::{ParticleSnapshot, SNAPSHOT_FILTER_EXT, SNAPSHOT_FILTER_NAME};
 use crate::pipeline::ParticleRenderPipeline;
 use crate::settings::AppSettings;
-use crate::simulation::{AU, LY, MPC, PC, Particle, SimulationManager};
+use crate::simulation::{AU, KPC, LY, MPC, PC, Particle, SimulationManager};
 use crate::ui_state::*;
 use crate::ui_styles::*;
 use egui::{Checkbox, ComboBox, Slider};
@@ -598,6 +598,8 @@ fn format_scale(scale_guage: f64, scale: f64) -> String {
     let pow10 = scale_inv.powi(4) * scale;
     if pow10 >= MPC {
         format!("{:.3e} Mpc", pow10 / MPC)
+    } else if pow10 >= KPC {
+        format!("{:.3e} kpc", pow10 / KPC)
     } else if pow10 >= PC {
         format!("{:.3e} pc", pow10 / PC)
     } else if pow10 >= LY {

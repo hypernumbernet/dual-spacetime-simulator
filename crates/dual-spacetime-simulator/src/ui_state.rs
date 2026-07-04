@@ -3,7 +3,7 @@ use crate::object_input::{
     SOLAR_SYSTEM_SCALE, clamp_world_scale,
 };
 use crate::settings::AppSettings;
-use crate::simulation::{AU, LY, MPC, PC, clamp_scalar_speed_m_s, clamp_velocity_m_s};
+use crate::simulation::{AU, KPC, LY, MPC, PC, clamp_scalar_speed_m_s, clamp_velocity_m_s};
 use glam::DVec3;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,6 +29,7 @@ pub const DST_GALAXY_DEFAULT_BASE_SCALE: f64 = 1e20;
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum BaseScaleUnit {
     Mpc,
+    Kpc,
     Pc,
     Ly,
     Au,
@@ -44,6 +45,7 @@ impl std::fmt::Display for BaseScaleUnit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
             BaseScaleUnit::Mpc => "Mpc",
+            BaseScaleUnit::Kpc => "kpc",
             BaseScaleUnit::Pc => "pc",
             BaseScaleUnit::Ly => "ly",
             BaseScaleUnit::Au => "au",
@@ -59,8 +61,9 @@ impl std::fmt::Display for BaseScaleUnit {
 
 impl BaseScaleUnit {
     /// All units in descending size order (largest first).
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Mpc,
+        Self::Kpc,
         Self::Pc,
         Self::Ly,
         Self::Au,
@@ -75,6 +78,7 @@ impl BaseScaleUnit {
     pub fn meters_per_unit(self) -> f64 {
         match self {
             BaseScaleUnit::Mpc => MPC,
+            BaseScaleUnit::Kpc => KPC,
             BaseScaleUnit::Pc => PC,
             BaseScaleUnit::Ly => LY,
             BaseScaleUnit::Au => AU,
@@ -99,7 +103,7 @@ impl BaseScaleUnit {
     /// Decimal places used when rounding display values for this unit.
     pub fn display_decimal_places(self) -> i32 {
         match self {
-            BaseScaleUnit::Mpc | BaseScaleUnit::Pc | BaseScaleUnit::Ly | BaseScaleUnit::Au => 6,
+            BaseScaleUnit::Mpc | BaseScaleUnit::Kpc | BaseScaleUnit::Pc | BaseScaleUnit::Ly | BaseScaleUnit::Au => 6,
             BaseScaleUnit::Km | BaseScaleUnit::M => 3,
             BaseScaleUnit::Mm => 6,
             BaseScaleUnit::Nm | BaseScaleUnit::Fm => 2,

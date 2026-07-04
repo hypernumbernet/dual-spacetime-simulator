@@ -43,7 +43,8 @@ fn sub_nanometer_units_ordered_largest_first() {
 
 #[test]
 fn astronomical_units_ordered_largest_first() {
-    assert!(BaseScaleUnit::Mpc.meters_per_unit() > BaseScaleUnit::Pc.meters_per_unit());
+    assert!(BaseScaleUnit::Mpc.meters_per_unit() > BaseScaleUnit::Kpc.meters_per_unit());
+    assert!(BaseScaleUnit::Kpc.meters_per_unit() > BaseScaleUnit::Pc.meters_per_unit());
     assert!(BaseScaleUnit::Pc.meters_per_unit() > BaseScaleUnit::Ly.meters_per_unit());
     assert!(BaseScaleUnit::Ly.meters_per_unit() > BaseScaleUnit::Au.meters_per_unit());
 }

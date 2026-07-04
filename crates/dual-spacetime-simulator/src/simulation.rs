@@ -24,6 +24,7 @@ pub const LIGHT_SPEED: f64 = dst_math::s3_galaxy::LIGHT_SPEED;
 pub const AU: f64 = 149_597_870_700.0; // Astronomical Unit in meters
 pub const LY: f64 = dst_math::s3_galaxy::LY; // Julian light year in meters
 pub const PC: f64 = AU * 648_000.0 / std::f64::consts::PI; // Parsec in meters
+pub const KPC: f64 = PC * 1_000.0; // Kiloparsec in meters
 pub const MPC: f64 = PC * 1_000_000.0; // Megaparsec in meters
 pub const LIGHT_SPEED_SQUARED: f64 = LIGHT_SPEED * LIGHT_SPEED;
 /// Maximum allowed speed as a fraction of light speed for non-Normal simulation types.
