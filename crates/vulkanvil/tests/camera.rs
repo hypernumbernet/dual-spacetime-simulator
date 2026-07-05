@@ -899,6 +899,78 @@ fn trace_spacecraft_keyboard_w_adjusts_follow_distance_not_pitch() {
     );
 }
 
+#[test]
+fn end_trace_follow_restores_lock_up_orbit_distance() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    cam.set_lock_up(true);
+    let before = cam.orbit_distance();
+
+    cam.begin_trace_follow();
+    cam.adjust_trace_follow_distance(-4.0);
+    let particle_pos = Vec3::new(3.0, 0.0, 0.0);
+    trace_particle_from_behind(&mut cam, particle_pos, Vec3::new(1.0, 0.0, 0.0), 1.0);
+    assert!(
+        cam.orbit_distance() < before,
+        "trace should have moved the camera closer"
+    );
+    let view_before_release = cam.view_relative().normalize();
+
+    cam.end_trace_follow();
+
+    assert!((cam.orbit_distance() - before).abs() < 1e-4);
+    assert!((cam.target - particle_pos).length() < 1e-5, "release keeps target");
+    assert!(cam.view_relative().normalize().dot(view_before_release) > 0.9999);
+}
+
+#[test]
+fn end_trace_follow_free_mode_keeps_position() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    cam.set_lock_up(false);
+    cam.begin_trace_follow();
+    cam.adjust_trace_follow_distance(-4.0);
+    trace_particle_from_behind(&mut cam, Vec3::new(3.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 1.0);
+    let position = cam.position;
+
+    cam.end_trace_follow();
+
+    assert!((cam.position - position).length() < 1e-6);
+}
+
+#[test]
+fn unlock_during_trace_then_trace_off_then_relock_restores_distance() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    cam.set_lock_up(true);
+    let before = cam.orbit_distance();
+
+    cam.begin_trace_follow();
+    cam.adjust_trace_follow_distance(-4.0);
+    trace_particle_from_behind(&mut cam, Vec3::new(3.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 1.0);
+    assert!(cam.orbit_distance() < before);
+
+    cam.set_lock_up(false);
+    cam.end_trace_follow();
+    cam.set_lock_up(true);
+
+    assert!(
+        (cam.orbit_distance() - before).abs() < 1e-4,
+        "re-lock after unlocking mid-trace should restore the pre-trace distance: \
+         before={before} after={}",
+        cam.orbit_distance()
+    );
+}
+
+#[test]
+fn end_trace_follow_without_trace_is_noop() {
+    let mut cam = OrbitCamera::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+    cam.set_lock_up(true);
+    cam.zoom(2.0);
+    let position = cam.position;
+
+    cam.end_trace_follow();
+
+    assert!((cam.position - position).length() < 1e-6);
+}
+
 const INITIAL_POSITION: Vec3 = Vec3::new(1.6, -1.6, 3.0);
 const INITIAL_TARGET: Vec3 = Vec3::ZERO;
 

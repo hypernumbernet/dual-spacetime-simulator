@@ -22,6 +22,8 @@ pub struct OrbitCamera {
     lock_up: bool,
     reference_orbit_distance: f32,
     trace_follow_distance: Option<f32>,
+    /// Orbit distance captured when trace follow begins, restored on release in lock-up mode.
+    pre_trace_orbit_distance: Option<f32>,
     trace_follow_distance_limits: (f32, f32),
     /// Lock-up path for the in-flight origin-center animation (`center_target_on_origin`).
     origin_center_lock_up: bool,
@@ -45,6 +47,7 @@ impl OrbitCamera {
             lock_up: false,
             reference_orbit_distance,
             trace_follow_distance: None,
+            pre_trace_orbit_distance: None,
             trace_follow_distance_limits: (
                 super::MIN_TRACE_FOLLOW_DISTANCE,
                 super::MAX_TRACE_FOLLOW_DISTANCE,
@@ -120,14 +123,34 @@ impl OrbitCamera {
     /// Initializes trace follow distance from the current orbit distance when trace begins.
     pub fn begin_trace_follow(&mut self) {
         if self.trace_follow_distance.is_none() {
+            self.pre_trace_orbit_distance = Some(self.orbit_distance());
             self.trace_follow_distance =
                 Some(self.clamp_trace_follow_distance(self.orbit_distance()));
         }
     }
 
     /// Clears trace follow distance when trace ends.
+    ///
+    /// In lock-up mode, snaps the camera back to the pre-trace orbit distance along the
+    /// current view direction so trace follow never leaks its distance into orbit controls.
     pub fn end_trace_follow(&mut self) {
         self.trace_follow_distance = None;
+        let Some(distance) = self.pre_trace_orbit_distance.take() else {
+            return;
+        };
+        if self.lock_up {
+            self.snap_orbit_distance(distance);
+        }
+    }
+
+    /// Repositions the camera at `distance` from the target, preserving view direction.
+    fn snap_orbit_distance(&mut self, distance: f32) {
+        let relative = self.view_relative();
+        let dist_sq = relative.length_squared();
+        if dist_sq <= EPSILON || distance <= EPSILON {
+            return;
+        }
+        self.position = self.target - relative * (distance / dist_sq.sqrt());
     }
 
     /// Sets the min/max world-space trace follow distance used for clamping.
@@ -359,12 +382,17 @@ impl OrbitCamera {
     }
 
     /// Enables or disables up-lock and reprojects the up vector when locking.
+    ///
+    /// Unlocking during an active trace records the pre-trace orbit distance as the lock
+    /// reference so the trace follow distance never leaks into a later re-lock.
     pub fn set_lock_up(&mut self, lock: bool) {
         if lock == self.lock_up {
             return;
         }
         if !lock {
-            self.reference_orbit_distance = self.orbit_distance();
+            self.reference_orbit_distance = self
+                .pre_trace_orbit_distance
+                .unwrap_or_else(|| self.orbit_distance());
         }
         self.lock_up = lock;
         if lock {
@@ -384,6 +412,7 @@ impl OrbitCamera {
         self.thrust_remaining = 0.0;
         self.thrust_sign = 0.0;
         self.thrust_accel = 0.0;
+        self.pre_trace_orbit_distance = None;
         self.end_trace_follow();
         self.animating_to_origin = 0;
         self.start_time = None;
