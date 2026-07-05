@@ -10,7 +10,7 @@ use dst_math::gravity::{
     dst_gravity_step_at, k_scale_from_light_speed, newtonian_gravity_pair,
 };
 use dst_math::s3_galaxy::{
-    galaxy_gravity_step_at, galaxy_radius_sim, integrate_orientation,
+    galaxy_gravity_step_at_orientations, galaxy_radius_sim, integrate_orientation,
     orientation_from_disk_position, orientation_to_display_position, s3_angle_from_origin,
 };
 use dst_math::spacetime::{
@@ -326,9 +326,7 @@ fn dst_galaxy_velocity_update(
     delta_seconds: f64,
     galaxy_radius: f64,
 ) {
-    // Gravity acts on the Ln-projected display positions (kept in sync with
-    // orientations by advance_time), so the projection distortion is preserved.
-    let positions: Vec<DVec3> = particles.iter().map(|p| p.position).collect();
+    let orientations: Vec<DQuat> = particles.iter().map(|p| p.orientation).collect();
     let masses: Vec<f64> = particles.iter().map(|p| p.mass).collect();
     let time_g = G * delta_seconds;
 
@@ -336,15 +334,23 @@ fn dst_galaxy_velocity_update(
         .par_iter_mut()
         .enumerate()
         .for_each(|(i, particle)| {
-            let acceleration = galaxy_gravity_step_at(
+            let delta_v = galaxy_gravity_step_at_orientations(
                 i,
-                &positions,
+                &orientations,
                 &masses,
                 galaxy_radius,
                 time_g,
                 EPSILON,
             );
-            particle.velocity += acceleration;
+            particle.velocity += delta_v;
+            particle.orientation = integrate_orientation(
+                particle.orientation,
+                delta_v,
+                galaxy_radius,
+                delta_seconds,
+            );
+            particle.position =
+                orientation_to_display_position(particle.orientation, galaxy_radius);
         });
 }
 

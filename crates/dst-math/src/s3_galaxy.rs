@@ -103,6 +103,27 @@ pub fn galaxy_gravity_pair_ln(
     galaxy_gravity_pair_chart(p_i, p_j, mass_j, r_galaxy, time_g, epsilon)
 }
 
+/// Total chart-space gravity at particle i from all neighbors, using S³
+/// orientations as the source of truth (projects via the log map internally).
+pub fn galaxy_gravity_step_at_orientations(
+    i: usize,
+    orientations: &[DQuat],
+    masses: &[f64],
+    r_galaxy: f64,
+    time_g: f64,
+    epsilon: f64,
+) -> DVec3 {
+    let q_i = orientations[i];
+    orientations
+        .iter()
+        .enumerate()
+        .filter(|(j, _)| *j != i)
+        .map(|(j, &q_j)| {
+            galaxy_gravity_pair_ln(q_i, q_j, masses[j], r_galaxy, time_g, epsilon)
+        })
+        .sum()
+}
+
 /// Total chart-space gravity at particle i from all neighbors.
 /// `positions` are display positions p = Ln(q)·(2R/π), kept in sync with the
 /// orientations by the integrator.

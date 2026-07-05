@@ -1,7 +1,8 @@
 use dst_math::s3_galaxy::{
-    galaxy_gravity_pair_ln, galaxy_radius_sim, integrate_orientation,
-    orientation_from_disk_position, orientation_to_display_position, quaternion_exp,
-    quaternion_log, radial_distance_ln, relative_quaternion, s3_angle_from_origin,
+    galaxy_gravity_pair_ln, galaxy_gravity_step_at, galaxy_gravity_step_at_orientations,
+    galaxy_radius_sim, integrate_orientation, orientation_from_disk_position,
+    orientation_to_display_position, quaternion_exp, quaternion_log, radial_distance_ln,
+    relative_quaternion, s3_angle_from_origin,
 };
 use glam::{DQuat, DVec3};
 use std::f64::consts::PI;
@@ -214,6 +215,34 @@ fn orientation_position_roundtrip_3d() {
     let q = orientation_from_disk_position(pos, r_galaxy);
     let restored = orientation_to_display_position(q, r_galaxy);
     assert!((restored - pos).length() < 1e-6 * pos.length());
+}
+
+#[test]
+fn galaxy_gravity_step_at_orientations_matches_synced_positions() {
+    let r_galaxy = 1000.0;
+    let orientations = [
+        quaternion_exp(DVec3::new(0.4, 0.7, -0.2)),
+        quaternion_exp(DVec3::new(0.5, 0.6, -0.1)),
+        quaternion_exp(DVec3::new(-0.2, 0.3, 0.8)),
+    ];
+    let masses = [1.0e6, 2.0e6, 3.0e6];
+    let positions: Vec<_> = orientations
+        .iter()
+        .map(|&q| orientation_to_display_position(q, r_galaxy))
+        .collect();
+    let time_g = 1.0;
+    let epsilon = 1e-12;
+
+    for i in 0..orientations.len() {
+        let from_orientations =
+            galaxy_gravity_step_at_orientations(i, &orientations, &masses, r_galaxy, time_g, epsilon);
+        let from_positions =
+            galaxy_gravity_step_at(i, &positions, &masses, r_galaxy, time_g, epsilon);
+        assert!(
+            (from_orientations - from_positions).length() < 1e-9 * from_positions.length().max(1e-30),
+            "particle {i}: orientations {from_orientations:?}, positions {from_positions:?}"
+        );
+    }
 }
 
 #[test]
