@@ -25,6 +25,8 @@ pub const BASE_SCALE_DRAG_SPEED: f64 = 0.01;
 pub const DEFAULT_SATELLITE_COUNT: u32 = 1000;
 /// Default world scale (m per sim unit) applied when switching to DST Galaxy.
 pub const DST_GALAXY_DEFAULT_BASE_SCALE: f64 = 1e20;
+/// Default S³ cull threshold for DstGalaxy (170°).
+pub const GALAXY_CULL_MAX_ANGLE_DEFAULT: f64 = 170.0 * std::f64::consts::PI / 180.0;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum BaseScaleUnit {
@@ -497,7 +499,7 @@ impl Default for UiState {
             base_scale: ObjectInputType::default().default_base_scale(),
             base_scale_unit: BaseScaleUnit::default(),
             galaxy_cull_enabled: true,
-            galaxy_cull_max_angle: std::f64::consts::FRAC_PI_2,
+            galaxy_cull_max_angle: GALAXY_CULL_MAX_ANGLE_DEFAULT,
             random_sphere: RandomSphereParameters::default(),
             random_cube: RandomCubeParameters::default(),
             spiral_disk: SpiralDiskParameters::default(),
