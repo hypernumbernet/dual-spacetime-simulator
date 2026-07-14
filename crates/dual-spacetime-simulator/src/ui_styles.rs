@@ -68,14 +68,14 @@ const POSITIVE_DRAG_VALUE_HEIGHT: f32 = 18.0;
 fn apply_positive_dragvalue_style(ui: &mut Ui) {
     let visuals = ui.visuals_mut();
     visuals.widgets.inactive.weak_bg_fill = Color32::BLACK;
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::LIGHT_BLUE);
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, Color32::LIGHT_BLUE);
     visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(60, 0, 0);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::RED);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, Color32::RED);
     visuals.widgets.active.weak_bg_fill = Color32::from_rgb(60, 60, 0);
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0, Color32::YELLOW);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, Color32::YELLOW);
     visuals.extreme_bg_color = Color32::from_rgb(0, 60, 0);
     visuals.override_text_color = Some(Color32::WHITE);
-    visuals.selection.stroke = Stroke::new(1.0, Color32::GREEN);
+    visuals.selection.stroke = Stroke::new(1.0_f32, Color32::GREEN);
 
     let style = ui.style_mut();
     style
@@ -191,14 +191,14 @@ pub fn dragvalue_normal<T: egui::emath::Numeric>(
         ui.scope(|ui| {
             let visuals = ui.visuals_mut();
             visuals.widgets.inactive.weak_bg_fill = Color32::BLACK;
-            visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::LIGHT_BLUE);
+            visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, Color32::LIGHT_BLUE);
             visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(60, 0, 0);
-            visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::RED);
+            visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, Color32::RED);
             visuals.widgets.active.weak_bg_fill = Color32::from_rgb(60, 60, 0);
-            visuals.widgets.active.bg_stroke = Stroke::new(1.0, Color32::YELLOW);
+            visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, Color32::YELLOW);
             visuals.extreme_bg_color = Color32::from_rgb(0, 60, 0);
             visuals.override_text_color = Some(Color32::WHITE);
-            visuals.selection.stroke = Stroke::new(1.0, Color32::GREEN);
+            visuals.selection.stroke = Stroke::new(1.0_f32, Color32::GREEN);
 
             let style = ui.style_mut();
             style
@@ -451,7 +451,7 @@ pub fn button_normal(ui: &mut Ui, text: &str, inverted: bool) -> Response {
     let button = if inverted {
         Button::new(RichText::new(text).color(Color32::BLACK))
             .fill(Color32::WHITE)
-            .stroke(Stroke::new(1.0, Color32::BLACK))
+            .stroke(Stroke::new(1.0_f32, Color32::BLACK))
     } else {
         Button::new(text)
     };
