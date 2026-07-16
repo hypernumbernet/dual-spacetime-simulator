@@ -120,7 +120,8 @@ pub fn rocket_mesh(state: &RocketState) -> (Vec<Vertex>, Vec<u32>) {
     }
 
     // Engine bell: open metal frustum (throat → exit), gimbal-tilted about throat.
-    // Length comes from sim params so it stays consistent with leg clearance.
+    // Cache gimbal once per mesh build (avoids rebuilding rotor per vertex).
+    let nozzle_xf = NozzleXform::from_state(state);
     let throat_r = r * 0.45;
     let exit_r = r * 0.95;
     let throat_y = -hh;
@@ -130,7 +131,7 @@ pub fn rocket_mesh(state: &RocketState) -> (Vec<Vertex>, Vec<u32>) {
         let a = (i as f32) * std::f32::consts::TAU / segs as f32;
         let (s, c) = a.sin_cos();
         verts.push(Vertex {
-            pos: nozzle_body_to_world(state, [c * throat_r, throat_y, s * throat_r]),
+            pos: nozzle_xf.map(state, [c * throat_r, throat_y, s * throat_r]),
             color: nozzle_col,
         });
     }
@@ -139,7 +140,7 @@ pub fn rocket_mesh(state: &RocketState) -> (Vec<Vertex>, Vec<u32>) {
         let a = (i as f32) * std::f32::consts::TAU / segs as f32;
         let (s, c) = a.sin_cos();
         verts.push(Vertex {
-            pos: nozzle_body_to_world(state, [c * exit_r, exit_y, s * exit_r]),
+            pos: nozzle_xf.map(state, [c * exit_r, exit_y, s * exit_r]),
             color: nozzle_rim_col,
         });
     }
@@ -152,7 +153,7 @@ pub fn rocket_mesh(state: &RocketState) -> (Vec<Vertex>, Vec<u32>) {
     }
 
     // Exhaust plume starts just past the bell exit; absent at zero throttle.
-    append_exhaust_plume(&mut verts, &mut idx, state, exit_y, exit_r, segs);
+    append_exhaust_plume(&mut verts, &mut idx, state, &nozzle_xf, exit_y, exit_r, segs);
 
     // Center-body roll RCS jets when commanded.
     append_rcs_plumes(&mut verts, &mut idx, state);
@@ -184,24 +185,48 @@ fn body_to_world(state: &RocketState, body: [f32; 3]) -> [f32; 3] {
     [w[0] as f32, w[1] as f32, w[2] as f32]
 }
 
-/// Map a nozzle/plume body point through gimbal (about throat) then PGA motor.
-fn nozzle_body_to_world(state: &RocketState, body: [f32; 3]) -> [f32; 3] {
-    use crate::sim::rotate_vector_by_rotor;
-    let pivot_y = -state.params.body_half_height;
-    let rel = [
-        body[0] as f64,
-        body[1] as f64 - pivot_y,
-        body[2] as f64,
-    ];
-    let rot = rotate_vector_by_rotor(&state.gimbal_rotor(), rel);
-    body_to_world(
-        state,
-        [
-            rot[0] as f32,
-            (rot[1] + pivot_y) as f32,
-            rot[2] as f32,
-        ],
-    )
+/// Cached nozzle gimbal transform: one PGA rotor per mesh rebuild.
+struct NozzleXform {
+    rotor: crate::euclidean_pga::Multivector,
+    pivot_y: f64,
+    identity: bool,
+}
+
+impl NozzleXform {
+    fn from_state(state: &RocketState) -> Self {
+        let (pitch, yaw) = state.gimbal_angles();
+        let identity = pitch.abs() < 1e-12 && yaw.abs() < 1e-12;
+        Self {
+            rotor: if identity {
+                crate::euclidean_pga::Multivector::one()
+            } else {
+                state.gimbal_rotor()
+            },
+            pivot_y: -state.params.body_half_height,
+            identity,
+        }
+    }
+
+    fn map(&self, state: &RocketState, body: [f32; 3]) -> [f32; 3] {
+        if self.identity {
+            return body_to_world(state, body);
+        }
+        use crate::sim::rotate_vector_by_rotor;
+        let rel = [
+            body[0] as f64,
+            body[1] as f64 - self.pivot_y,
+            body[2] as f64,
+        ];
+        let rot = rotate_vector_by_rotor(&self.rotor, rel);
+        body_to_world(
+            state,
+            [
+                rot[0] as f32,
+                (rot[1] + self.pivot_y) as f32,
+                rot[2] as f32,
+            ],
+        )
+    }
 }
 
 /// Adds a double-cone exhaust flame below the bell exit. Size ∝ throttle; nothing at 0.
@@ -209,6 +234,7 @@ fn append_exhaust_plume(
     verts: &mut Vec<Vertex>,
     idx: &mut Vec<u32>,
     state: &RocketState,
+    nozzle_xf: &NozzleXform,
     bell_exit_y: f32,
     bell_exit_r: f32,
     segs: u32,
@@ -236,6 +262,7 @@ fn append_exhaust_plume(
         verts,
         idx,
         state,
+        nozzle_xf,
         segs,
         y0,
         mid_y,
@@ -260,6 +287,7 @@ fn append_exhaust_plume(
         verts,
         idx,
         state,
+        nozzle_xf,
         segs,
         y0,
         core_mid_y,
@@ -277,6 +305,7 @@ fn append_flame_layer(
     verts: &mut Vec<Vertex>,
     idx: &mut Vec<u32>,
     state: &RocketState,
+    nozzle_xf: &NozzleXform,
     segs: u32,
     y0: f32,
     y1: f32,
@@ -292,7 +321,7 @@ fn append_flame_layer(
         let a = (i as f32) * std::f32::consts::TAU / segs as f32;
         let (s, c) = a.sin_cos();
         verts.push(Vertex {
-            pos: nozzle_body_to_world(state, [c * r0, y0, s * r0]),
+            pos: nozzle_xf.map(state, [c * r0, y0, s * r0]),
             color: c0,
         });
     }
@@ -301,13 +330,13 @@ fn append_flame_layer(
         let a = (i as f32) * std::f32::consts::TAU / segs as f32;
         let (s, c) = a.sin_cos();
         verts.push(Vertex {
-            pos: nozzle_body_to_world(state, [c * r1, y1, s * r1]),
+            pos: nozzle_xf.map(state, [c * r1, y1, s * r1]),
             color: c1,
         });
     }
     let tip = verts.len() as u32;
     verts.push(Vertex {
-        pos: nozzle_body_to_world(state, [0.0, y2, 0.0]),
+        pos: nozzle_xf.map(state, [0.0, y2, 0.0]),
         color: c2,
     });
 
@@ -325,25 +354,28 @@ fn append_flame_layer(
 
 /// Small orange jets at the four center roll thrusters when roll is commanded.
 fn append_rcs_plumes(verts: &mut Vec<Vertex>, idx: &mut Vec<u32>, state: &RocketState) {
-    let roll = state.command.roll.clamp(-1.0, 1.0) as f32;
+    let roll = state.command.roll.clamp(-1.0, 1.0);
     if roll.abs() <= 1e-4 {
         return;
     }
     let thrusters = state.roll_thrusters();
-    let jet_len = 1.2 + 1.8 * roll.abs();
+    let jet_len = 1.2 + 1.8 * roll.abs() as f32;
+    // |force| is identical on all four when roll ≠ 0.
+    let fmag = roll.abs() * state.params.rcs_thrust;
+    if fmag < 1e-9 {
+        return;
+    }
+    let inv_f = 1.0 / fmag;
     let color_hot = [1.0, 0.65, 0.2];
     let color_tip = [0.9, 0.25, 0.05];
+    let offset = 0.12_f32;
     for t in &thrusters {
         let f = t.force_body;
-        let fmag = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt();
-        if fmag < 1e-9 {
-            continue;
-        }
         // Visual jet opposite the force (exhaust exits opposite reaction).
         let dir = [
-            -(f[0] / fmag) as f32,
-            -(f[1] / fmag) as f32,
-            -(f[2] / fmag) as f32,
+            -(f[0] * inv_f) as f32,
+            -(f[1] * inv_f) as f32,
+            -(f[2] * inv_f) as f32,
         ];
         let base = [
             t.position_body[0] as f32,
@@ -357,20 +389,10 @@ fn append_rcs_plumes(verts: &mut Vec<Vertex>, idx: &mut Vec<u32>, state: &Rocket
         ];
         let base_w = body_to_world(state, base);
         let tip_w = body_to_world(state, tip);
-        let mid_w = [
-            (base_w[0] + tip_w[0]) * 0.5,
-            (base_w[1] + tip_w[1]) * 0.5,
-            (base_w[2] + tip_w[2]) * 0.5,
-        ];
         // Tiny tetrahedron jet.
         let i0 = verts.len() as u32;
-        let offset = 0.12;
         verts.push(Vertex {
-            pos: [
-                base_w[0] + offset,
-                base_w[1],
-                base_w[2],
-            ],
+            pos: [base_w[0] + offset, base_w[1], base_w[2]],
             color: color_hot,
         });
         verts.push(Vertex {
@@ -393,8 +415,6 @@ fn append_rcs_plumes(verts: &mut Vec<Vertex>, idx: &mut Vec<u32>, state: &Rocket
             pos: tip_w,
             color: color_tip,
         });
-        // Keep mid unused visually but anchors length if needed later.
-        let _ = mid_w;
         idx.extend_from_slice(&[i0, i0 + 1, i0 + 3, i0 + 1, i0 + 2, i0 + 3, i0 + 2, i0, i0 + 3]);
     }
 }
@@ -474,7 +494,7 @@ pub fn hud_text(state: &RocketState, fps: f32) -> String {
     let contact = if state.contacting { "YES" } else { "no" };
     format!(
         "PGA Rocket  |  alt={:.1} m  vel_y={:.1} m/s  thr={:.0}%  contact={}  fps={:.0}\n\
-         Space/Ctrl: throttle  W/S: pitch gimbal  Q/E: yaw gimbal  A/D: roll RCS  R: reset\n\
+         Space/Ctrl: throttle  W/S: pitch  Q/E: yaw  A/D: roll RCS  R: reset\n\
          Drag LMB/RMB: orbit camera  Wheel: zoom  Arrows: orbit  Esc: quit",
         p[1],
         state.velocity[1],

@@ -130,11 +130,13 @@ fn vehicle_section(ui: &mut egui::Ui, rocket: &RocketState) {
         "Max gimbal",
         format!("{:.1}°", p.max_gimbal_angle.to_degrees()),
     );
-    kv(ui, "Thrust app Y", format!("{:.2} m", p.thrust_application_y));
+    kv(ui, "Nozzle exit Y", format!("{:.2} m", p.nozzle_exit_y()));
     kv(ui, "RCS thrust", format!("{:.0} N / thruster", p.rcs_thrust));
     kv(ui, "RCS radius", format!("{:.2} m", p.rcs_radius));
     kv(ui, "Contact k", format!("{:.0}", p.contact_stiffness));
     kv(ui, "Contact c", format!("{:.0}", p.contact_damping));
+    kv(ui, "Friction μ", format!("{:.2}", p.friction_mu));
+    kv(ui, "Slip eps", format!("{:.3} m/s", p.friction_slip_eps));
 }
 
 fn camera_section(

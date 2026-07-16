@@ -267,6 +267,56 @@ fn roll_thrusters_pure_couple_spins_about_y() {
 }
 
 #[test]
+fn grounded_roll_rcs_fires_and_friction_opposes_spin() {
+    let mut s = RocketState::resting_on_pad();
+    assert!(s.contacting);
+
+    // RCS is available on the pad.
+    s.set_command(ControlCommand {
+        throttle: 0.0,
+        pitch: 0.0,
+        yaw: 0.0,
+        roll: 1.0,
+    });
+    assert!((s.command.roll - 1.0).abs() < 1e-12);
+    let rcs = s.rcs_wrench_body();
+    assert!(
+        rcs.torque[1] > 1000.0,
+        "RCS must produce +τ_y on the pad, got {:?}",
+        rcs.torque
+    );
+
+    // Spin up briefly with low friction, then high friction should dump ω_y.
+    s.params.friction_mu = 0.05;
+    for _ in 0..180 {
+        step_rocket(&mut s, DT);
+    }
+    let omega_spun = s.omega[1].abs();
+    assert!(
+        omega_spun > 0.02,
+        "low-μ pad + RCS should allow some spin, ω_y={}",
+        s.omega[1]
+    );
+
+    s.set_command(ControlCommand::default());
+    s.params.friction_mu = 1.2;
+    let before = s.omega[1].abs();
+    for _ in 0..240 {
+        step_rocket(&mut s, DT);
+    }
+    assert!(
+        s.omega[1].abs() < before * 0.5,
+        "foot friction should damp roll spin: before={before} after={}",
+        s.omega[1].abs()
+    );
+    assert!(
+        s.omega[1].abs() < 0.15,
+        "spin should largely settle under high μ, ω_y={}",
+        s.omega[1]
+    );
+}
+
+#[test]
 fn engine_lever_arm_magnitude_matches_analytic() {
     let p = RocketParams::default();
     let cmd = ControlCommand {
@@ -276,9 +326,9 @@ fn engine_lever_arm_magnitude_matches_analytic() {
         roll: 0.0,
     };
     let w = engine_wrench(&p, cmd);
-    let expected = p.thrust_application_y * p.max_thrust * p.max_gimbal_angle.sin();
+    let expected = p.nozzle_exit_y() * p.max_thrust * p.max_gimbal_angle.sin();
     assert!(
-        (w.torque[0] - expected).abs() < 1.0,
+        (w.torque[0] - expected).abs() < 1e-9,
         "τ_x={} analytic={}",
         w.torque[0],
         expected

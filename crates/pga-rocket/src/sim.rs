@@ -5,6 +5,7 @@ use crate::euclidean_pga::{
     Multivector, compose_motors, extract_point, ground_plane, motor_from_pose, motor_rotate_vector,
     motor_translation, point, rotor, translator,
 };
+use std::ops::Add;
 
 /// Standard gravity (m/s²).
 pub const GRAVITY: f64 = 9.81;
@@ -28,8 +29,6 @@ pub struct RocketParams {
     pub inertia: [f64; 3],
     /// Max nozzle gimbal half-angle (rad). pitch/yaw commands map to ±this.
     pub max_gimbal_angle: f64,
-    /// Body-frame Y of main-engine thrust application point (m, typically nozzle exit).
-    pub thrust_application_y: f64,
     /// Max force per roll thruster (N).
     pub rcs_thrust: f64,
     /// Radial distance of roll thrusters from body Y axis (m).
@@ -39,6 +38,14 @@ pub struct RocketParams {
     /// Linear ground contact stiffness / damping (penalty method).
     pub contact_stiffness: f64,
     pub contact_damping: f64,
+    /// Coulomb friction coefficient between landing feet and ground (μ).
+    /// Horizontal friction opposes foot slip (including spin) up to μ N.
+    pub friction_mu: f64,
+    /// Regularization speed (m/s) for Coulomb friction; avoids a hard stick/slip jump.
+    pub friction_slip_eps: f64,
+    /// Height band (m) above the ground plane still treated as planted for friction.
+    /// Needed because hard non-penetration often leaves feet exactly at y=0 (zero spring N).
+    pub contact_band: f64,
 }
 
 impl Default for RocketParams {
@@ -52,7 +59,6 @@ impl Default for RocketParams {
         let leg_y = -hh - nozzle_length - leg_clearance;
         let leg_r = 4.0;
         let body_radius = 1.8;
-        let thrust_application_y = -hh - nozzle_length;
         // 4 thrusters × F × R ≈ roll authority; Iyy is small so a few kN is plenty.
         let rcs_radius = body_radius * 0.9;
         let rcs_thrust = 3500.0;
@@ -72,18 +78,22 @@ impl Default for RocketParams {
             inertia: [mass * 40.0, mass * 8.0, mass * 40.0],
             // ~7° max gimbal; at full T and |r_y|≈13.6 m → tens of kN·m pitch/yaw.
             max_gimbal_angle: 0.12,
-            thrust_application_y,
             rcs_thrust,
             rcs_radius,
             rcs_y: 0.0,
             contact_stiffness: 5.0e5,
             contact_damping: 2.0e4,
+            // High enough that pad friction can dump residual spin; RCS can still
+            // overcome it at full thrust if desired.
+            friction_mu: 0.6,
+            friction_slip_eps: 0.05,
+            contact_band: 0.05,
         }
     }
 }
 
 impl RocketParams {
-    /// Body-frame Y of the engine-bell exit plane.
+    /// Body-frame Y of the engine-bell exit plane (thrust application point).
     pub fn nozzle_exit_y(&self) -> f64 {
         -self.body_half_height - self.nozzle_length
     }
@@ -117,6 +127,27 @@ impl ControlCommand {
 pub struct BodyWrench {
     pub force: [f64; 3],
     pub torque: [f64; 3],
+}
+
+impl BodyWrench {
+    #[inline]
+    pub fn accum(&mut self, other: BodyWrench) {
+        self.force[0] += other.force[0];
+        self.force[1] += other.force[1];
+        self.force[2] += other.force[2];
+        self.torque[0] += other.torque[0];
+        self.torque[1] += other.torque[1];
+        self.torque[2] += other.torque[2];
+    }
+}
+
+impl Add for BodyWrench {
+    type Output = Self;
+    #[inline]
+    fn add(mut self, rhs: Self) -> Self {
+        self.accum(rhs);
+        self
+    }
 }
 
 /// One roll thruster site: body position and body-frame force.
@@ -190,10 +221,13 @@ impl RocketState {
     }
 
     /// Gimbal angles (pitch about X, yaw about Z) in radians from current command.
+    #[inline]
     pub fn gimbal_angles(&self) -> (f64, f64) {
-        let cmd = self.command.clamp();
         let a = self.params.max_gimbal_angle;
-        (cmd.pitch * a, cmd.yaw * a)
+        (
+            self.command.pitch.clamp(-1.0, 1.0) * a,
+            self.command.yaw.clamp(-1.0, 1.0) * a,
+        )
     }
 
     /// PGA rotor that tilts the nozzle: yaw-about-Z ∘ pitch-about-X.
@@ -204,7 +238,8 @@ impl RocketState {
 
     /// Body-frame unit thrust direction after gimbal (default +Y when neutral).
     pub fn thrust_direction_body(&self) -> [f64; 3] {
-        rotate_vector_by_rotor(&self.gimbal_rotor(), [0.0, 1.0, 0.0])
+        let (pitch, yaw) = self.gimbal_angles();
+        thrust_dir_body(pitch, yaw)
     }
 
     /// World-frame unit direction of vehicle thrust (gimbaled).
@@ -214,35 +249,22 @@ impl RocketState {
 
     /// Body-frame wrench from main engine alone (force at nozzle + r×F).
     pub fn engine_wrench_body(&self) -> BodyWrench {
-        engine_wrench(&self.params, self.command.clamp())
+        engine_wrench(&self.params, self.command)
     }
 
     /// Four center-body roll thrusters (positions + forces in body frame).
     pub fn roll_thrusters(&self) -> [ThrusterSample; 4] {
-        roll_thrusters(&self.params, self.command.clamp().roll)
+        roll_thrusters(&self.params, self.command.roll)
     }
 
     /// Body-frame wrench from the four roll thrusters.
     pub fn rcs_wrench_body(&self) -> BodyWrench {
-        rcs_wrench(&self.params, self.command.clamp().roll)
+        rcs_wrench(&self.params, self.command.roll)
     }
 
     /// Combined propulsive wrench in body frame (engine + RCS).
     pub fn propulsive_wrench_body(&self) -> BodyWrench {
-        let e = self.engine_wrench_body();
-        let r = self.rcs_wrench_body();
-        BodyWrench {
-            force: [
-                e.force[0] + r.force[0],
-                e.force[1] + r.force[1],
-                e.force[2] + r.force[2],
-            ],
-            torque: [
-                e.torque[0] + r.torque[0],
-                e.torque[1] + r.torque[1],
-                e.torque[2] + r.torque[2],
-            ],
-        }
+        propulsive_wrench(&self.params, self.command)
     }
 
     /// World positions of the four landing feet (PGA sandwich of body points).
@@ -257,10 +279,15 @@ impl RocketState {
 
     /// Lowest foot altitude (min world Y).
     pub fn lowest_foot_y(&self) -> f64 {
-        self.foot_world_positions()
-            .iter()
-            .map(|p| p[1])
-            .fold(f64::INFINITY, f64::min)
+        let mut min_y = f64::INFINITY;
+        for foot in &self.params.leg_feet {
+            let p = point(foot[0], foot[1], foot[2]);
+            let y = extract_point(&self.motor.sandwich(&p))[1];
+            if y < min_y {
+                min_y = y;
+            }
+        }
+        min_y
     }
 
     /// Apply a control command (clamped).
@@ -277,8 +304,8 @@ impl RocketState {
         let cmd = self.command.clamp();
         self.command = cmd;
 
-        // --- Propulsive wrenches (body frame, PGA geometry for directions/arms) ---
-        let prop = self.propulsive_wrench_body();
+        // --- Propulsive wrenches (body frame; closed-form gimbal + RCS couple) ---
+        let prop = propulsive_wrench(&self.params, cmd);
         let f_prop_w = motor_rotate_vector(&self.motor, prop.force);
 
         // --- Forces (world) ---
@@ -289,49 +316,94 @@ impl RocketState {
         ];
         let mut body_torque = prop.torque;
 
-        // --- Leg / ground contact (infinite plane y=0, PGA ground element stored) ---
-        let _ground = self.ground; // plane kept for PGA geometry consumers / rendering
+        // --- Leg / ground contact + Coulomb friction ---
         self.contacting = false;
         let pos = self.position();
         let feet = self.foot_world_positions();
-        for foot in &feet {
-            let penetration = -foot[1];
-            if penetration <= 0.0 {
-                continue;
-            }
-            self.contacting = true;
-            let r = [foot[0] - pos[0], foot[1] - pos[1], foot[2] - pos[2]];
+        let band = self.params.contact_band.max(0.0);
+        // Feet at/below the band count as planted (hard projection often leaves y≈0).
+        let planted: [bool; 4] = std::array::from_fn(|i| feet[i][1] <= band);
+        let n_planted = planted.iter().filter(|&&p| p).count();
+        let any_contact = n_planted > 0;
+
+        if any_contact {
             let omega_w = motor_rotate_vector(&self.motor, self.omega);
-            let v_foot_y = self.velocity[1] + omega_w[0] * r[2] - omega_w[2] * r[0];
-            let n_force = (self.params.contact_stiffness * penetration
-                - self.params.contact_damping * v_foot_y.min(0.0))
-            .max(0.0);
-            force[1] += n_force;
+            let motor_inv = self.motor.reverse().normalize_motor();
+            let mu = self.params.friction_mu.max(0.0);
+            let v_eps = self.params.friction_slip_eps.max(1e-6);
+            let v_eps2 = v_eps * v_eps;
+            // Resting support share for friction when the soft spring sees ~0 penetration.
+            let n_rest_each = if n_planted > 0 {
+                (mass * GRAVITY) / n_planted as f64
+            } else {
+                0.0
+            };
 
-            // τ_world = r × F with F=(0,n,0) → (−rz n, 0, rx n)
-            let tau_w = [-r[2] * n_force, 0.0, r[0] * n_force];
-            let tau_b = world_vec_to_body(&self.motor, tau_w);
-            body_torque[0] += tau_b[0];
-            body_torque[1] += tau_b[1];
-            body_torque[2] += tau_b[2];
+            for (i, foot) in feet.iter().enumerate() {
+                if !planted[i] {
+                    continue;
+                }
+                self.contacting = true;
+                let r = [foot[0] - pos[0], foot[1] - pos[1], foot[2] - pos[2]];
+                // Foot world velocity: v_com + ω × r
+                let v_foot = [
+                    self.velocity[0] + omega_w[1] * r[2] - omega_w[2] * r[1],
+                    self.velocity[1] + omega_w[2] * r[0] - omega_w[0] * r[2],
+                    self.velocity[2] + omega_w[0] * r[1] - omega_w[1] * r[0],
+                ];
+                let penetration = (-foot[1]).max(0.0);
+                let n_spring = (self.params.contact_stiffness * penetration
+                    - self.params.contact_damping * v_foot[1].min(0.0))
+                .max(0.0);
+                // Vertical support only from the penalty spring (avoids double-counting weight).
+                force[1] += n_spring;
 
-            // Coulomb-ish horizontal friction.
-            let mu = 0.4;
-            let speed_h = (self.velocity[0] * self.velocity[0]
-                + self.velocity[2] * self.velocity[2])
-                .sqrt();
-            if speed_h > 1e-4 {
-                let f_fr = mu * n_force;
-                force[0] -= f_fr * self.velocity[0] / speed_h;
-                force[2] -= f_fr * self.velocity[2] / speed_h;
+                // Normal reaction torque: τ = r × (0, N_spring, 0)
+                if n_spring > 0.0 {
+                    let tau_n = [-r[2] * n_spring, 0.0, r[0] * n_spring];
+                    let tau_nb = motor_rotate_vector(&motor_inv, tau_n);
+                    body_torque[0] += tau_nb[0];
+                    body_torque[1] += tau_nb[1];
+                    body_torque[2] += tau_nb[2];
+                }
+
+                // Planting weight for friction: full rest share at/below plane, fades to 0 at band.
+                let plant = if foot[1] <= 0.0 {
+                    1.0
+                } else if band > 0.0 {
+                    (1.0 - foot[1] / band).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let n_fric = n_spring.max(n_rest_each * plant);
+
+                // Regularized Coulomb friction on horizontal foot slip (incl. spin).
+                // F = −μ N · v_h / sqrt(|v_h|² + v_eps²)
+                if mu > 0.0 && n_fric > 0.0 {
+                    let vh_x = v_foot[0];
+                    let vh_z = v_foot[2];
+                    let speed2 = vh_x * vh_x + vh_z * vh_z;
+                    let denom = (speed2 + v_eps2).sqrt();
+                    let scale = -mu * n_fric / denom;
+                    let f_fx = scale * vh_x;
+                    let f_fz = scale * vh_z;
+                    force[0] += f_fx;
+                    force[2] += f_fz;
+                    // τ = r × F with F = (fx, 0, fz)
+                    let tau_f = [r[1] * f_fz, r[2] * f_fx - r[0] * f_fz, -r[1] * f_fx];
+                    let tau_fb = motor_rotate_vector(&motor_inv, tau_f);
+                    body_torque[0] += tau_fb[0];
+                    body_torque[1] += tau_fb[1];
+                    body_torque[2] += tau_fb[2];
+                }
             }
         }
 
         // Linear integration (semi-implicit Euler).
-        let acc = [force[0] / mass, force[1] / mass, force[2] / mass];
-        self.velocity[0] += acc[0] * dt;
-        self.velocity[1] += acc[1] * dt;
-        self.velocity[2] += acc[2] * dt;
+        let inv_mass = 1.0 / mass;
+        self.velocity[0] += force[0] * inv_mass * dt;
+        self.velocity[1] += force[1] * inv_mass * dt;
+        self.velocity[2] += force[2] * inv_mass * dt;
 
         // Angular: I α = τ − ω × (I ω) on principal axes.
         let i = self.params.inertia;
@@ -342,14 +414,9 @@ impl RocketState {
             w[2] * iw[0] - w[0] * iw[2],
             w[0] * iw[1] - w[1] * iw[0],
         ];
-        let alpha = [
-            (body_torque[0] - w_cross_iw[0]) / i[0],
-            (body_torque[1] - w_cross_iw[1]) / i[1],
-            (body_torque[2] - w_cross_iw[2]) / i[2],
-        ];
-        self.omega[0] += alpha[0] * dt;
-        self.omega[1] += alpha[1] * dt;
-        self.omega[2] += alpha[2] * dt;
+        self.omega[0] += (body_torque[0] - w_cross_iw[0]) / i[0] * dt;
+        self.omega[1] += (body_torque[1] - w_cross_iw[1]) / i[1] * dt;
+        self.omega[2] += (body_torque[2] - w_cross_iw[2]) / i[2] * dt;
 
         // PGA motor update: world translation of CoM + body-frame rotation.
         let t_inc = translator(
@@ -390,6 +457,7 @@ pub fn step_rocket(state: &mut RocketState, dt: f64) {
 // --- Propulsion / PGA helpers ---
 
 /// Cross product a × b.
+#[inline]
 pub fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [
         a[1] * b[2] - a[2] * b[1],
@@ -399,6 +467,7 @@ pub fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 }
 
 /// Body-frame force at body-frame point → (force, torque = r × F).
+#[inline]
 pub fn body_wrench_at(r_body: [f64; 3], f_body: [f64; 3]) -> BodyWrench {
     BodyWrench {
         force: f_body,
@@ -407,19 +476,37 @@ pub fn body_wrench_at(r_body: [f64; 3], f_body: [f64; 3]) -> BodyWrench {
 }
 
 /// PGA rotor for nozzle gimbal: yaw-about-Z ∘ pitch-about-X.
+///
+/// Used for mesh / visualization. Physics uses the closed form [`thrust_dir_body`].
 pub fn gimbal_rotor(pitch: f64, yaw: f64) -> Multivector {
+    if pitch.abs() < 1e-18 && yaw.abs() < 1e-18 {
+        return Multivector::one();
+    }
+    if yaw.abs() < 1e-18 {
+        return rotor(1.0, 0.0, 0.0, pitch);
+    }
+    if pitch.abs() < 1e-18 {
+        return rotor(0.0, 0.0, 1.0, yaw);
+    }
     let r_pitch = rotor(1.0, 0.0, 0.0, pitch);
     let r_yaw = rotor(0.0, 0.0, 1.0, yaw);
     r_yaw.geo(&r_pitch)
 }
 
-/// Rotate a free vector by a PGA rotor (sandwich of offset point minus origin).
+/// Closed form of sandwiching ŷ through [`gimbal_rotor`]: pitch-about-X then yaw-about-Z.
+///
+/// Result: `(-cos(p)·sin(y), cos(p)·cos(y), sin(p))`.
+#[inline]
+pub fn thrust_dir_body(pitch: f64, yaw: f64) -> [f64; 3] {
+    let (sp, cp) = pitch.sin_cos();
+    let (sy, cy) = yaw.sin_cos();
+    [-cp * sy, cp * cy, sp]
+}
+
+/// Rotate a free vector by a pure PGA rotor about the origin (one sandwich).
 pub fn rotate_vector_by_rotor(r: &Multivector, v: [f64; 3]) -> [f64; 3] {
-    let p = point(v[0], v[1], v[2]);
-    let o = point(0.0, 0.0, 0.0);
-    let pw = extract_point(&r.sandwich(&p));
-    let ow = extract_point(&r.sandwich(&o));
-    [pw[0] - ow[0], pw[1] - ow[1], pw[2] - ow[2]]
+    // Pure rotors fix the origin, so sandwiching the point at `v` yields R(v) directly.
+    extract_point(&r.sandwich(&point(v[0], v[1], v[2])))
 }
 
 /// Main engine wrench in body frame from throttle + gimbal commands.
@@ -430,10 +517,14 @@ pub fn engine_wrench(params: &RocketParams, cmd: ControlCommand) -> BodyWrench {
     }
     let pitch = cmd.pitch.clamp(-1.0, 1.0) * params.max_gimbal_angle;
     let yaw = cmd.yaw.clamp(-1.0, 1.0) * params.max_gimbal_angle;
-    let dir = rotate_vector_by_rotor(&gimbal_rotor(pitch, yaw), [0.0, 1.0, 0.0]);
+    let dir = thrust_dir_body(pitch, yaw);
     let f_body = [dir[0] * thrust, dir[1] * thrust, dir[2] * thrust];
-    let r = [0.0, params.thrust_application_y, 0.0];
-    body_wrench_at(r, f_body)
+    // Application at nozzle exit: r = (0, r_y, 0) ⇒ τ = (r_y Fz, 0, −r_y Fx).
+    let ry = params.nozzle_exit_y();
+    BodyWrench {
+        force: f_body,
+        torque: [ry * f_body[2], 0.0, -ry * f_body[0]],
+    }
 }
 
 /// Four center thrusters for roll about body +Y.
@@ -445,8 +536,30 @@ pub fn engine_wrench(params: &RocketParams, cmd: ControlCommand) -> BodyWrench {
 /// (Exhaust is opposite the reaction force; mesh visual uses −force.)
 pub fn roll_thrusters(params: &RocketParams, roll_cmd: f64) -> [ThrusterSample; 4] {
     let roll = roll_cmd.clamp(-1.0, 1.0);
+    if roll.abs() < 1e-18 {
+        let r = params.rcs_radius;
+        let y = params.rcs_y;
+        return [
+            ThrusterSample {
+                position_body: [r, y, 0.0],
+                force_body: [0.0, 0.0, 0.0],
+            },
+            ThrusterSample {
+                position_body: [-r, y, 0.0],
+                force_body: [0.0, 0.0, 0.0],
+            },
+            ThrusterSample {
+                position_body: [0.0, y, r],
+                force_body: [0.0, 0.0, 0.0],
+            },
+            ThrusterSample {
+                position_body: [0.0, y, -r],
+                force_body: [0.0, 0.0, 0.0],
+            },
+        ];
+    }
     let f = roll.abs() * params.rcs_thrust;
-    let s = if roll >= 0.0 { 1.0 } else { -1.0 };
+    let s = roll.signum();
     let r = params.rcs_radius;
     let y = params.rcs_y;
     let sf = s * f;
@@ -470,25 +583,26 @@ pub fn roll_thrusters(params: &RocketParams, roll_cmd: f64) -> [ThrusterSample; 
     ]
 }
 
-/// Summed body-frame wrench from roll thrusters.
+/// Summed body-frame wrench from roll thrusters (closed form: pure couple about +Y).
+///
+/// For the layout in [`roll_thrusters`], ΣF = 0 and τ = (0, 4 R s F, 0).
 pub fn rcs_wrench(params: &RocketParams, roll_cmd: f64) -> BodyWrench {
-    let mut out = BodyWrench::default();
-    for t in roll_thrusters(params, roll_cmd) {
-        let w = body_wrench_at(t.position_body, t.force_body);
-        out.force[0] += w.force[0];
-        out.force[1] += w.force[1];
-        out.force[2] += w.force[2];
-        out.torque[0] += w.torque[0];
-        out.torque[1] += w.torque[1];
-        out.torque[2] += w.torque[2];
+    let roll = roll_cmd.clamp(-1.0, 1.0);
+    if roll.abs() < 1e-18 {
+        return BodyWrench::default();
     }
-    out
+    let f = roll.abs() * params.rcs_thrust;
+    let s = roll.signum();
+    BodyWrench {
+        force: [0.0, 0.0, 0.0],
+        torque: [0.0, 4.0 * params.rcs_radius * s * f, 0.0],
+    }
 }
 
-/// Rotate a world-frame vector into the body frame using the motor inverse.
-fn world_vec_to_body(motor: &Multivector, v: [f64; 3]) -> [f64; 3] {
-    let inv = motor.reverse().normalize_motor();
-    motor_rotate_vector(&inv, v)
+/// Combined engine + RCS wrench for a command.
+#[inline]
+pub fn propulsive_wrench(params: &RocketParams, cmd: ControlCommand) -> BodyWrench {
+    engine_wrench(params, cmd) + rcs_wrench(params, cmd.roll)
 }
 
 #[cfg(test)]
@@ -506,18 +620,33 @@ mod unit_tests {
         };
         let w = engine_wrench(&p, cmd);
         let t = p.max_thrust;
-        let ry = p.thrust_application_y;
+        let ry = p.nozzle_exit_y();
         let delta = p.max_gimbal_angle;
-        // Pitch about +X: thrust gains +Z component ≈ T sin δ; τ_x = r_y * F_z.
+        // Pitch about +X: thrust gains +Z component = T sin δ; τ_x = r_y * F_z.
         let expected_tau_x = ry * t * delta.sin();
         assert!(
-            (w.torque[0] - expected_tau_x).abs() < 1.0,
+            (w.torque[0] - expected_tau_x).abs() < 1e-9,
             "τ_x={} expected≈{}",
             w.torque[0],
             expected_tau_x
         );
-        assert!(w.torque[1].abs() < 1e-6);
-        assert!(w.torque[2].abs() < 1.0);
+        assert!(w.torque[1].abs() < 1e-12);
+        assert!(w.torque[2].abs() < 1e-9);
+    }
+
+    #[test]
+    fn thrust_dir_matches_pga_gimbal_rotor() {
+        let cases = [(0.0, 0.0), (0.12, 0.0), (0.0, -0.08), (0.1, 0.07), (-0.05, 0.11)];
+        for (p, y) in cases {
+            let closed = thrust_dir_body(p, y);
+            let pga = rotate_vector_by_rotor(&gimbal_rotor(p, y), [0.0, 1.0, 0.0]);
+            for i in 0..3 {
+                assert!(
+                    (closed[i] - pga[i]).abs() < 1e-12,
+                    "dir mismatch at ({p},{y}): closed={closed:?} pga={pga:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -531,6 +660,14 @@ mod unit_tests {
         assert!(w.force[0].abs() < 1e-9);
         assert!(w.force[1].abs() < 1e-9);
         assert!(w.force[2].abs() < 1e-9);
+
+        // Closed form matches explicit sum of thruster wrenches.
+        let mut summed = BodyWrench::default();
+        for t in roll_thrusters(&p, 1.0) {
+            summed.accum(body_wrench_at(t.position_body, t.force_body));
+        }
+        assert!((summed.torque[1] - w.torque[1]).abs() < 1e-9);
+        assert!(summed.force.iter().all(|c| c.abs() < 1e-9));
     }
 
     #[test]
@@ -545,11 +682,7 @@ mod unit_tests {
                 roll: 0.0,
             },
         );
-        assert!(w.force[0].abs() < 1e-12);
-        assert!(w.force[1].abs() < 1e-12);
-        assert!(w.force[2].abs() < 1e-12);
-        assert!(w.torque[0].abs() < 1e-12);
-        assert!(w.torque[1].abs() < 1e-12);
-        assert!(w.torque[2].abs() < 1e-12);
+        assert!(w.force.iter().all(|c| c.abs() < 1e-12));
+        assert!(w.torque.iter().all(|c| c.abs() < 1e-12));
     }
 }

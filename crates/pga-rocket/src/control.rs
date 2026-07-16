@@ -22,7 +22,7 @@ pub struct KeySnapshot {
 /// - Left Ctrl / C: lower throttle
 /// - W/S: pitch (main-engine gimbal about body +X; needs thrust)
 /// - Q/E: yaw (main-engine gimbal about body +Z; needs thrust)
-/// - A/D: roll (four center RCS thrusters about body +Y)
+/// - A/D: roll (four center RCS thrusters about body +Y; works on the pad too)
 /// - R: signal reset (caller applies)
 #[derive(Clone, Debug)]
 pub struct ControlMapper {
