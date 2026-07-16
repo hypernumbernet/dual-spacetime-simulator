@@ -7,6 +7,7 @@ members = [
     "crates/dual-spacetime-simulator",
     "crates/minecraft-clone",
     "crates/vulkanvil",
+    "crates/pga-rocket",
 ]
 
 [workspace.package]
