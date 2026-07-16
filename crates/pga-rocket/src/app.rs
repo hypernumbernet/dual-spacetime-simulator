@@ -8,18 +8,21 @@ use ash::vk;
 use glam::Vec3;
 use std::ffi::CString;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use vulkanvil::{InputState, VulkanBase};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::Window;
 
 const MAX_DT: f32 = 1.0 / 30.0;
 const FIXED_DT: f64 = 1.0 / 120.0;
 const MOUSE_ORBIT_SENS: f32 = 0.005;
+/// Render/update rate cap (also paired with FIFO present / vsync).
+const TARGET_FPS: u32 = 60;
+const FRAME_PERIOD: Duration = Duration::from_nanos(1_000_000_000 / TARGET_FPS as u64);
 
 pub struct App {
     renderer: Option<Renderer>,
@@ -43,6 +46,8 @@ pub struct App {
     drag_delta: (f64, f64),
     /// Scroll-wheel zoom for this frame (positive = zoom in).
     scroll_zoom: f32,
+    /// Earliest time the next rendered frame may start (60 FPS pacing).
+    next_frame_at: Instant,
 }
 
 impl Default for App {
@@ -66,6 +71,7 @@ impl Default for App {
             mouse_dragging: false,
             drag_delta: (0.0, 0.0),
             scroll_zoom: 0.0,
+            next_frame_at: Instant::now(),
         }
     }
 }
@@ -105,10 +111,17 @@ impl App {
         }
 
         let now = Instant::now();
+        // Soft cap: skip work if we were woken earlier than the 60 FPS budget.
+        if now < self.next_frame_at {
+            return;
+        }
+        // Schedule from the ideal tick so small overruns don't permanently lag.
+        self.next_frame_at = (self.next_frame_at + FRAME_PERIOD).max(now + FRAME_PERIOD / 2);
+
         let raw_dt = self
             .last_frame
             .map(|t| (now - t).as_secs_f32())
-            .unwrap_or(0.0);
+            .unwrap_or(FRAME_PERIOD.as_secs_f32());
         let dt = raw_dt.min(MAX_DT);
         self.last_frame = Some(now);
 
@@ -220,19 +233,23 @@ impl ApplicationHandler for App {
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
 
         let app_name = CString::new("pga-rocket").unwrap();
+        // FIFO (vsync) present mode — mailbox=false avoids uncapped multi-thousand FPS.
         let vb = VulkanBase::new(
             &window,
-            true,
+            false,
             &app_name,
             vk::make_api_version(0, 0, 1, 0),
         );
         let mut renderer = Renderer::new(&vb);
         renderer.sync_rocket(&self.rocket);
 
+        let now = Instant::now();
         self.window = Some(window);
         self.vulkan_base = Some(vb);
         self.renderer = Some(renderer);
-        self.last_frame = Some(Instant::now());
+        self.last_frame = Some(now);
+        self.next_frame_at = now;
+        event_loop.set_control_flow(ControlFlow::WaitUntil(now + FRAME_PERIOD));
     }
 
     fn window_event(
@@ -299,7 +316,14 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let now = Instant::now();
+        if now < self.next_frame_at {
+            // Sleep until the next 60 FPS slot instead of spinning.
+            event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame_at));
+            return;
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(now + FRAME_PERIOD));
         if let Some(window) = &self.window {
             window.request_redraw();
         }
