@@ -10,7 +10,7 @@ use glam::{IVec2, IVec3, Vec3};
 /// (continent/hill/mountain wavelengths) and the vertical relief (sea level, hill and
 /// mountain amplitudes, snow line) in `worldgen.rs`. Physical sizes that should not
 /// grow with the landscape (trees, soil depth, fog, wave height) stay absolute.
-pub const WORLD_SCALE: f32 = 10.0;
+pub const WORLD_SCALE: f32 = 2.0;
 
 pub const CX: usize = 16;
 /// Vertical room for the tallest terrain: max theoretical surface is ~149×scale

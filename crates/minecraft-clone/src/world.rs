@@ -16,9 +16,9 @@ use std::collections::HashMap;
 
 /// Default streamed ring radius; adjustable at runtime via [`World::set_render_distance`]
 /// (the gen/unload rings and the renderer's fog derive from the current value).
-pub const DEFAULT_RENDER_DISTANCE: i32 = 50;
+pub const DEFAULT_RENDER_DISTANCE: i32 = 12;
 pub const MIN_RENDER_DISTANCE: i32 = 4;
-pub const MAX_RENDER_DISTANCE: i32 = 500;
+pub const MAX_RENDER_DISTANCE: i32 = 64;
 /// Chunks within this radius of the player keep CPU block data for collision and
 /// underwater checks; beyond it, meshed chunks drop their blocks.
 const BLOCKS_KEEP_DISTANCE: i32 = 4;
