@@ -10,6 +10,7 @@ mod euclidean_pga;
 mod mesh;
 mod renderer;
 mod sim;
+mod texture;
 
 use winit::event_loop::EventLoop;
 

@@ -1,8 +1,8 @@
 //! winit application: window, Vulkan, sim step, keyboard control, render loop.
 
 use crate::control::{ControlMapper, KeySnapshot};
-use crate::mesh::hud_text;
-use crate::renderer::{Renderer, camera_view_proj};
+use crate::mesh::{GRASS_METERS_PER_TILE, hud_text};
+use crate::renderer::{Renderer, SKY_COLOR, camera_view_proj};
 use crate::sim::{RocketState, step_rocket};
 use ash::vk;
 use glam::Vec3;
@@ -144,13 +144,19 @@ impl App {
         let pos = self.rocket.position();
         let target = Vec3::new(pos[0] as f32, pos[1] as f32, pos[2] as f32);
         let aspect = size.width as f32 / size.height.max(1) as f32;
-        let vp = camera_view_proj(
+        let (vp, eye) = camera_view_proj(
             target,
             self.cam_yaw,
             self.cam_pitch,
             self.cam_distance,
             aspect,
         );
+        // Snap ground origin to the grass tile grid under the rocket so tiling stays stable.
+        let tile = GRASS_METERS_PER_TILE;
+        let ground_xz = [
+            (pos[0] as f32 / tile).round() * tile,
+            (pos[2] as f32 / tile).round() * tile,
+        ];
         let hud = hud_text(&self.rocket, self.fps);
         let title = hud.lines().next().unwrap_or("PGA Rocket").to_string();
         window.set_title(&title);
@@ -169,7 +175,7 @@ impl App {
         renderer.sync_rocket(&self.rocket);
         renderer.set_hud(hud);
 
-        match renderer.draw(vb, vp, [0.45, 0.62, 0.85, 1.0]) {
+        match renderer.draw(vb, vp, eye, ground_xz, SKY_COLOR) {
             Ok(()) => {}
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 self.needs_resize = true;

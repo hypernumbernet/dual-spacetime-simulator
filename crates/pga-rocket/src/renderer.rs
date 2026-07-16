@@ -1,7 +1,11 @@
-//! Simple colored-mesh Vulkan renderer for ground + rocket.
+//! Colored rocket mesh + textured grass ground (minecraft-style tiling + fog).
 
-use crate::mesh::{Vertex, ground_fill_indices, ground_mesh, rocket_mesh};
+use crate::mesh::{
+    GRASS_METERS_PER_TILE, GROUND_FOG_END, GROUND_FOG_START, GROUND_HALF_EXTENT, GroundVertex,
+    Vertex, grass_ground_mesh, rocket_mesh,
+};
 use crate::sim::RocketState;
+use crate::texture::{Texture, create_grass_texture};
 use ash::vk;
 use glam::{Mat4, Vec3};
 use gpu_allocator::vulkan::Allocator;
@@ -14,11 +18,26 @@ use vulkanvil::{
 
 const MESH_VERT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/mesh.vert.spv"));
 const MESH_FRAG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/mesh.frag.spv"));
+const GROUND_VERT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/ground.vert.spv"));
+const GROUND_FRAG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/ground.frag.spv"));
+
+/// Sky / fog color (matches clear color).
+pub const SKY_COLOR: [f32; 4] = [0.45, 0.62, 0.85, 1.0];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct PushConstants {
+struct MeshPush {
     view_proj: [[f32; 4]; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GroundPush {
+    view_proj: [[f32; 4]; 4],
+    camera_pos: [f32; 4],
+    fog_color: [f32; 4],
+    fog_params: [f32; 4],
+    ground_origin: [f32; 4],
 }
 
 struct GpuMesh {
@@ -34,11 +53,15 @@ pub struct Renderer {
     render_pass: vk::RenderPass,
     depth_image: AllocatedImage,
     framebuffers: Vec<vk::Framebuffer>,
-    pipeline_layout: vk::PipelineLayout,
+    mesh_layout: vk::PipelineLayout,
+    ground_layout: vk::PipelineLayout,
     tri_pipeline: vk::Pipeline,
-    line_pipeline: vk::Pipeline,
-    ground_lines: Option<GpuMesh>,
-    ground_fill: Option<GpuMesh>,
+    ground_pipeline: vk::Pipeline,
+    grass: Texture,
+    desc_set_layout: vk::DescriptorSetLayout,
+    desc_pool: vk::DescriptorPool,
+    desc_set: vk::DescriptorSet,
+    ground: Option<GpuMesh>,
     rocket: Option<GpuMesh>,
     retired: Vec<(u64, AllocatedBuffer)>,
     frame_counter: u64,
@@ -68,19 +91,70 @@ impl Renderer {
             vb.swapchain_extent,
         );
 
-        let push_range = vk::PushConstantRange {
+        // Mesh (rocket) layout: view_proj only.
+        let mesh_push = vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX,
             offset: 0,
-            size: std::mem::size_of::<PushConstants>() as u32,
+            size: std::mem::size_of::<MeshPush>() as u32,
         };
-        let ranges = [push_range];
-        let pl_ci = vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&ranges);
-        let pipeline_layout = unsafe { device.create_pipeline_layout(&pl_ci, None) }.unwrap();
+        let mesh_ranges = [mesh_push];
+        let mesh_pl_ci =
+            vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&mesh_ranges);
+        let mesh_layout = unsafe { device.create_pipeline_layout(&mesh_pl_ci, None) }.unwrap();
+        let tri_pipeline = create_mesh_pipeline(&device, render_pass, mesh_layout);
 
-        let tri_pipeline =
-            create_mesh_pipeline(&device, render_pass, pipeline_layout, vk::PrimitiveTopology::TRIANGLE_LIST);
-        let line_pipeline =
-            create_mesh_pipeline(&device, render_pass, pipeline_layout, vk::PrimitiveTopology::LINE_LIST);
+        // Grass texture + ground pipeline.
+        let grass = create_grass_texture(vb, &allocator);
+
+        let binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+        let bindings = [binding];
+        let dsl_ci = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+        let desc_set_layout =
+            unsafe { device.create_descriptor_set_layout(&dsl_ci, None) }.unwrap();
+
+        let pool_size = vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            descriptor_count: 1,
+        };
+        let pool_sizes = [pool_size];
+        let pool_ci = vk::DescriptorPoolCreateInfo::default()
+            .pool_sizes(&pool_sizes)
+            .max_sets(1);
+        let desc_pool = unsafe { device.create_descriptor_pool(&pool_ci, None) }.unwrap();
+        let set_layouts = [desc_set_layout];
+        let alloc_ci = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(desc_pool)
+            .set_layouts(&set_layouts);
+        let desc_set = unsafe { device.allocate_descriptor_sets(&alloc_ci) }.unwrap()[0];
+
+        let image_info = [vk::DescriptorImageInfo {
+            sampler: grass.sampler,
+            image_view: grass.image.view,
+            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        }];
+        let write = [vk::WriteDescriptorSet::default()
+            .dst_set(desc_set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&image_info)];
+        unsafe { device.update_descriptor_sets(&write, &[]) };
+
+        let ground_push = vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            offset: 0,
+            size: std::mem::size_of::<GroundPush>() as u32,
+        };
+        let ground_ranges = [ground_push];
+        let ground_set_layouts = [desc_set_layout];
+        let ground_pl_ci = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&ground_set_layouts)
+            .push_constant_ranges(&ground_ranges);
+        let ground_layout = unsafe { device.create_pipeline_layout(&ground_pl_ci, None) }.unwrap();
+        let ground_pipeline = create_ground_pipeline(&device, render_pass, ground_layout);
 
         let mut renderer = Self {
             device,
@@ -89,22 +163,24 @@ impl Renderer {
             render_pass,
             depth_image,
             framebuffers,
-            pipeline_layout,
+            mesh_layout,
+            ground_layout,
             tri_pipeline,
-            line_pipeline,
-            ground_lines: None,
-            ground_fill: None,
+            ground_pipeline,
+            grass,
+            desc_set_layout,
+            desc_pool,
+            desc_set,
+            ground: None,
             rocket: None,
             retired: Vec::new(),
             frame_counter: 0,
             last_hud: String::new(),
         };
 
-        // Static ground
-        let (gverts, glines) = ground_mesh(400.0, 10.0);
-        let fill_idx = ground_fill_indices(gverts.len() as u32);
-        renderer.ground_lines = Some(renderer.upload_mesh(&gverts, &glines));
-        renderer.ground_fill = Some(renderer.upload_mesh(&gverts, &fill_idx));
+        // Local grass plane; recentered under the rocket each frame via push constants.
+        let (gverts, gidx) = grass_ground_mesh(GROUND_HALF_EXTENT, 32);
+        renderer.ground = Some(renderer.upload_ground(&gverts, &gidx));
         renderer
     }
 
@@ -122,6 +198,28 @@ impl Renderer {
             indices,
             vk::BufferUsageFlags::INDEX_BUFFER,
             "mesh-i",
+        );
+        GpuMesh {
+            vertex,
+            index,
+            index_count,
+        }
+    }
+
+    fn upload_ground(&self, verts: &[GroundVertex], indices: &[u32]) -> GpuMesh {
+        let (vertex, _) = create_buffer_with_data(
+            &self.device,
+            &self.allocator,
+            verts,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+            "ground-v",
+        );
+        let (index, index_count) = create_buffer_with_data(
+            &self.device,
+            &self.allocator,
+            indices,
+            vk::BufferUsageFlags::INDEX_BUFFER,
+            "ground-i",
         );
         GpuMesh {
             vertex,
@@ -189,20 +287,19 @@ impl Renderer {
         &mut self,
         vb: &mut VulkanBase,
         view_proj: Mat4,
+        camera_eye: Vec3,
+        ground_center_xz: [f32; 2],
         clear: [f32; 4],
     ) -> Result<(), vk::Result> {
         vb.wait_for_fence();
         self.collect_garbage();
         vb.reset_fence();
 
-        let (image_index, suboptimal) = match vb.acquire_next_image() {
+        let (image_index, _suboptimal) = match vb.acquire_next_image() {
             Ok(v) => v,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => return Err(vk::Result::ERROR_OUT_OF_DATE_KHR),
             Err(e) => return Err(e),
         };
-        if suboptimal {
-            // Still try to render; caller may recreate.
-        }
 
         let cmd = vb.current_command_buffer();
         unsafe {
@@ -250,39 +347,60 @@ impl Renderer {
             vb.device.cmd_set_viewport(cmd, 0, &[viewport]);
             vb.device.cmd_set_scissor(cmd, 0, &[scissor]);
 
-            let pc = PushConstants {
+            // --- Grass ground ---
+            let gpc = GroundPush {
+                view_proj: view_proj.to_cols_array_2d(),
+                camera_pos: [camera_eye.x, camera_eye.y, camera_eye.z, 0.0],
+                fog_color: [clear[0], clear[1], clear[2], 1.0],
+                fog_params: [
+                    GROUND_FOG_START,
+                    GROUND_FOG_END,
+                    GRASS_METERS_PER_TILE,
+                    0.0,
+                ],
+                // Snap to tile grid so UV does not crawl when recentering.
+                ground_origin: [
+                    ground_center_xz[0],
+                    0.0,
+                    ground_center_xz[1],
+                    0.0,
+                ],
+            };
+            vb.device
+                .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.ground_pipeline);
+            vb.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.ground_layout,
+                0,
+                &[self.desc_set],
+                &[],
+            );
+            vb.device.cmd_push_constants(
+                cmd,
+                self.ground_layout,
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                0,
+                bytemuck::bytes_of(&gpc),
+            );
+            if let Some(mesh) = &self.ground {
+                draw_mesh(&vb.device, cmd, mesh);
+            }
+
+            // --- Rocket ---
+            let mpc = MeshPush {
                 view_proj: view_proj.to_cols_array_2d(),
             };
-            let pc_bytes = bytemuck::bytes_of(&pc);
-
-            // Ground fill
             vb.device
                 .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.tri_pipeline);
             vb.device.cmd_push_constants(
                 cmd,
-                self.pipeline_layout,
+                self.mesh_layout,
                 vk::ShaderStageFlags::VERTEX,
                 0,
-                pc_bytes,
+                bytemuck::bytes_of(&mpc),
             );
-            if let Some(mesh) = &self.ground_fill {
-                draw_mesh(&vb.device, cmd, mesh);
-            }
             if let Some(mesh) = &self.rocket {
-                draw_mesh(&vb.device, cmd, mesh);
-            }
-
-            // Ground lines
-            vb.device
-                .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.line_pipeline);
-            vb.device.cmd_push_constants(
-                cmd,
-                self.pipeline_layout,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                pc_bytes,
-            );
-            if let Some(mesh) = &self.ground_lines {
                 draw_mesh(&vb.device, cmd, mesh);
             }
 
@@ -309,16 +427,20 @@ impl Drop for Renderer {
         for (_, buf) in self.retired.drain(..) {
             buf.destroy(&self.device, &self.allocator);
         }
-        for mesh in [&mut self.ground_lines, &mut self.ground_fill, &mut self.rocket] {
+        for mesh in [&mut self.ground, &mut self.rocket] {
             if let Some(m) = mesh.take() {
                 m.vertex.destroy(&self.device, &self.allocator);
                 m.index.destroy(&self.device, &self.allocator);
             }
         }
+        self.grass.destroy(&self.device, &self.allocator);
         unsafe {
             self.device.destroy_pipeline(self.tri_pipeline, None);
-            self.device.destroy_pipeline(self.line_pipeline, None);
-            self.device.destroy_pipeline_layout(self.pipeline_layout, None);
+            self.device.destroy_pipeline(self.ground_pipeline, None);
+            self.device.destroy_pipeline_layout(self.mesh_layout, None);
+            self.device.destroy_pipeline_layout(self.ground_layout, None);
+            self.device.destroy_descriptor_pool(self.desc_pool, None);
+            self.device.destroy_descriptor_set_layout(self.desc_set_layout, None);
             for &fb in &self.framebuffers {
                 self.device.destroy_framebuffer(fb, None);
             }
@@ -423,10 +545,59 @@ fn create_mesh_pipeline(
     device: &ash::Device,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
-    topology: vk::PrimitiveTopology,
 ) -> vk::Pipeline {
-    let vert = create_shader_module(device, MESH_VERT);
-    let frag = create_shader_module(device, MESH_FRAG);
+    create_graphics_pipeline(
+        device,
+        render_pass,
+        layout,
+        MESH_VERT,
+        MESH_FRAG,
+        std::mem::size_of::<Vertex>() as u32,
+        &[
+            (
+                0,
+                vk::Format::R32G32B32_SFLOAT,
+                0,
+            ),
+            (
+                1,
+                vk::Format::R32G32B32_SFLOAT,
+                12,
+            ),
+        ],
+    )
+}
+
+fn create_ground_pipeline(
+    device: &ash::Device,
+    render_pass: vk::RenderPass,
+    layout: vk::PipelineLayout,
+) -> vk::Pipeline {
+    create_graphics_pipeline(
+        device,
+        render_pass,
+        layout,
+        GROUND_VERT,
+        GROUND_FRAG,
+        std::mem::size_of::<GroundVertex>() as u32,
+        &[
+            (0, vk::Format::R32G32B32_SFLOAT, 0),
+            (1, vk::Format::R32G32_SFLOAT, 12),
+        ],
+    )
+}
+
+fn create_graphics_pipeline(
+    device: &ash::Device,
+    render_pass: vk::RenderPass,
+    layout: vk::PipelineLayout,
+    vert_spv: &[u8],
+    frag_spv: &[u8],
+    stride: u32,
+    attrs: &[(u32, vk::Format, u32)],
+) -> vk::Pipeline {
+    let vert = create_shader_module(device, vert_spv);
+    let frag = create_shader_module(device, frag_spv);
     let entry = CStr::from_bytes_with_nul(b"main\0").unwrap();
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
@@ -441,25 +612,24 @@ fn create_mesh_pipeline(
 
     let binding = vk::VertexInputBindingDescription::default()
         .binding(0)
-        .stride(std::mem::size_of::<Vertex>() as u32)
+        .stride(stride)
         .input_rate(vk::VertexInputRate::VERTEX);
-    let attrs = [
-        vk::VertexInputAttributeDescription::default()
-            .location(0)
-            .binding(0)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(0),
-        vk::VertexInputAttributeDescription::default()
-            .location(1)
-            .binding(0)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(12),
-    ];
+    let attr_descs: Vec<_> = attrs
+        .iter()
+        .map(|&(location, format, offset)| {
+            vk::VertexInputAttributeDescription::default()
+                .location(location)
+                .binding(0)
+                .format(format)
+                .offset(offset)
+        })
+        .collect();
     let bindings = [binding];
     let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
         .vertex_binding_descriptions(&bindings)
-        .vertex_attribute_descriptions(&attrs);
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default().topology(topology);
+        .vertex_attribute_descriptions(&attr_descs);
+    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
     let viewport = vk::PipelineViewportStateCreateInfo::default()
         .viewport_count(1)
         .scissor_count(1);
@@ -468,8 +638,8 @@ fn create_mesh_pipeline(
         .cull_mode(vk::CullModeFlags::NONE)
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .line_width(1.0);
-    let multisample =
-        vk::PipelineMultisampleStateCreateInfo::default().rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
     let depth = vk::PipelineDepthStencilStateCreateInfo::default()
         .depth_test_enable(true)
         .depth_write_enable(true)
@@ -506,14 +676,14 @@ fn create_mesh_pipeline(
     pipelines[0]
 }
 
-/// Build a look-at view-projection matrix following the rocket.
+/// Build look-at view-projection and return (view_proj, eye position).
 pub fn camera_view_proj(
     target: Vec3,
     yaw: f32,
     pitch: f32,
     distance: f32,
     aspect: f32,
-) -> Mat4 {
+) -> (Mat4, Vec3) {
     let pitch = pitch.clamp(-1.4, 1.4);
     let offset = Vec3::new(
         distance * yaw.cos() * pitch.cos(),
@@ -522,9 +692,8 @@ pub fn camera_view_proj(
     );
     let eye = target + offset;
     let view = Mat4::look_at_rh(eye, target, Vec3::Y);
-    // Vulkan NDC has +Y down; flip projection Y so world +Y appears up on screen
-    // (same convention as minecraft-clone).
-    let mut proj = Mat4::perspective_rh(45f32.to_radians(), aspect.max(0.1), 0.5, 2000.0);
+    // Vulkan NDC has +Y down; flip projection Y so world +Y appears up on screen.
+    let mut proj = Mat4::perspective_rh(45f32.to_radians(), aspect.max(0.1), 0.5, 4000.0);
     proj.y_axis.y *= -1.0;
-    proj * view
+    (proj * view, eye)
 }

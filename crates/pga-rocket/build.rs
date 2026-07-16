@@ -10,7 +10,7 @@ fn main() {
     let spv_dir = Path::new(&out_dir).join("shaders");
     fs::create_dir_all(&spv_dir).unwrap();
 
-    let shaders = ["mesh.vert", "mesh.frag"];
+    let shaders = ["mesh.vert", "mesh.frag", "ground.vert", "ground.frag"];
 
     for shader in &shaders {
         let input = shader_dir.join(shader);

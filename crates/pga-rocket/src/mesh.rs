@@ -1,4 +1,4 @@
-//! CPU mesh builders for the infinite ground grid and legged rocket body.
+//! CPU mesh builders for the grass ground plane and legged rocket body.
 
 use crate::sim::RocketState;
 use bytemuck::{Pod, Zeroable};
@@ -10,74 +10,52 @@ pub struct Vertex {
     pub color: [f32; 3],
 }
 
-/// Build a large ground grid (visually infinite) on y = 0.
-pub fn ground_mesh(half_extent: f32, step: f32) -> (Vec<Vertex>, Vec<u32>) {
-    let mut verts = Vec::new();
-    let mut idx = Vec::new();
-    let color_main = [0.28, 0.32, 0.28];
-    let color_axis = [0.45, 0.5, 0.4];
-
-    let n = ((half_extent * 2.0) / step) as i32;
-    let mut vi = 0u32;
-    for i in -n..=n {
-        let t = i as f32 * step;
-        let c = if i == 0 { color_axis } else { color_main };
-        // Line parallel to X
-        verts.push(Vertex {
-            pos: [-half_extent, 0.0, t],
-            color: c,
-        });
-        verts.push(Vertex {
-            pos: [half_extent, 0.0, t],
-            color: c,
-        });
-        idx.extend_from_slice(&[vi, vi + 1]);
-        vi += 2;
-        // Line parallel to Z
-        verts.push(Vertex {
-            pos: [t, 0.0, -half_extent],
-            color: c,
-        });
-        verts.push(Vertex {
-            pos: [t, 0.0, half_extent],
-            color: c,
-        });
-        idx.extend_from_slice(&[vi, vi + 1]);
-        vi += 2;
-    }
-
-    // Slightly tinted ground disk / plane (two triangles) under the grid for fill.
-    let fill = [0.18, 0.22, 0.16];
-    let base = vi;
-    let e = half_extent;
-    verts.extend_from_slice(&[
-        Vertex {
-            pos: [-e, -0.02, -e],
-            color: fill,
-        },
-        Vertex {
-            pos: [e, -0.02, -e],
-            color: fill,
-        },
-        Vertex {
-            pos: [e, -0.02, e],
-            color: fill,
-        },
-        Vertex {
-            pos: [-e, -0.02, e],
-            color: fill,
-        },
-    ]);
-    // Store fill as separate triangle list starting after lines — renderer draws lines then tris.
-    // We keep indices for triangles in a second buffer via MeshBundle.
-    let _ = base;
-    (verts, idx)
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct GroundVertex {
+    pub pos: [f32; 3],
+    pub uv: [f32; 2],
 }
 
-/// Triangle indices for the ground fill quad (last 4 vertices of ground_mesh).
-pub fn ground_fill_indices(vertex_count: u32) -> Vec<u32> {
-    let b = vertex_count - 4;
-    vec![b, b + 1, b + 2, b, b + 2, b + 3]
+/// Half-extent of the local grass plane (meters). Re-centered under the rocket each frame.
+pub const GROUND_HALF_EXTENT: f32 = 1800.0;
+/// World meters covered by one grass texture tile (minecraft-like 1 m block).
+pub const GRASS_METERS_PER_TILE: f32 = 1.0;
+/// Fog distances (meters) — edge of the plane is fully fogged into the sky.
+pub const GROUND_FOG_START: f32 = 350.0;
+pub const GROUND_FOG_END: f32 = 1400.0;
+
+/// Flat local-space grass plane on y = 0, lightly subdivided for depth stability.
+pub fn grass_ground_mesh(half_extent: f32, divisions: u32) -> (Vec<GroundVertex>, Vec<u32>) {
+    let divs = divisions.max(1);
+    let mut verts = Vec::with_capacity(((divs + 1) * (divs + 1)) as usize);
+    let mut idx = Vec::with_capacity((divs * divs * 6) as usize);
+
+    for iz in 0..=divs {
+        let tz = iz as f32 / divs as f32;
+        let z = -half_extent + tz * (2.0 * half_extent);
+        for ix in 0..=divs {
+            let tx = ix as f32 / divs as f32;
+            let x = -half_extent + tx * (2.0 * half_extent);
+            verts.push(GroundVertex {
+                pos: [x, 0.0, z],
+                // UV filled in the vertex shader from world XZ; keep local as fallback.
+                uv: [x / GRASS_METERS_PER_TILE, z / GRASS_METERS_PER_TILE],
+            });
+        }
+    }
+
+    let stride = divs + 1;
+    for iz in 0..divs {
+        for ix in 0..divs {
+            let i0 = iz * stride + ix;
+            let i1 = i0 + 1;
+            let i2 = i0 + stride;
+            let i3 = i2 + 1;
+            idx.extend_from_slice(&[i0, i2, i1, i1, i2, i3]);
+        }
+    }
+    (verts, idx)
 }
 
 /// Build a legged rocket mesh in world space from PGA-transformed body points.
