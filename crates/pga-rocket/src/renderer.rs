@@ -676,7 +676,21 @@ fn create_graphics_pipeline(
     pipelines[0]
 }
 
+/// Minimum camera eye height above the ground plane (y = 0).
+pub const MIN_CAMERA_HEIGHT: f32 = 0.75;
+
+/// Lowest orbit pitch (radians) that keeps the eye at or above `min_eye_y`.
+///
+/// With `eye = target + distance * (…, sin(pitch), …)`, require
+/// `target.y + distance * sin(pitch) >= min_eye_y`.
+pub fn min_orbit_pitch(target_y: f32, distance: f32, min_eye_y: f32) -> f32 {
+    let dist = distance.max(1e-3);
+    let ratio = ((min_eye_y - target_y) / dist).clamp(-1.0, 1.0);
+    ratio.asin()
+}
+
 /// Build look-at view-projection and return (view_proj, eye position).
+/// Eye is never placed below the ground plane.
 pub fn camera_view_proj(
     target: Vec3,
     yaw: f32,
@@ -684,13 +698,19 @@ pub fn camera_view_proj(
     distance: f32,
     aspect: f32,
 ) -> (Mat4, Vec3) {
-    let pitch = pitch.clamp(-1.4, 1.4);
+    let max_pitch = 1.4;
+    let min_pitch = min_orbit_pitch(target.y, distance, MIN_CAMERA_HEIGHT);
+    let pitch = pitch.clamp(min_pitch, max_pitch);
     let offset = Vec3::new(
         distance * yaw.cos() * pitch.cos(),
         distance * pitch.sin(),
         distance * yaw.sin() * pitch.cos(),
     );
-    let eye = target + offset;
+    let mut eye = target + offset;
+    // Hard floor in case of numerical edge cases or extreme targets.
+    if eye.y < MIN_CAMERA_HEIGHT {
+        eye.y = MIN_CAMERA_HEIGHT;
+    }
     let view = Mat4::look_at_rh(eye, target, Vec3::Y);
     // Vulkan NDC has +Y down; flip projection Y so world +Y appears up on screen.
     let mut proj = Mat4::perspective_rh(45f32.to_radians(), aspect.max(0.1), 0.5, 4000.0);

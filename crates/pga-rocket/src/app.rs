@@ -2,7 +2,9 @@
 
 use crate::control::{ControlMapper, KeySnapshot};
 use crate::mesh::{GRASS_METERS_PER_TILE, hud_text};
-use crate::renderer::{Renderer, SKY_COLOR, camera_view_proj};
+use crate::renderer::{
+    MIN_CAMERA_HEIGHT, Renderer, SKY_COLOR, camera_view_proj, min_orbit_pitch,
+};
 use crate::sim::{RocketState, step_rocket};
 use ash::vk;
 use glam::Vec3;
@@ -143,7 +145,7 @@ impl App {
         let keys = self.keys_from_input();
 
         self.cam_yaw += cam_yaw_rate * dt * 1.2;
-        self.cam_pitch = (self.cam_pitch + cam_pitch_rate * dt * 1.0).clamp(-1.2, 1.2);
+        self.cam_pitch += cam_pitch_rate * dt * 1.0;
         if page_up {
             self.cam_distance = (self.cam_distance - 40.0 * dt).max(20.0);
         }
@@ -152,8 +154,7 @@ impl App {
         }
         if self.mouse_dragging {
             self.cam_yaw += mdx as f32 * MOUSE_ORBIT_SENS;
-            self.cam_pitch =
-                (self.cam_pitch + mdy as f32 * MOUSE_ORBIT_SENS).clamp(-1.2, 1.2);
+            self.cam_pitch += mdy as f32 * MOUSE_ORBIT_SENS;
         }
         if self.scroll_zoom != 0.0 {
             self.cam_distance =
@@ -176,6 +177,9 @@ impl App {
 
         let pos = self.rocket.position();
         let target = Vec3::new(pos[0] as f32, pos[1] as f32, pos[2] as f32);
+        // Keep orbit pitch above the ground plane (eye.y >= MIN_CAMERA_HEIGHT).
+        let pitch_floor = min_orbit_pitch(target.y, self.cam_distance, MIN_CAMERA_HEIGHT);
+        self.cam_pitch = self.cam_pitch.clamp(pitch_floor, 1.2);
         let aspect = size.width as f32 / size.height.max(1) as f32;
         let (vp, eye) = camera_view_proj(
             target,
