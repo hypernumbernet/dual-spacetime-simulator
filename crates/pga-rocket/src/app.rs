@@ -12,13 +12,14 @@ use std::time::Instant;
 use vulkanvil::{InputState, VulkanBase};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{DeviceEvent, DeviceId, ElementState, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::Window;
 
 const MAX_DT: f32 = 1.0 / 30.0;
 const FIXED_DT: f64 = 1.0 / 120.0;
+const MOUSE_ORBIT_SENS: f32 = 0.005;
 
 pub struct App {
     renderer: Option<Renderer>,
@@ -36,6 +37,12 @@ pub struct App {
     fps_acc: f32,
     fps_frames: u32,
     needs_resize: bool,
+    /// True while LMB or RMB is held — camera only follows the cursor during a drag.
+    mouse_dragging: bool,
+    /// Accumulated mouse motion applied only while `mouse_dragging` (no cursor grab).
+    drag_delta: (f64, f64),
+    /// Scroll-wheel zoom for this frame (positive = zoom in).
+    scroll_zoom: f32,
 }
 
 impl Default for App {
@@ -56,6 +63,9 @@ impl Default for App {
             fps_acc: 0.0,
             fps_frames: 0,
             needs_resize: false,
+            mouse_dragging: false,
+            drag_delta: (0.0, 0.0),
+            scroll_zoom: 0.0,
         }
     }
 }
@@ -110,7 +120,9 @@ impl App {
             self.fps_frames = 0;
         }
 
-        let (mdx, mdy) = self.input.mouse_delta;
+        // Orbit only while a mouse button is held and dragged (cursor is never confined).
+        let (mdx, mdy) = self.drag_delta;
+        self.drag_delta = (0.0, 0.0);
         let cam_yaw_rate = self.input.axis(KeyCode::ArrowRight, KeyCode::ArrowLeft);
         let cam_pitch_rate = self.input.axis(KeyCode::ArrowUp, KeyCode::ArrowDown);
         let page_up = self.input.held(KeyCode::PageUp);
@@ -125,8 +137,16 @@ impl App {
         if page_down {
             self.cam_distance = (self.cam_distance + 40.0 * dt).min(400.0);
         }
-        self.cam_yaw += mdx as f32 * 0.005;
-        self.cam_pitch = (self.cam_pitch + mdy as f32 * 0.005).clamp(-1.2, 1.2);
+        if self.mouse_dragging {
+            self.cam_yaw += mdx as f32 * MOUSE_ORBIT_SENS;
+            self.cam_pitch =
+                (self.cam_pitch + mdy as f32 * MOUSE_ORBIT_SENS).clamp(-1.2, 1.2);
+        }
+        if self.scroll_zoom != 0.0 {
+            self.cam_distance =
+                (self.cam_distance - self.scroll_zoom * 8.0).clamp(20.0, 400.0);
+            self.scroll_zoom = 0.0;
+        }
 
         if keys.reset {
             self.rocket = RocketState::resting_on_pad();
@@ -235,6 +255,30 @@ impl ApplicationHandler for App {
                     self.input.key_event(code, event.state);
                 }
             }
+            WindowEvent::MouseInput { state, button, .. } => {
+                // Left or right button drag orbits the camera; no cursor grab.
+                let is_orbit_button =
+                    matches!(button, MouseButton::Left | MouseButton::Right);
+                if is_orbit_button {
+                    match state {
+                        ElementState::Pressed => {
+                            self.mouse_dragging = true;
+                            self.drag_delta = (0.0, 0.0);
+                        }
+                        ElementState::Released => {
+                            self.mouse_dragging = false;
+                            self.drag_delta = (0.0, 0.0);
+                        }
+                    }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let steps = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => (p.y as f32) * 0.05,
+                };
+                self.scroll_zoom += steps;
+            }
             WindowEvent::RedrawRequested => self.frame(),
             _ => {}
         }
@@ -246,9 +290,12 @@ impl ApplicationHandler for App {
         _device_id: DeviceId,
         event: DeviceEvent,
     ) {
-        if let DeviceEvent::MouseMotion { delta } = event {
-            self.input.mouse_delta.0 += delta.0;
-            self.input.mouse_delta.1 += delta.1;
+        // Raw motion is only used while a drag is active (see mouse_dragging).
+        if let DeviceEvent::MouseMotion { delta } = event
+            && self.mouse_dragging
+        {
+            self.drag_delta.0 += delta.0;
+            self.drag_delta.1 += delta.1;
         }
     }
 
