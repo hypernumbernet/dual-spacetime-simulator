@@ -25,8 +25,11 @@ pub struct RocketParams {
     pub leg_feet: [[f64; 3]; 4],
     /// Rotational inertia about principal axes (body frame), diagonal Ixx,Iyy,Izz.
     pub inertia: [f64; 3],
-    /// Attitude torque authority (N·m) at full command.
+    /// Attitude torque authority (N·m) at full pitch/roll command.
     pub max_torque: f64,
+    /// Yaw (A/D) torque as a fraction of `max_torque`.
+    /// Iyy is smaller than Ixx/Izz, so full authority felt too aggressive.
+    pub yaw_torque_scale: f64,
     /// Linear ground contact stiffness / damping (penalty method).
     pub contact_stiffness: f64,
     pub contact_damping: f64,
@@ -58,6 +61,7 @@ impl Default for RocketParams {
             ],
             inertia: [mass * 40.0, mass * 8.0, mass * 40.0],
             max_torque: 80_000.0,
+            yaw_torque_scale: 0.25,
             contact_stiffness: 5.0e5,
             contact_damping: 2.0e4,
         }
@@ -202,11 +206,14 @@ impl RocketState {
         force[1] += dir[1] * thrust;
         force[2] += dir[2] * thrust;
 
-        // --- Torques (body) ---
+        // --- Torques (body): command in [-1,1] × authority (N·m) ---
+        // Pitch → body +X, yaw → body +Y, roll → body +Z.
+        // Angular dynamics below use I α = τ − ω × (I ω).
+        let tau = self.params.max_torque;
         let mut body_torque = [
-            cmd.pitch * self.params.max_torque,
-            cmd.yaw * self.params.max_torque,
-            cmd.roll * self.params.max_torque,
+            cmd.pitch * tau,
+            cmd.yaw * tau * self.params.yaw_torque_scale,
+            cmd.roll * tau,
         ];
 
         // --- Leg / ground contact (infinite plane y=0, PGA ground element stored) ---

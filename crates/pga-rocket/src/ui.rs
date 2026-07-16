@@ -105,6 +105,15 @@ fn vehicle_section(ui: &mut egui::Ui, rocket: &RocketState) {
         ),
     );
     kv(ui, "Max torque", format!("{:.0} N·m", p.max_torque));
+    kv(
+        ui,
+        "Yaw torque",
+        format!(
+            "{:.0} N·m ({:.0}%)",
+            p.max_torque * p.yaw_torque_scale,
+            p.yaw_torque_scale * 100.0
+        ),
+    );
     kv(ui, "Contact k", format!("{:.0}", p.contact_stiffness));
     kv(ui, "Contact c", format!("{:.0}", p.contact_damping));
 }
