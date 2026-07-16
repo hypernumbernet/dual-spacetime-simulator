@@ -1,5 +1,6 @@
 //! Colored rocket mesh + textured grass ground (minecraft-style tiling + fog).
 
+use crate::integration::Gui;
 use crate::mesh::{
     GRASS_METERS_PER_TILE, GROUND_FOG_END, GROUND_FOG_START, GROUND_HALF_EXTENT, GroundVertex,
     Vertex, grass_ground_mesh, rocket_mesh,
@@ -70,6 +71,11 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// Render pass used by the 3D scene and the egui overlay.
+    pub fn render_pass(&self) -> vk::RenderPass {
+        self.render_pass
+    }
+
     pub fn new(vb: &VulkanBase) -> Self {
         let device = vb.device.clone();
         let allocator = vb.allocator.as_ref().unwrap().clone();
@@ -290,6 +296,7 @@ impl Renderer {
         camera_eye: Vec3,
         ground_center_xz: [f32; 2],
         clear: [f32; 4],
+        gui: &mut Gui,
     ) -> Result<(), vk::Result> {
         vb.wait_for_fence();
         self.collect_garbage();
@@ -403,6 +410,9 @@ impl Renderer {
             if let Some(mesh) = &self.rocket {
                 draw_mesh(&vb.device, cmd, mesh);
             }
+
+            // egui overlay (same subpass, alpha-blended by egui-ash-renderer).
+            gui.draw(cmd, extent);
 
             vb.device.cmd_end_render_pass(cmd);
             vb.device.end_command_buffer(cmd).unwrap();

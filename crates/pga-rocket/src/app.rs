@@ -1,11 +1,13 @@
 //! winit application: window, Vulkan, sim step, keyboard control, render loop.
 
 use crate::control::{ControlMapper, KeySnapshot};
+use crate::integration::Gui;
 use crate::mesh::{GRASS_METERS_PER_TILE, hud_text};
 use crate::renderer::{
     MIN_CAMERA_HEIGHT, Renderer, SKY_COLOR, camera_view_proj, min_orbit_pitch,
 };
 use crate::sim::{RocketState, step_rocket};
+use crate::ui::draw_params_panel;
 use ash::vk;
 use glam::Vec3;
 use std::ffi::CString;
@@ -27,6 +29,8 @@ const TARGET_FPS: u32 = 60;
 const FRAME_PERIOD: Duration = Duration::from_nanos(1_000_000_000 / TARGET_FPS as u64);
 
 pub struct App {
+    /// Dropped before `renderer` / `vulkan_base` so egui Vulkan resources release cleanly.
+    gui: Option<Gui>,
     renderer: Option<Renderer>,
     vulkan_base: Option<VulkanBase>,
     window: Option<Arc<Window>>,
@@ -55,6 +59,7 @@ pub struct App {
 impl Default for App {
     fn default() -> Self {
         Self {
+            gui: None,
             renderer: None,
             vulkan_base: None,
             window: None,
@@ -80,9 +85,13 @@ impl Default for App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        // Idle the device before tearing down Gui / Renderer / VulkanBase.
         if let Some(vb) = &self.vulkan_base {
             let _ = unsafe { vb.device.device_wait_idle() };
         }
+        self.gui = None;
+        self.renderer = None;
+        self.vulkan_base = None;
     }
 }
 
@@ -199,7 +208,16 @@ impl App {
         window.set_title(&title);
 
         let needs_resize = self.needs_resize;
-        let (Some(vb), Some(renderer)) = (self.vulkan_base.as_mut(), self.renderer.as_mut()) else {
+        let fps = self.fps;
+        let cam_yaw = self.cam_yaw;
+        let cam_pitch = self.cam_pitch;
+        let cam_distance = self.cam_distance;
+
+        let (Some(vb), Some(renderer), Some(gui)) = (
+            self.vulkan_base.as_mut(),
+            self.renderer.as_mut(),
+            self.gui.as_mut(),
+        ) else {
             return;
         };
 
@@ -209,10 +227,27 @@ impl App {
         }
         self.needs_resize = false;
 
+        // Build egui panel before recording the command buffer.
+        gui.immediate_ui(&window, |gui| {
+            let ctx = gui.context();
+            draw_params_panel(
+                &ctx,
+                &self.rocket,
+                fps,
+                cam_yaw,
+                cam_pitch,
+                cam_distance,
+            );
+        });
+        gui.prepare_frame(&window);
+
         renderer.sync_rocket(&self.rocket);
         renderer.set_hud(hud);
 
-        match renderer.draw(vb, vp, eye, ground_xz, SKY_COLOR) {
+        let draw_result = renderer.draw(vb, vp, eye, ground_xz, SKY_COLOR, gui);
+        // Free egui textures even when the swapchain is out of date.
+        gui.finish_frame();
+        match draw_result {
             Ok(()) => {}
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 self.needs_resize = true;
@@ -247,8 +282,21 @@ impl ApplicationHandler for App {
         let mut renderer = Renderer::new(&vb);
         renderer.sync_rocket(&self.rocket);
 
+        let gui = Gui::new(
+            event_loop,
+            &window,
+            &vb.instance,
+            vb.physical_device,
+            vb.device.clone(),
+            vb.graphics_queue,
+            vb.command_pool,
+            renderer.render_pass(),
+            vb.swapchain_format,
+        );
+
         let now = Instant::now();
         self.window = Some(window);
+        self.gui = Some(gui);
         self.vulkan_base = Some(vb);
         self.renderer = Some(renderer);
         self.last_frame = Some(now);
@@ -262,6 +310,15 @@ impl ApplicationHandler for App {
         _id: winit::window::WindowId,
         event: WindowEvent,
     ) {
+        // Forward events to egui first so it can capture pointer/scroll over the panel.
+        if let (Some(window), Some(gui)) = (self.window.as_ref(), self.gui.as_mut()) {
+            let _ = gui.update(window, &event);
+        }
+        let ui_wants_pointer = self
+            .gui
+            .as_ref()
+            .is_some_and(|g| g.pointer_wants_input());
+
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(_) => {
@@ -278,13 +335,16 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 // Left or right button drag orbits the camera; no cursor grab.
+                // Skip orbit start when the pointer is over the egui panel.
                 let is_orbit_button =
                     matches!(button, MouseButton::Left | MouseButton::Right);
                 if is_orbit_button {
                     match state {
                         ElementState::Pressed => {
-                            self.mouse_dragging = true;
-                            self.drag_delta = (0.0, 0.0);
+                            if !ui_wants_pointer {
+                                self.mouse_dragging = true;
+                                self.drag_delta = (0.0, 0.0);
+                            }
                         }
                         ElementState::Released => {
                             self.mouse_dragging = false;
@@ -294,6 +354,10 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                if ui_wants_pointer {
+                    // Let egui ScrollArea handle the wheel over the panel.
+                    return;
+                }
                 let steps = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => (p.y as f32) * 0.05,

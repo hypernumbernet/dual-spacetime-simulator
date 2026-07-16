@@ -7,10 +7,12 @@
 mod app;
 mod control;
 mod euclidean_pga;
+mod integration;
 mod mesh;
 mod renderer;
 mod sim;
 mod texture;
+mod ui;
 
 use winit::event_loop::EventLoop;
 
