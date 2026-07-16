@@ -75,10 +75,18 @@ fn control_section(ui: &mut egui::Ui, rocket: &RocketState) {
     let thrust = rocket.thrust_newtons();
     let weight = rocket.params.mass * GRAVITY;
     let tw = if weight > 0.0 { thrust / weight } else { 0.0 };
+    let (gp, gy) = rocket.gimbal_angles();
+    let eng = rocket.engine_wrench_body();
+    let rcs = rocket.rcs_wrench_body();
     kv(ui, "Throttle", format!("{:.0}%", cmd.throttle * 100.0));
-    kv(ui, "Pitch", format!("{:.2}", cmd.pitch));
-    kv(ui, "Yaw", format!("{:.2}", cmd.yaw));
-    kv(ui, "Roll", format!("{:.2}", cmd.roll));
+    kv(ui, "Pitch cmd", format!("{:.2}", cmd.pitch));
+    kv(ui, "Yaw cmd", format!("{:.2}", cmd.yaw));
+    kv(ui, "Roll cmd", format!("{:.2}", cmd.roll));
+    kv(
+        ui,
+        "Gimbal",
+        format!("{:.1}° / {:.1}°", gp.to_degrees(), gy.to_degrees()),
+    );
     kv(ui, "Thrust", format!("{:.0} N", thrust));
     kv(
         ui,
@@ -86,6 +94,19 @@ fn control_section(ui: &mut egui::Ui, rocket: &RocketState) {
         format!("{:.0} N", rocket.params.max_thrust),
     );
     kv(ui, "T/W", format!("{:.2}", tw));
+    kv(
+        ui,
+        "Eng τ",
+        format!(
+            "{:.0}, {:.0}, {:.0}",
+            eng.torque[0], eng.torque[1], eng.torque[2]
+        ),
+    );
+    kv(
+        ui,
+        "RCS τ_y",
+        format!("{:.0} N·m", rcs.torque[1]),
+    );
 }
 
 fn vehicle_section(ui: &mut egui::Ui, rocket: &RocketState) {
@@ -104,16 +125,14 @@ fn vehicle_section(ui: &mut egui::Ui, rocket: &RocketState) {
             p.inertia[0], p.inertia[1], p.inertia[2]
         ),
     );
-    kv(ui, "Max torque", format!("{:.0} N·m", p.max_torque));
     kv(
         ui,
-        "Yaw torque",
-        format!(
-            "{:.0} N·m ({:.0}%)",
-            p.max_torque * p.yaw_torque_scale,
-            p.yaw_torque_scale * 100.0
-        ),
+        "Max gimbal",
+        format!("{:.1}°", p.max_gimbal_angle.to_degrees()),
     );
+    kv(ui, "Thrust app Y", format!("{:.2} m", p.thrust_application_y));
+    kv(ui, "RCS thrust", format!("{:.0} N / thruster", p.rcs_thrust));
+    kv(ui, "RCS radius", format!("{:.2} m", p.rcs_radius));
     kv(ui, "Contact k", format!("{:.0}", p.contact_stiffness));
     kv(ui, "Contact c", format!("{:.0}", p.contact_damping));
 }
@@ -135,8 +154,10 @@ fn camera_section(
 fn help_section(ui: &mut egui::Ui) {
     ui.label(RichText::new("Controls").strong());
     ui.label("Space / Ctrl: throttle");
-    ui.label("W/S: pitch   A/D: roll");
-    ui.label("Q/E: yaw   R: reset");
+    ui.label("W/S: pitch gimbal (needs thrust)");
+    ui.label("Q/E: yaw gimbal (needs thrust)");
+    ui.label("A/D: roll RCS thrusters");
+    ui.label("R: reset");
     ui.label("LMB/RMB drag: orbit");
     ui.label("Wheel / PgUp-Dn: zoom");
     ui.label("Arrows: orbit   Esc: quit");

@@ -3,7 +3,9 @@
 use pga_rocket::euclidean_pga::{
     extract_point, motor_from_pose, motor_translation, point, translator,
 };
-use pga_rocket::sim::{ControlCommand, RocketState, step_rocket, GRAVITY};
+use pga_rocket::sim::{
+    ControlCommand, RocketParams, RocketState, engine_wrench, rcs_wrench, step_rocket, GRAVITY,
+};
 
 const DT: f64 = 1.0 / 120.0;
 
@@ -128,4 +130,157 @@ fn ground_plane_is_pga_element() {
     assert!(g.coeff(basis::E0).abs() < 1e-12);
     let s = RocketState::resting_on_pad();
     assert!((s.ground.coeff(basis::E2) - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn gimbal_pitch_produces_body_x_torque_and_angular_accel() {
+    let mut s = RocketState::at_altitude(200.0);
+    s.set_command(ControlCommand {
+        throttle: 1.0,
+        pitch: 1.0,
+        yaw: 0.0,
+        roll: 0.0,
+    });
+    let w = s.engine_wrench_body();
+    // Pitch gimbal → force has +Z; r_y < 0 ⇒ τ_x = r_y F_z < 0.
+    assert!(
+        w.torque[0] < -1000.0,
+        "expected large negative pitch torque, got {:?}",
+        w.torque
+    );
+    assert!(
+        w.torque[1].abs() < 1.0,
+        "pitch TVC should not make roll torque τ_y={}",
+        w.torque[1]
+    );
+    assert!(
+        w.torque[2].abs() < 100.0,
+        "pitch-only TVC τ_z should be near 0, got {}",
+        w.torque[2]
+    );
+
+    let omega0 = s.omega;
+    step_rocket(&mut s, DT);
+    assert!(
+        s.omega[0] < omega0[0] - 1e-5,
+        "ω_x should decrease under pitch gimbal, was {:?} now {:?}",
+        omega0,
+        s.omega
+    );
+}
+
+#[test]
+fn gimbal_yaw_produces_body_z_torque() {
+    let mut s = RocketState::at_altitude(200.0);
+    s.set_command(ControlCommand {
+        throttle: 1.0,
+        pitch: 0.0,
+        yaw: 1.0,
+        roll: 0.0,
+    });
+    let w = s.engine_wrench_body();
+    // Yaw about +Z: thrust gains +X; τ_z = −r_y F_x with r_y < 0 ⇒ τ_z > 0 when F_x > 0.
+    assert!(
+        w.torque[2].abs() > 1000.0,
+        "expected large yaw torque about Z, got {:?}",
+        w.torque
+    );
+    assert!(
+        w.torque[1].abs() < 1.0,
+        "yaw TVC should not spin about Y, τ_y={}",
+        w.torque[1]
+    );
+    assert!(
+        w.torque[0].abs() < 100.0,
+        "yaw-only TVC τ_x near 0, got {}",
+        w.torque[0]
+    );
+}
+
+#[test]
+fn zero_throttle_gimbal_produces_no_engine_wrench() {
+    let mut s = RocketState::at_altitude(200.0);
+    s.set_command(ControlCommand {
+        throttle: 0.0,
+        pitch: 1.0,
+        yaw: 1.0,
+        roll: 0.0,
+    });
+    let w = s.engine_wrench_body();
+    assert!(w.force.iter().all(|c| c.abs() < 1e-12));
+    assert!(w.torque.iter().all(|c| c.abs() < 1e-12));
+
+    for _ in 0..30 {
+        step_rocket(&mut s, DT);
+    }
+    // Free-fall only: no propulsive spin from dead engine + gimbal.
+    assert!(
+        s.omega[0].abs() < 1e-6 && s.omega[1].abs() < 1e-6 && s.omega[2].abs() < 1e-6,
+        "expected no angular velocity without thrust/RCS, omega={:?}",
+        s.omega
+    );
+}
+
+#[test]
+fn roll_thrusters_pure_couple_spins_about_y() {
+    let p = RocketParams::default();
+    let w = rcs_wrench(&p, 1.0);
+    let expected_ty = 4.0 * p.rcs_radius * p.rcs_thrust;
+    assert!(
+        (w.torque[1] - expected_ty).abs() < 1e-6,
+        "τ_y={} expected {}",
+        w.torque[1],
+        expected_ty
+    );
+    assert!(w.force.iter().all(|c| c.abs() < 1e-9));
+    assert!(w.torque[0].abs() < 1e-9);
+    assert!(w.torque[2].abs() < 1e-9);
+
+    let mut s = RocketState::at_altitude(200.0);
+    s.set_command(ControlCommand {
+        throttle: 0.0,
+        pitch: 0.0,
+        yaw: 0.0,
+        roll: 1.0,
+    });
+    let pos0 = s.position();
+    for _ in 0..120 {
+        step_rocket(&mut s, DT);
+    }
+    assert!(
+        s.omega[1] > 0.05,
+        "positive roll should grow ω_y, got {:?}",
+        s.omega
+    );
+    assert!(
+        s.omega[0].abs() < 0.02 && s.omega[2].abs() < 0.02,
+        "roll RCS should not tip, omega={:?}",
+        s.omega
+    );
+    // Pure couple: CoM horizontal drift from RCS alone should stay tiny.
+    let pos = s.position();
+    let horiz = ((pos[0] - pos0[0]).powi(2) + (pos[2] - pos0[2]).powi(2)).sqrt();
+    assert!(
+        horiz < 0.5,
+        "pure roll couple should not translate CoM much, horiz drift={horiz}"
+    );
+}
+
+#[test]
+fn engine_lever_arm_magnitude_matches_analytic() {
+    let p = RocketParams::default();
+    let cmd = ControlCommand {
+        throttle: 1.0,
+        pitch: 1.0,
+        yaw: 0.0,
+        roll: 0.0,
+    };
+    let w = engine_wrench(&p, cmd);
+    let expected = p.thrust_application_y * p.max_thrust * p.max_gimbal_angle.sin();
+    assert!(
+        (w.torque[0] - expected).abs() < 1.0,
+        "τ_x={} analytic={}",
+        w.torque[0],
+        expected
+    );
 }

@@ -9,4 +9,7 @@ pub mod mesh;
 pub mod sim;
 
 pub use control::{ControlMapper, KeySnapshot, map_keys};
-pub use sim::{ControlCommand, RocketParams, RocketState, step_rocket};
+pub use sim::{
+    BodyWrench, ControlCommand, RocketParams, RocketState, ThrusterSample, body_wrench_at, cross,
+    engine_wrench, gimbal_rotor, rcs_wrench, roll_thrusters, rotate_vector_by_rotor, step_rocket,
+};
