@@ -375,7 +375,7 @@ pub fn hud_text(state: &RocketState, fps: f32) -> String {
     let contact = if state.contacting { "YES" } else { "no" };
     format!(
         "PGA Rocket  |  alt={:.1} m  vel_y={:.1} m/s  thr={:.0}%  contact={}  fps={:.0}\n\
-         Space/Ctrl: throttle  W/S: pitch  A/D: yaw  Q/E: roll  R: reset\n\
+         Space/Ctrl: throttle  W/S: pitch  A/D: roll  Q/E: yaw  R: reset\n\
          Drag LMB/RMB: orbit camera  Wheel: zoom  Arrows: orbit  Esc: quit",
         p[1],
         state.velocity[1],

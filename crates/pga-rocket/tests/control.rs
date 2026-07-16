@@ -72,19 +72,21 @@ fn attitude_keys_set_pitch_yaw_roll() {
 
 #[test]
 fn map_keys_is_not_noop() {
+    // space, thrust_down, w, s, a, d, q, e, r
+    // A/D → roll, Q/E → yaw: d=roll_right, q=yaw_left
     let snap = map_keys(true, false, true, false, false, true, true, false, false);
     assert!(snap.thrust_up);
     assert!(snap.pitch_up);
-    assert!(snap.yaw_right);
-    assert!(snap.roll_left);
+    assert!(snap.roll_right);
+    assert!(snap.yaw_left);
     assert!(!snap.reset);
 
     let mut mapper = ControlMapper::default();
     let cmd = mapper.apply(&snap, 1.0);
     assert!(cmd.throttle > 0.0);
     assert_eq!(cmd.pitch, 1.0);
-    assert_eq!(cmd.yaw, 1.0);
-    assert_eq!(cmd.roll, -1.0);
+    assert_eq!(cmd.yaw, -1.0);
+    assert_eq!(cmd.roll, 1.0);
 }
 
 #[test]

@@ -27,7 +27,7 @@ pub struct RocketParams {
     pub inertia: [f64; 3],
     /// Attitude torque authority (N·m) at full pitch/roll command.
     pub max_torque: f64,
-    /// Yaw (A/D) torque as a fraction of `max_torque`.
+    /// Yaw (Q/E) torque as a fraction of `max_torque`.
     /// Iyy is smaller than Ixx/Izz, so full authority felt too aggressive.
     pub yaw_torque_scale: f64,
     /// Linear ground contact stiffness / damping (penalty method).

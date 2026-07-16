@@ -135,8 +135,8 @@ fn camera_section(
 fn help_section(ui: &mut egui::Ui) {
     ui.label(RichText::new("Controls").strong());
     ui.label("Space / Ctrl: throttle");
-    ui.label("W/S: pitch   A/D: yaw");
-    ui.label("Q/E: roll   R: reset");
+    ui.label("W/S: pitch   A/D: roll");
+    ui.label("Q/E: yaw   R: reset");
     ui.label("LMB/RMB drag: orbit");
     ui.label("Wheel / PgUp-Dn: zoom");
     ui.label("Arrows: orbit   Esc: quit");

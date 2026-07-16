@@ -104,10 +104,11 @@ impl App {
                 || self.input.held(KeyCode::KeyC),
             pitch_up: self.input.held(KeyCode::KeyW),
             pitch_down: self.input.held(KeyCode::KeyS),
-            yaw_left: self.input.held(KeyCode::KeyA),
-            yaw_right: self.input.held(KeyCode::KeyD),
-            roll_left: self.input.held(KeyCode::KeyQ),
-            roll_right: self.input.held(KeyCode::KeyE),
+            // A/D: roll, Q/E: yaw (swapped from classic A/D yaw layout).
+            yaw_left: self.input.held(KeyCode::KeyQ),
+            yaw_right: self.input.held(KeyCode::KeyE),
+            roll_left: self.input.held(KeyCode::KeyA),
+            roll_right: self.input.held(KeyCode::KeyD),
             reset: self.input.just_pressed(KeyCode::KeyR),
         }
     }

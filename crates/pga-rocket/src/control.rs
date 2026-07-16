@@ -21,8 +21,8 @@ pub struct KeySnapshot {
 /// - Space: raise throttle
 /// - Left Ctrl / C: lower throttle
 /// - W/S: pitch
-/// - A/D: yaw
-/// - Q/E: roll
+/// - A/D: roll
+/// - Q/E: yaw
 /// - R: signal reset (caller applies)
 #[derive(Clone, Debug)]
 pub struct ControlMapper {
@@ -101,10 +101,11 @@ pub fn map_keys(
         thrust_down,
         pitch_up: w,
         pitch_down: s,
-        yaw_left: a,
-        yaw_right: d,
-        roll_left: q,
-        roll_right: e,
+        // A/D ↔ Q/E swapped relative to classic FPS layout: A/D roll, Q/E yaw.
+        yaw_left: q,
+        yaw_right: e,
+        roll_left: a,
+        roll_right: d,
         reset: r,
     }
 }
