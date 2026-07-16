@@ -57,7 +57,11 @@ fn flight_section(ui: &mut egui::Ui, rocket: &RocketState) {
         ui,
         "Contact",
         if rocket.contacting {
-            "YES".to_string()
+            if rocket.body_contacting {
+                "YES (body)".to_string()
+            } else {
+                "YES (feet)".to_string()
+            }
         } else {
             "no".to_string()
         },
@@ -66,6 +70,11 @@ fn flight_section(ui: &mut egui::Ui, rocket: &RocketState) {
         ui,
         "Lowest foot Y",
         format!("{:.2} m", rocket.lowest_foot_y()),
+    );
+    kv(
+        ui,
+        "Lowest probe Y",
+        format!("{:.2} m", rocket.lowest_probe_y()),
     );
 }
 
@@ -135,7 +144,9 @@ fn vehicle_section(ui: &mut egui::Ui, rocket: &RocketState) {
     kv(ui, "RCS radius", format!("{:.2} m", p.rcs_radius));
     kv(ui, "Contact k", format!("{:.0}", p.contact_stiffness));
     kv(ui, "Contact c", format!("{:.0}", p.contact_damping));
-    kv(ui, "Friction μ", format!("{:.2}", p.friction_mu));
+    kv(ui, "Foot μ", format!("{:.2}", p.friction_mu));
+    kv(ui, "Body μ", format!("{:.2}", p.body_friction_mu));
+    kv(ui, "Restitution", format!("{:.2}", p.restitution));
     kv(ui, "Slip eps", format!("{:.3} m/s", p.friction_slip_eps));
 }
 

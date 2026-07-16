@@ -38,14 +38,18 @@ pub struct RocketParams {
     /// Linear ground contact stiffness / damping (penalty method).
     pub contact_stiffness: f64,
     pub contact_damping: f64,
-    /// Coulomb friction coefficient between landing feet and ground (μ).
-    /// Horizontal friction opposes foot slip (including spin) up to μ N.
+    /// Coulomb friction coefficient for landing feet (μ).
     pub friction_mu: f64,
+    /// Coulomb friction coefficient for body / nozzle / nose hull samples (μ).
+    pub body_friction_mu: f64,
     /// Regularization speed (m/s) for Coulomb friction; avoids a hard stick/slip jump.
     pub friction_slip_eps: f64,
     /// Height band (m) above the ground plane still treated as planted for friction.
-    /// Needed because hard non-penetration often leaves feet exactly at y=0 (zero spring N).
+    /// Needed because hard non-penetration often leaves samples exactly at y=0 (zero spring N).
     pub contact_band: f64,
+    /// Normal restitution [0, 1] applied when hard-resolving deep ground penetration
+    /// (0 = stick/no bounce, 1 = perfectly elastic bounce of CoM vertical velocity).
+    pub restitution: f64,
 }
 
 impl Default for RocketParams {
@@ -86,8 +90,11 @@ impl Default for RocketParams {
             // High enough that pad friction can dump residual spin; RCS can still
             // overcome it at full thrust if desired.
             friction_mu: 0.6,
+            // Hull metal is a bit more slippery than feet pads.
+            body_friction_mu: 0.45,
             friction_slip_eps: 0.05,
             contact_band: 0.05,
+            restitution: 0.35,
         }
     }
 }
@@ -157,6 +164,25 @@ pub struct ThrusterSample {
     pub force_body: [f64; 3],
 }
 
+/// Kind of ground-contact probe (feet vs structural hull).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContactKind {
+    /// Landing-pad foot (uses foot friction μ + rest-share support).
+    Foot,
+    /// Body cylinder, nozzle bell, or nose (hull friction μ; spring-only normal).
+    Hull,
+}
+
+/// Body-frame sample used for ground collision (feet + hull).
+#[derive(Clone, Copy, Debug)]
+pub struct ContactProbe {
+    pub body: [f64; 3],
+    pub kind: ContactKind,
+}
+
+/// Angular resolution of cylindrical hull rings (matches visual mesh segments).
+const HULL_RING_SEGS: usize = 8;
+
 /// Full rocket rigid-body state. Pose is a PGA motor; velocities are rates.
 #[derive(Clone, Debug)]
 pub struct RocketState {
@@ -170,8 +196,10 @@ pub struct RocketState {
     /// Infinite ground as a PGA plane (y = 0).
     pub ground: Multivector,
     pub params: RocketParams,
-    /// True when any foot is in contact this step.
+    /// True when any ground probe (foot or hull) is in contact this step.
     pub contacting: bool,
+    /// True when a body/nozzle/nose hull sample was in contact this step.
+    pub body_contacting: bool,
 }
 
 impl Default for RocketState {
@@ -194,6 +222,7 @@ impl RocketState {
             ground: ground_plane(),
             params,
             contacting: true,
+            body_contacting: false,
         }
     }
 
@@ -202,6 +231,7 @@ impl RocketState {
         let mut s = Self::resting_on_pad();
         s.motor = motor_from_pose(0.0, altitude_com, 0.0, 0.0, 0.0, 0.0);
         s.contacting = false;
+        s.body_contacting = false;
         s
     }
 
@@ -290,6 +320,19 @@ impl RocketState {
         min_y
     }
 
+    /// Lowest hull/foot probe altitude (min world Y over all ground samples).
+    pub fn lowest_probe_y(&self) -> f64 {
+        let mut min_y = f64::INFINITY;
+        for probe in ground_contact_probes(&self.params) {
+            let p = point(probe.body[0], probe.body[1], probe.body[2]);
+            let y = extract_point(&self.motor.sandwich(&p))[1];
+            if y < min_y {
+                min_y = y;
+            }
+        }
+        min_y
+    }
+
     /// Apply a control command (clamped).
     pub fn set_command(&mut self, cmd: ControlCommand) {
         self.command = cmd.clamp();
@@ -316,49 +359,81 @@ impl RocketState {
         ];
         let mut body_torque = prop.torque;
 
-        // --- Leg / ground contact + Coulomb friction ---
+        // --- Unified ground contact: feet + body/nozzle/nose hull ---
         self.contacting = false;
+        self.body_contacting = false;
         let pos = self.position();
-        let feet = self.foot_world_positions();
+        let probes = ground_contact_probes(&self.params);
         let band = self.params.contact_band.max(0.0);
-        // Feet at/below the band count as planted (hard projection often leaves y≈0).
-        let planted: [bool; 4] = std::array::from_fn(|i| feet[i][1] <= band);
-        let n_planted = planted.iter().filter(|&&p| p).count();
-        let any_contact = n_planted > 0;
 
-        if any_contact {
+        // Transform probes once (PGA sandwich).
+        let mut world_pts = Vec::with_capacity(probes.len());
+        let mut planted_flags = Vec::with_capacity(probes.len());
+        let mut n_foot_planted = 0usize;
+        let mut n_hull_planted = 0usize;
+        for probe in &probes {
+            let p = point(probe.body[0], probe.body[1], probe.body[2]);
+            let w = extract_point(&self.motor.sandwich(&p));
+            let planted = w[1] <= band;
+            if planted {
+                match probe.kind {
+                    ContactKind::Foot => n_foot_planted += 1,
+                    ContactKind::Hull => n_hull_planted += 1,
+                }
+            }
+            world_pts.push(w);
+            planted_flags.push(planted);
+        }
+
+        // Most negative normal (world +Y) approach speed among active contacts.
+        let mut impact_vn = 0.0_f64;
+
+        if n_foot_planted + n_hull_planted > 0 {
             let omega_w = motor_rotate_vector(&self.motor, self.omega);
             let motor_inv = self.motor.reverse().normalize_motor();
-            let mu = self.params.friction_mu.max(0.0);
+            let mu_foot = self.params.friction_mu.max(0.0);
+            let mu_hull = self.params.body_friction_mu.max(0.0);
             let v_eps = self.params.friction_slip_eps.max(1e-6);
             let v_eps2 = v_eps * v_eps;
-            // Resting support share for friction when the soft spring sees ~0 penetration.
-            let n_rest_each = if n_planted > 0 {
-                (mass * GRAVITY) / n_planted as f64
+            // Foot rest-share for pad friction when spring N≈0 after hard projection.
+            let n_rest_foot = if n_foot_planted > 0 {
+                (mass * GRAVITY) / n_foot_planted as f64
+            } else {
+                0.0
+            };
+            // Hull rest-share when lying on the body (several hull samples planted).
+            let n_rest_hull = if n_hull_planted > 0 {
+                (mass * GRAVITY) / n_hull_planted as f64
             } else {
                 0.0
             };
 
-            for (i, foot) in feet.iter().enumerate() {
-                if !planted[i] {
+            for i in 0..probes.len() {
+                if !planted_flags[i] {
                     continue;
                 }
+                let probe = probes[i];
+                let world = world_pts[i];
                 self.contacting = true;
-                let r = [foot[0] - pos[0], foot[1] - pos[1], foot[2] - pos[2]];
-                // Foot world velocity: v_com + ω × r
-                let v_foot = [
+                if probe.kind == ContactKind::Hull {
+                    self.body_contacting = true;
+                }
+
+                let r = [world[0] - pos[0], world[1] - pos[1], world[2] - pos[2]];
+                let v_pt = [
                     self.velocity[0] + omega_w[1] * r[2] - omega_w[2] * r[1],
                     self.velocity[1] + omega_w[2] * r[0] - omega_w[0] * r[2],
                     self.velocity[2] + omega_w[0] * r[1] - omega_w[1] * r[0],
                 ];
-                let penetration = (-foot[1]).max(0.0);
+                if v_pt[1] < impact_vn {
+                    impact_vn = v_pt[1];
+                }
+                let penetration = (-world[1]).max(0.0);
                 let n_spring = (self.params.contact_stiffness * penetration
-                    - self.params.contact_damping * v_foot[1].min(0.0))
+                    - self.params.contact_damping * v_pt[1].min(0.0))
                 .max(0.0);
-                // Vertical support only from the penalty spring (avoids double-counting weight).
                 force[1] += n_spring;
 
-                // Normal reaction torque: τ = r × (0, N_spring, 0)
                 if n_spring > 0.0 {
                     let tau_n = [-r[2] * n_spring, 0.0, r[0] * n_spring];
                     let tau_nb = motor_rotate_vector(&motor_inv, tau_n);
@@ -367,21 +442,23 @@ impl RocketState {
                     body_torque[2] += tau_nb[2];
                 }
 
-                // Planting weight for friction: full rest share at/below plane, fades to 0 at band.
-                let plant = if foot[1] <= 0.0 {
+                let plant = if world[1] <= 0.0 {
                     1.0
                 } else if band > 0.0 {
-                    (1.0 - foot[1] / band).clamp(0.0, 1.0)
+                    (1.0 - world[1] / band).clamp(0.0, 1.0)
                 } else {
                     0.0
                 };
-                let n_fric = n_spring.max(n_rest_each * plant);
+                let (mu, n_rest) = match probe.kind {
+                    ContactKind::Foot => (mu_foot, n_rest_foot),
+                    ContactKind::Hull => (mu_hull, n_rest_hull),
+                };
+                let n_fric = n_spring.max(n_rest * plant);
 
-                // Regularized Coulomb friction on horizontal foot slip (incl. spin).
-                // F = −μ N · v_h / sqrt(|v_h|² + v_eps²)
+                // Regularized Coulomb friction: F = −μ N v_h / sqrt(|v_h|² + v_ε²)
                 if mu > 0.0 && n_fric > 0.0 {
-                    let vh_x = v_foot[0];
-                    let vh_z = v_foot[2];
+                    let vh_x = v_pt[0];
+                    let vh_z = v_pt[2];
                     let speed2 = vh_x * vh_x + vh_z * vh_z;
                     let denom = (speed2 + v_eps2).sqrt();
                     let scale = -mu * n_fric / denom;
@@ -389,7 +466,6 @@ impl RocketState {
                     let f_fz = scale * vh_z;
                     force[0] += f_fx;
                     force[2] += f_fz;
-                    // τ = r × F with F = (fx, 0, fz)
                     let tau_f = [r[1] * f_fz, r[2] * f_fx - r[0] * f_fz, -r[1] * f_fx];
                     let tau_fb = motor_rotate_vector(&motor_inv, tau_f);
                     body_torque[0] += tau_fb[0];
@@ -404,6 +480,16 @@ impl RocketState {
         self.velocity[0] += force[0] * inv_mass * dt;
         self.velocity[1] += force[1] * inv_mass * dt;
         self.velocity[2] += force[2] * inv_mass * dt;
+
+        // Bounce: if we hit the ground approaching fast, lift CoM vertical rate toward
+        // v_n' ≈ −e · v_n_impact (penalty forces alone are too damped to rebound cleanly).
+        let e = self.params.restitution.clamp(0.0, 1.0);
+        if e > 0.0 && impact_vn < -0.5 {
+            let target_up = -e * impact_vn;
+            if self.velocity[1] < target_up {
+                self.velocity[1] = target_up;
+            }
+        }
 
         // Angular: I α = τ − ω × (I ω) on principal axes.
         let i = self.params.inertia;
@@ -436,17 +522,62 @@ impl RocketState {
         let m_rot = self.motor.geo(&r_inc);
         self.motor = compose_motors(&t_inc, &m_rot);
 
-        // Hard non-penetration: feet must not remain below the ground plane.
-        let min_foot = self.lowest_foot_y();
-        if min_foot < -1e-4 {
-            let fix = translator(0.0, -min_foot, 0.0);
+        // Hard non-penetration for the full hull (feet + body + nozzle + nose).
+        let min_y = self.lowest_probe_y();
+        if min_y < -1e-4 {
+            let fix = translator(0.0, -min_y, 0.0);
             self.motor = compose_motors(&fix, &self.motor);
             if self.velocity[1] < 0.0 {
-                self.velocity[1] = 0.0;
+                // Bounce CoM vertical speed: v' = −e v (e=0 → stop, e=1 → reverse).
+                let e = self.params.restitution.clamp(0.0, 1.0);
+                self.velocity[1] = -e * self.velocity[1];
             }
             self.contacting = true;
         }
     }
+}
+
+/// All ground-collision probes in the body frame: 4 feet + structural hull samples.
+pub fn ground_contact_probes(params: &RocketParams) -> Vec<ContactProbe> {
+    let mut probes = Vec::with_capacity(4 + HULL_RING_SEGS * 4 + 3);
+    for foot in &params.leg_feet {
+        probes.push(ContactProbe {
+            body: *foot,
+            kind: ContactKind::Foot,
+        });
+    }
+
+    let r = params.body_radius;
+    let hh = params.body_half_height;
+    let exit_y = params.nozzle_exit_y();
+    let exit_r = r * 0.95;
+    let upper_y = hh * 0.7;
+    // Rings: body bottom, mid, upper cylinder, nozzle exit.
+    let rings = [(-hh, r), (0.0, r), (upper_y, r), (exit_y, exit_r)];
+    for &(y, rad) in &rings {
+        for i in 0..HULL_RING_SEGS {
+            let a = (i as f64) * std::f64::consts::TAU / HULL_RING_SEGS as f64;
+            let (s, c) = a.sin_cos();
+            probes.push(ContactProbe {
+                body: [c * rad, y, s * rad],
+                kind: ContactKind::Hull,
+            });
+        }
+    }
+    // Axis samples: nose tip, body bottom center, nozzle center.
+    probes.push(ContactProbe {
+        body: [0.0, hh, 0.0],
+        kind: ContactKind::Hull,
+    });
+    probes.push(ContactProbe {
+        body: [0.0, -hh, 0.0],
+        kind: ContactKind::Hull,
+    });
+    probes.push(ContactProbe {
+        body: [0.0, exit_y, 0.0],
+        kind: ContactKind::Hull,
+    });
+    probes
 }
 
 /// Public step API used by UI and tests.

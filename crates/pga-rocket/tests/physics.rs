@@ -72,7 +72,7 @@ fn sustained_thrust_climbs_from_pad() {
 
 #[test]
 fn contact_prevents_ground_penetration() {
-    // Drop from modest height with zero thrust; feet must not stay below plane.
+    // Drop from modest height with zero thrust; hull/feet must not stay below plane.
     let mut s = RocketState::at_altitude(40.0);
     s.set_command(ControlCommand {
         throttle: 0.0,
@@ -81,21 +81,84 @@ fn contact_prevents_ground_penetration() {
     for _ in 0..2000 {
         step_rocket(&mut s, DT);
         assert!(
-            s.lowest_foot_y() >= -0.05,
-            "foot penetrated ground: y={}",
-            s.lowest_foot_y()
+            s.lowest_probe_y() >= -0.05,
+            "hull/foot penetrated ground: y={}",
+            s.lowest_probe_y()
         );
     }
     // After settling, still non-penetrating and near the pad.
     assert!(
-        s.lowest_foot_y() >= -0.05,
+        s.lowest_probe_y() >= -0.05,
         "settled penetration {}",
-        s.lowest_foot_y()
+        s.lowest_probe_y()
     );
     assert!(
         s.altitude() < 30.0,
         "should have fallen toward ground, alt={}",
         s.altitude()
+    );
+}
+
+#[test]
+fn tipped_body_hull_contacts_ground_without_penetration() {
+    use pga_rocket::euclidean_pga::motor_from_pose;
+    use std::f64::consts::FRAC_PI_2;
+
+    // Tip 90° about +X so the body cylinder side faces the ground.
+    let mut s = RocketState::at_altitude(25.0);
+    s.motor = motor_from_pose(0.0, 25.0, 0.0, FRAC_PI_2, 0.0, 0.0);
+    s.velocity = [0.0, 0.0, 0.0];
+    s.omega = [0.0, 0.0, 0.0];
+    s.set_command(ControlCommand::default());
+
+    let mut saw_body = false;
+    for _ in 0..2500 {
+        step_rocket(&mut s, DT);
+        if s.body_contacting {
+            saw_body = true;
+        }
+        assert!(
+            s.lowest_probe_y() >= -0.08,
+            "tipped hull penetrated: y={}",
+            s.lowest_probe_y()
+        );
+    }
+    assert!(
+        saw_body,
+        "expected body hull contact while lying/tipping onto the ground"
+    );
+    assert!(
+        s.altitude() < 20.0,
+        "should settle lower after tipping, alt={}",
+        s.altitude()
+    );
+}
+
+#[test]
+fn restitution_causes_bounce_on_hard_impact() {
+    let mut soft = RocketState::at_altitude(30.0);
+    soft.params.restitution = 0.0;
+    soft.set_command(ControlCommand::default());
+
+    let mut bouncy = RocketState::at_altitude(30.0);
+    bouncy.params.restitution = 0.75;
+    bouncy.set_command(ControlCommand::default());
+
+    let mut max_up_soft = 0.0_f64;
+    let mut max_up_bouncy = 0.0_f64;
+    for _ in 0..2000 {
+        step_rocket(&mut soft, DT);
+        step_rocket(&mut bouncy, DT);
+        max_up_soft = max_up_soft.max(soft.velocity[1]);
+        max_up_bouncy = max_up_bouncy.max(bouncy.velocity[1]);
+    }
+    assert!(
+        max_up_bouncy > 3.0,
+        "elastic drop should rebound upward, vy_max={max_up_bouncy}"
+    );
+    assert!(
+        max_up_bouncy > max_up_soft + 2.0,
+        "higher restitution should bounce more: soft_up={max_up_soft} bouncy_up={max_up_bouncy}"
     );
 }
 
