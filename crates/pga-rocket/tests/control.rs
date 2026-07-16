@@ -129,3 +129,55 @@ fn hud_text_mentions_altitude_and_thrust() {
     assert!(text.contains("thr="), "HUD missing thrust: {text}");
     assert!(text.contains("Space"), "HUD missing key help: {text}");
 }
+
+#[test]
+fn exhaust_plume_absent_at_zero_and_grows_with_throttle() {
+    use pga_rocket::mesh::rocket_mesh;
+    use pga_rocket::sim::ControlCommand;
+
+    let mut s = RocketState::resting_on_pad();
+    s.set_command(ControlCommand {
+        throttle: 0.0,
+        ..Default::default()
+    });
+    let (v0, _) = rocket_mesh(&s);
+
+    s.set_command(ControlCommand {
+        throttle: 0.3,
+        ..Default::default()
+    });
+    let (v_lo, _) = rocket_mesh(&s);
+
+    s.set_command(ControlCommand {
+        throttle: 1.0,
+        ..Default::default()
+    });
+    let (v_hi, _) = rocket_mesh(&s);
+
+    assert!(
+        v_lo.len() > v0.len(),
+        "partial throttle should add flame verts (0={}, 0.3={})",
+        v0.len(),
+        v_lo.len()
+    );
+    assert!(
+        v_hi.len() == v_lo.len(),
+        "flame topology is fixed; only size changes (0.3={}, 1.0={})",
+        v_lo.len(),
+        v_hi.len()
+    );
+
+    // At full throttle the plume tip should reach farther below the body than at 30%.
+    let min_y = |verts: &[pga_rocket::mesh::Vertex]| {
+        verts
+            .iter()
+            .map(|v| v.pos[1])
+            .fold(f32::INFINITY, f32::min)
+    };
+    assert!(
+        min_y(&v_hi) < min_y(&v_lo) - 1.0,
+        "full throttle flame should extend farther: lo={} hi={}",
+        min_y(&v_lo),
+        min_y(&v_hi)
+    );
+}

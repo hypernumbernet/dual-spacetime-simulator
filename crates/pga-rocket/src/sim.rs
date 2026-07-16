@@ -14,9 +14,13 @@ pub struct RocketParams {
     pub mass: f64,
     /// Max engine thrust (N). Must exceed weight for liftoff.
     pub max_thrust: f64,
-    /// Body half-height from CoM to nose / engine (m).
+    /// Body half-height from CoM to nose / engine attach (m).
     pub body_half_height: f64,
     pub body_radius: f64,
+    /// Engine bell length below body bottom (m). Feet must sit below this.
+    pub nozzle_length: f64,
+    /// Clearance from nozzle exit plane down to foot pads (m).
+    pub leg_clearance: f64,
     /// Landing leg foot positions in body frame (relative to CoM).
     pub leg_feet: [[f64; 3]; 4],
     /// Rotational inertia about principal axes (body frame), diagonal Ixx,Iyy,Izz.
@@ -33,13 +37,19 @@ impl Default for RocketParams {
         // ~1000 kg, T/W ≈ 1.5 at max thrust
         let mass = 1000.0;
         let hh = 12.0;
-        let leg_y = -hh - 0.5;
-        let leg_r = 3.5;
+        let nozzle_length = 1.6;
+        // Feet well below the bell exit so the nozzle never sits in the ground.
+        let leg_clearance = 2.8;
+        let leg_y = -hh - nozzle_length - leg_clearance;
+        let leg_r = 4.0;
         Self {
             mass,
-            max_thrust: mass * GRAVITY * 1.5,
+            // T/W ≈ 3.0 at full throttle (engine output tuned 2× from the original 1.5).
+            max_thrust: mass * GRAVITY * 3.0,
             body_half_height: hh,
             body_radius: 1.8,
+            nozzle_length,
+            leg_clearance,
             leg_feet: [
                 [leg_r, leg_y, leg_r],
                 [-leg_r, leg_y, leg_r],
@@ -51,6 +61,13 @@ impl Default for RocketParams {
             contact_stiffness: 5.0e5,
             contact_damping: 2.0e4,
         }
+    }
+}
+
+impl RocketParams {
+    /// Body-frame Y of the engine-bell exit plane.
+    pub fn nozzle_exit_y(&self) -> f64 {
+        -self.body_half_height - self.nozzle_length
     }
 }
 
