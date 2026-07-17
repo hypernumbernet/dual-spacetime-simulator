@@ -307,17 +307,21 @@ pub fn motor_body_up_world(m: &Multivector) -> [f64; 3] {
     motor_rotate_vector(m, [0.0, 1.0, 0.0])
 }
 
-/// Small-angle attitude error in body frame: axis to rotate body +Y toward `desired_world`.
+/// Attitude error in body frame: axis to rotate body +Y toward `desired_world`.
 ///
-/// Returns `cross(body_up_world, desired_world)` mapped into the body frame.
+/// Equivalent to `R⁻¹(body_up_world × desired_world)`, computed as
+/// `cross([0,1,0], R⁻¹ desired_world)` so only one vector transport is needed.
 pub fn attitude_error_body(m: &Multivector, desired_world: [f64; 3]) -> [f64; 3] {
-    let up = motor_body_up_world(m);
-    let err_world = [
-        up[1] * desired_world[2] - up[2] * desired_world[1],
-        up[2] * desired_world[0] - up[0] * desired_world[2],
-        up[0] * desired_world[1] - up[1] * desired_world[0],
-    ];
-    motor_inverse_rotate_vector(m, err_world)
+    let d = motor_inverse_rotate_vector(m, desired_world);
+    // cross([0, 1, 0], d) = (d_z, 0, -d_x)
+    [d[2], 0.0, -d[0]]
+}
+
+/// World +Y expressed in the body frame, and the matching uprighting error
+/// `cross([0,1,0], world_up_body)`. One inverse transport serves both tilt (`[1]`)
+/// and pitch/yaw error (`[2], -[0]`).
+pub fn world_up_in_body(m: &Multivector) -> [f64; 3] {
+    motor_inverse_rotate_vector(m, [0.0, 1.0, 0.0])
 }
 
 #[cfg(test)]
