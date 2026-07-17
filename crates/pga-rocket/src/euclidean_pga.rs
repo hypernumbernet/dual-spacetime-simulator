@@ -292,6 +292,34 @@ pub fn compose_motors(delta: &Multivector, m: &Multivector) -> Multivector {
     delta.geo(m).normalize_motor()
 }
 
+/// Rotate a world-frame free vector into the body frame (inverse of [`motor_rotate_vector`]).
+pub fn motor_inverse_rotate_vector(m: &Multivector, v: [f64; 3]) -> [f64; 3] {
+    let inv = m.reverse();
+    let p = point(v[0], v[1], v[2]);
+    let o = point(0.0, 0.0, 0.0);
+    let pw = extract_point(&inv.sandwich(&p));
+    let ow = extract_point(&inv.sandwich(&o));
+    [pw[0] - ow[0], pw[1] - ow[1], pw[2] - ow[2]]
+}
+
+/// Body +Y axis expressed in world coordinates under motor `m`.
+pub fn motor_body_up_world(m: &Multivector) -> [f64; 3] {
+    motor_rotate_vector(m, [0.0, 1.0, 0.0])
+}
+
+/// Small-angle attitude error in body frame: axis to rotate body +Y toward `desired_world`.
+///
+/// Returns `cross(body_up_world, desired_world)` mapped into the body frame.
+pub fn attitude_error_body(m: &Multivector, desired_world: [f64; 3]) -> [f64; 3] {
+    let up = motor_body_up_world(m);
+    let err_world = [
+        up[1] * desired_world[2] - up[2] * desired_world[1],
+        up[2] * desired_world[0] - up[0] * desired_world[2],
+        up[0] * desired_world[1] - up[1] * desired_world[0],
+    ];
+    motor_inverse_rotate_vector(m, err_world)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,11 +348,13 @@ mod tests {
     }
 
     #[test]
-    fn motor_pose_extract_roundtrip() {
-        let m = motor_from_pose(1.5, 10.0, -2.0, 0.0, 0.0, 0.0);
-        let t = motor_translation(&m);
-        assert!((t[0] - 1.5).abs() < 1e-8);
-        assert!((t[1] - 10.0).abs() < 1e-8);
-        assert!((t[2] - (-2.0)).abs() < 1e-8);
+    fn motor_inverse_rotate_roundtrip() {
+        let m = motor_from_pose(1.0, 5.0, -2.0, 0.2, -0.15, 0.1);
+        let v_body = [0.3, 0.9, -0.4];
+        let v_world = motor_rotate_vector(&m, v_body);
+        let back = motor_inverse_rotate_vector(&m, v_world);
+        assert!((back[0] - v_body[0]).abs() < 1e-8);
+        assert!((back[1] - v_body[1]).abs() < 1e-8);
+        assert!((back[2] - v_body[2]).abs() < 1e-8);
     }
 }

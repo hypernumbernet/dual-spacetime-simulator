@@ -1,5 +1,6 @@
 //! Fixed-width left docked parameter panel (egui SidePanel).
 
+use crate::landing::LandingAutopilot;
 use crate::sim::{GRAVITY, RocketState};
 use egui::{RichText, ScrollArea};
 
@@ -10,6 +11,7 @@ pub const PANEL_WIDTH: f32 = 280.0;
 pub fn draw_params_panel(
     ctx: &egui::Context,
     rocket: &RocketState,
+    landing: &LandingAutopilot,
     fps: f32,
     cam_yaw: f32,
     cam_pitch: f32,
@@ -27,7 +29,7 @@ pub fn draw_params_panel(
                 .show(ui, |ui| {
                     flight_section(ui, rocket);
                     ui.separator();
-                    control_section(ui, rocket);
+                    control_section(ui, rocket, landing);
                     ui.separator();
                     vehicle_section(ui, rocket);
                     ui.separator();
@@ -78,8 +80,13 @@ fn flight_section(ui: &mut egui::Ui, rocket: &RocketState) {
     );
 }
 
-fn control_section(ui: &mut egui::Ui, rocket: &RocketState) {
+fn control_section(ui: &mut egui::Ui, rocket: &RocketState, landing: &LandingAutopilot) {
     ui.label(RichText::new("Control").strong());
+    kv(
+        ui,
+        "Auto-land",
+        landing.status_label().to_string(),
+    );
     let cmd = rocket.command;
     let thrust = rocket.thrust_newtons();
     let weight = rocket.params.mass * GRAVITY;
@@ -170,6 +177,7 @@ fn help_section(ui: &mut egui::Ui) {
     ui.label("W/S: pitch gimbal (needs thrust)");
     ui.label("Q/E: yaw gimbal (needs thrust)");
     ui.label("A/D: roll RCS thrusters");
+    ui.label("L: auto-land toggle");
     ui.label("R: reset");
     ui.label("LMB/RMB drag: orbit");
     ui.label("Wheel / PgUp-Dn: zoom");

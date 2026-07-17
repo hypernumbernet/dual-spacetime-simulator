@@ -2,6 +2,7 @@
 
 use crate::control::{ControlMapper, KeySnapshot};
 use crate::integration::Gui;
+use crate::landing::LandingAutopilot;
 use crate::mesh::{GRASS_METERS_PER_TILE, hud_text};
 use crate::renderer::{
     MIN_CAMERA_HEIGHT, Renderer, SKY_COLOR, camera_view_proj, min_orbit_pitch,
@@ -36,6 +37,7 @@ pub struct App {
     window: Option<Arc<Window>>,
     rocket: RocketState,
     control: ControlMapper,
+    landing: LandingAutopilot,
     input: InputState,
     last_frame: Option<Instant>,
     accum: f64,
@@ -65,6 +67,7 @@ impl Default for App {
             window: None,
             rocket: RocketState::resting_on_pad(),
             control: ControlMapper::default(),
+            landing: LandingAutopilot::default(),
             input: InputState::default(),
             last_frame: None,
             accum: 0.0,
@@ -110,6 +113,7 @@ impl App {
             roll_left: self.input.held(KeyCode::KeyA),
             roll_right: self.input.held(KeyCode::KeyD),
             reset: self.input.just_pressed(KeyCode::KeyR),
+            toggle_landing: self.input.just_pressed(KeyCode::KeyL),
         }
     }
 
@@ -172,11 +176,21 @@ impl App {
             self.scroll_zoom = 0.0;
         }
 
+        if keys.toggle_landing {
+            self.landing.toggle();
+        }
+
         if keys.reset {
             self.rocket = RocketState::resting_on_pad();
             self.control = ControlMapper::default();
+            self.landing.disable();
         }
-        let cmd = self.control.apply(&keys, dt as f64);
+
+        let cmd = if self.landing.enabled {
+            self.landing.update(&self.rocket, dt as f64)
+        } else {
+            self.control.apply(&keys, dt as f64)
+        };
         self.rocket.set_command(cmd);
 
         self.accum += dt as f64;
@@ -204,7 +218,7 @@ impl App {
             (pos[0] as f32 / tile).round() * tile,
             (pos[2] as f32 / tile).round() * tile,
         ];
-        let hud = hud_text(&self.rocket, self.fps);
+        let hud = hud_text(&self.rocket, &self.landing, self.fps);
         let title = hud.lines().next().unwrap_or("PGA Rocket").to_string();
         window.set_title(&title);
 
@@ -234,6 +248,7 @@ impl App {
             draw_params_panel(
                 &ctx,
                 &self.rocket,
+                &self.landing,
                 fps,
                 cam_yaw,
                 cam_pitch,
@@ -268,7 +283,7 @@ impl ApplicationHandler for App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("PGA Rocket — Space/Ctrl throttle, WASD/QE attitude, R reset")
+            .with_title("PGA Rocket — Space/Ctrl throttle, WASD/QE attitude, L auto-land, R reset")
             .with_inner_size(LogicalSize::new(1280.0, 720.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
 

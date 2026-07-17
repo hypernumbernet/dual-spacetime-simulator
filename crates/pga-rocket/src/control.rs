@@ -14,6 +14,8 @@ pub struct KeySnapshot {
     pub roll_left: bool,
     pub roll_right: bool,
     pub reset: bool,
+    /// Toggle automatic landing mode (L key, edge-triggered).
+    pub toggle_landing: bool,
 }
 
 /// Maps key state into incremental control updates.
@@ -24,6 +26,7 @@ pub struct KeySnapshot {
 /// - Q/E: yaw (main-engine gimbal about body +Z; needs thrust)
 /// - A/D: roll (four center RCS thrusters about body +Y; works on the pad too)
 /// - R: signal reset (caller applies)
+/// - L: signal landing toggle (caller applies)
 #[derive(Clone, Debug)]
 pub struct ControlMapper {
     /// Throttle units per second while thrust keys held.
@@ -95,6 +98,7 @@ pub fn map_keys(
     q: bool,
     e: bool,
     r: bool,
+    l: bool,
 ) -> KeySnapshot {
     KeySnapshot {
         thrust_up: space,
@@ -107,5 +111,6 @@ pub fn map_keys(
         roll_left: a,
         roll_right: d,
         reset: r,
+        toggle_landing: l,
     }
 }

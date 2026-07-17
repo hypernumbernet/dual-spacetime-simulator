@@ -8,6 +8,7 @@ mod app;
 mod control;
 mod euclidean_pga;
 mod integration;
+mod landing;
 mod mesh;
 mod renderer;
 mod sim;

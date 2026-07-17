@@ -5,10 +5,12 @@
 
 pub mod control;
 pub mod euclidean_pga;
+pub mod landing;
 pub mod mesh;
 pub mod sim;
 
 pub use control::{ControlMapper, KeySnapshot, map_keys};
+pub use landing::LandingAutopilot;
 pub use sim::{
     BodyWrench, ContactKind, ContactProbe, ControlCommand, RocketParams, RocketState, ThrusterSample,
     body_wrench_at, cross, engine_wrench, gimbal_rotor, ground_contact_probes, propulsive_wrench,
