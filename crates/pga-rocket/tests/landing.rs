@@ -22,6 +22,30 @@ fn run_landing(mut state: RocketState, steps: usize) -> (RocketState, LandingAut
     (state, ap)
 }
 
+fn run_landing_impulse(mut state: RocketState, steps: usize) -> (RocketState, LandingAutopilot, f64) {
+    let mut ap = LandingAutopilot::default();
+    ap.enabled = true;
+    let mut impulse = 0.0;
+    let mut coast_steps = 0usize;
+    for _ in 0..steps {
+        let cmd = ap.update(&state, DT);
+        impulse += cmd.throttle * DT;
+        if cmd.throttle < 0.05 {
+            coast_steps += 1;
+        }
+        state.set_command(cmd);
+        step_rocket(&mut state, DT);
+        if ap.complete {
+            break;
+        }
+    }
+    assert!(
+        coast_steps > 60,
+        "expected a free-fall coast phase, coast_steps={coast_steps}"
+    );
+    (state, ap, impulse)
+}
+
 #[test]
 fn autopilot_uprights_tilted_hover() {
     let mut state = RocketState::at_altitude(60.0);
@@ -101,6 +125,29 @@ fn autopilot_recovers_tilt_then_lands() {
     );
     assert!(tilt < 0.25, "should not remain heavily tilted, tilt={tilt:.3}");
     assert!(!state.body_contacting || state.contacting);
+}
+
+#[test]
+fn autopilot_coasts_then_lands_from_high_altitude() {
+    // CoM 80 m ⇒ foot clearance ≈ 63 m: long enough for a real suicide-burn coast.
+    let mut state = RocketState::at_altitude(80.0);
+    state.velocity = [0.0, -1.0, 0.0];
+    state.contacting = false;
+
+    let (state, ap, impulse) = run_landing_impulse(state, 45 * 120);
+    let tilt = tilt_of(&state);
+
+    assert!(
+        state.contacting || ap.complete,
+        "expected landing, h={} tilt={tilt:.3}",
+        state.lowest_foot_y()
+    );
+    assert!(tilt < 0.2, "tilt={tilt:.3}");
+    // Hovering down the whole way for ~25 s would cost ≳ 8 throttle·s; coast+burn is far less.
+    assert!(
+        impulse < 6.5,
+        "expected fuel-efficient impulse, got {impulse:.2} throttle·s"
+    );
 }
 
 #[test]
