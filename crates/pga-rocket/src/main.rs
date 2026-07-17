@@ -7,6 +7,7 @@
 mod app;
 mod control;
 mod euclidean_pga;
+mod explosion;
 mod integration;
 mod landing;
 mod mesh;

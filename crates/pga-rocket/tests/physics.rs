@@ -109,6 +109,9 @@ fn tipped_body_hull_contacts_ground_without_penetration() {
     s.motor = motor_from_pose(0.0, 25.0, 0.0, FRAC_PI_2, 0.0, 0.0);
     s.velocity = [0.0, 0.0, 0.0];
     s.omega = [0.0, 0.0, 0.0];
+    // The ~21 m/s side impact would (correctly) destroy the vehicle; disable
+    // destruction to test hull contact mechanics in isolation.
+    s.params.crash_impact_speed = 1.0e6;
     s.set_command(ControlCommand::default());
 
     let mut saw_body = false;
@@ -420,6 +423,31 @@ fn hard_ground_impact_destroys_vehicle() {
         s.params.crash_impact_speed
     );
     assert!(s.explosion_age >= 0.0);
+}
+
+/// Very fast falls cross the contact band in a single step; the tunneling
+/// guard in the hard-projection pass must still destroy the vehicle.
+#[test]
+fn very_high_drop_still_destroys_vehicle() {
+    for alt in [300.0, 500.0] {
+        let mut s = RocketState::at_altitude(alt);
+        s.set_command(ControlCommand::default());
+        let mut destroyed = false;
+        for _ in 0..12000 {
+            step_rocket(&mut s, DT);
+            if s.destroyed {
+                destroyed = true;
+                break;
+            }
+        }
+        assert!(destroyed, "expected destruction dropping from {alt} m");
+        assert!(
+            s.last_impact_speed >= s.params.crash_impact_speed,
+            "impact={} threshold={}",
+            s.last_impact_speed,
+            s.params.crash_impact_speed
+        );
+    }
 }
 
 #[test]

@@ -1,9 +1,10 @@
 //! Colored rocket mesh + textured grass ground (minecraft-style tiling + fog).
 
+use crate::explosion::explosion_fx_mesh;
 use crate::integration::Gui;
 use crate::mesh::{
-    GRASS_METERS_PER_TILE, GROUND_FOG_END, GROUND_FOG_START, GROUND_HALF_EXTENT, GroundVertex,
-    Vertex, grass_ground_mesh, rocket_mesh,
+    FxVertex, GRASS_METERS_PER_TILE, GROUND_FOG_END, GROUND_FOG_START, GROUND_HALF_EXTENT,
+    GroundVertex, Vertex, grass_ground_mesh, rocket_mesh,
 };
 use crate::sim::RocketState;
 use crate::texture::{Texture, create_grass_texture};
@@ -21,6 +22,8 @@ const MESH_VERT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/mesh.
 const MESH_FRAG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/mesh.frag.spv"));
 const GROUND_VERT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/ground.vert.spv"));
 const GROUND_FRAG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/ground.frag.spv"));
+const FX_VERT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/fx.vert.spv"));
+const FX_FRAG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/fx.frag.spv"));
 
 /// Sky / fog color (matches clear color).
 pub const SKY_COLOR: [f32; 4] = [0.45, 0.62, 0.85, 1.0];
@@ -57,6 +60,7 @@ pub struct Renderer {
     mesh_layout: vk::PipelineLayout,
     ground_layout: vk::PipelineLayout,
     tri_pipeline: vk::Pipeline,
+    fx_pipeline: vk::Pipeline,
     ground_pipeline: vk::Pipeline,
     grass: Texture,
     desc_set_layout: vk::DescriptorSetLayout,
@@ -64,6 +68,7 @@ pub struct Renderer {
     desc_set: vk::DescriptorSet,
     ground: Option<GpuMesh>,
     rocket: Option<GpuMesh>,
+    fx: Option<GpuMesh>,
     retired: Vec<(u64, AllocatedBuffer)>,
     frame_counter: u64,
     /// Last HUD string (for unit/structural checks without GPU readback).
@@ -108,6 +113,7 @@ impl Renderer {
             vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&mesh_ranges);
         let mesh_layout = unsafe { device.create_pipeline_layout(&mesh_pl_ci, None) }.unwrap();
         let tri_pipeline = create_mesh_pipeline(&device, render_pass, mesh_layout);
+        let fx_pipeline = create_fx_pipeline(&device, render_pass, mesh_layout);
 
         // Grass texture + ground pipeline.
         let grass = create_grass_texture(vb, &allocator);
@@ -172,6 +178,7 @@ impl Renderer {
             mesh_layout,
             ground_layout,
             tri_pipeline,
+            fx_pipeline,
             ground_pipeline,
             grass,
             desc_set_layout,
@@ -179,6 +186,7 @@ impl Renderer {
             desc_set,
             ground: None,
             rocket: None,
+            fx: None,
             retired: Vec::new(),
             frame_counter: 0,
             last_hud: String::new(),
@@ -239,14 +247,45 @@ impl Renderer {
         self.retired.push((self.frame_counter, mesh.index));
     }
 
-    /// Rebuild rocket GPU mesh from current sim state.
-    pub fn sync_rocket(&mut self, state: &RocketState) {
+    /// Rebuild rocket + explosion FX GPU meshes from current sim state.
+    /// `cam_eye` is used to sort translucent FX discs back-to-front.
+    pub fn sync_rocket(&mut self, state: &RocketState, cam_eye: Vec3) {
         if let Some(old) = self.rocket.take() {
+            self.retire_mesh(old);
+        }
+        if let Some(old) = self.fx.take() {
             self.retire_mesh(old);
         }
         let (verts, idx) = rocket_mesh(state);
         if !idx.is_empty() {
             self.rocket = Some(self.upload_mesh(&verts, &idx));
+        }
+        let (fx_verts, fx_idx) =
+            explosion_fx_mesh(state, [cam_eye.x, cam_eye.y, cam_eye.z]);
+        if !fx_idx.is_empty() {
+            self.fx = Some(self.upload_fx(&fx_verts, &fx_idx));
+        }
+    }
+
+    fn upload_fx(&self, verts: &[FxVertex], indices: &[u32]) -> GpuMesh {
+        let (vertex, _) = create_buffer_with_data(
+            &self.device,
+            &self.allocator,
+            verts,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+            "fx-v",
+        );
+        let (index, index_count) = create_buffer_with_data(
+            &self.device,
+            &self.allocator,
+            indices,
+            vk::BufferUsageFlags::INDEX_BUFFER,
+            "fx-i",
+        );
+        GpuMesh {
+            vertex,
+            index,
+            index_count,
         }
     }
 
@@ -411,6 +450,20 @@ impl Renderer {
                 draw_mesh(&vb.device, cmd, mesh);
             }
 
+            // --- Explosion FX (premultiplied alpha, depth test on / write off) ---
+            if let Some(mesh) = &self.fx {
+                vb.device
+                    .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.fx_pipeline);
+                vb.device.cmd_push_constants(
+                    cmd,
+                    self.mesh_layout,
+                    vk::ShaderStageFlags::VERTEX,
+                    0,
+                    bytemuck::bytes_of(&mpc),
+                );
+                draw_mesh(&vb.device, cmd, mesh);
+            }
+
             // egui overlay (same subpass, alpha-blended by egui-ash-renderer).
             gui.draw(cmd, extent);
 
@@ -437,7 +490,7 @@ impl Drop for Renderer {
         for (_, buf) in self.retired.drain(..) {
             buf.destroy(&self.device, &self.allocator);
         }
-        for mesh in [&mut self.ground, &mut self.rocket] {
+        for mesh in [&mut self.ground, &mut self.rocket, &mut self.fx] {
             if let Some(m) = mesh.take() {
                 m.vertex.destroy(&self.device, &self.allocator);
                 m.index.destroy(&self.device, &self.allocator);
@@ -446,6 +499,7 @@ impl Drop for Renderer {
         self.grass.destroy(&self.device, &self.allocator);
         unsafe {
             self.device.destroy_pipeline(self.tri_pipeline, None);
+            self.device.destroy_pipeline(self.fx_pipeline, None);
             self.device.destroy_pipeline(self.ground_pipeline, None);
             self.device.destroy_pipeline_layout(self.mesh_layout, None);
             self.device.destroy_pipeline_layout(self.ground_layout, None);
@@ -575,6 +629,30 @@ fn create_mesh_pipeline(
                 12,
             ),
         ],
+        true,
+        false,
+    )
+}
+
+/// Translucent explosion FX: premultiplied alpha, depth test on / write off.
+fn create_fx_pipeline(
+    device: &ash::Device,
+    render_pass: vk::RenderPass,
+    layout: vk::PipelineLayout,
+) -> vk::Pipeline {
+    create_graphics_pipeline(
+        device,
+        render_pass,
+        layout,
+        FX_VERT,
+        FX_FRAG,
+        std::mem::size_of::<FxVertex>() as u32,
+        &[
+            (0, vk::Format::R32G32B32_SFLOAT, 0),
+            (1, vk::Format::R32G32B32A32_SFLOAT, 12),
+        ],
+        false,
+        true,
     )
 }
 
@@ -594,6 +672,8 @@ fn create_ground_pipeline(
             (0, vk::Format::R32G32B32_SFLOAT, 0),
             (1, vk::Format::R32G32_SFLOAT, 12),
         ],
+        true,
+        false,
     )
 }
 
@@ -605,6 +685,8 @@ fn create_graphics_pipeline(
     frag_spv: &[u8],
     stride: u32,
     attrs: &[(u32, vk::Format, u32)],
+    depth_write: bool,
+    blend: bool,
 ) -> vk::Pipeline {
     let vert = create_shader_module(device, vert_spv);
     let frag = create_shader_module(device, frag_spv);
@@ -652,11 +734,24 @@ fn create_graphics_pipeline(
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
     let depth = vk::PipelineDepthStencilStateCreateInfo::default()
         .depth_test_enable(true)
-        .depth_write_enable(true)
+        .depth_write_enable(depth_write)
         .depth_compare_op(vk::CompareOp::LESS);
-    let blend_att = [vk::PipelineColorBlendAttachmentState::default()
-        .color_write_mask(vk::ColorComponentFlags::RGBA)
-        .blend_enable(false)];
+    let blend_att = [if blend {
+        // Premultiplied alpha: rgb already scaled by alpha on the CPU.
+        vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::ONE)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .alpha_blend_op(vk::BlendOp::ADD)
+    } else {
+        vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(false)
+    }];
     let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_att);
     let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
     let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);

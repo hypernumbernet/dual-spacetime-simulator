@@ -259,7 +259,7 @@ impl App {
         });
         gui.prepare_frame(&window);
 
-        renderer.sync_rocket(&self.rocket);
+        renderer.sync_rocket(&self.rocket, eye);
         renderer.set_hud(hud);
 
         let draw_result = renderer.draw(vb, vp, eye, ground_xz, SKY_COLOR, gui);
@@ -298,7 +298,8 @@ impl ApplicationHandler for App {
             vk::make_api_version(0, 0, 1, 0),
         );
         let mut renderer = Renderer::new(&vb);
-        renderer.sync_rocket(&self.rocket);
+        // No camera yet; the eye only sorts explosion FX, which is empty at startup.
+        renderer.sync_rocket(&self.rocket, Vec3::new(0.0, 30.0, 80.0));
 
         let gui = Gui::new(
             event_loop,

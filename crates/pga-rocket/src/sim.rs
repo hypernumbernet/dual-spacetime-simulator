@@ -572,6 +572,21 @@ impl RocketState {
             let fix = translator(0.0, -min_y, 0.0);
             self.motor = compose_motors(&fix, &self.motor);
             if self.velocity[1] < 0.0 {
+                // Tunneling guard: a fast fall can cross the whole contact band in
+                // one step, so the planted-probe destruction check above never sees
+                // the approach speed. Destroy here from the pre-projection speed.
+                let impact_speed = -self.velocity[1];
+                if impact_speed >= self.params.crash_impact_speed.max(0.0) {
+                    self.destroyed = true;
+                    self.explosion_age = 0.0;
+                    self.explosion_origin = self.position();
+                    self.last_impact_speed = impact_speed;
+                    self.velocity = [0.0, 0.0, 0.0];
+                    self.omega = [0.0, 0.0, 0.0];
+                    self.command = ControlCommand::default();
+                    self.contacting = true;
+                    return;
+                }
                 // Bounce CoM vertical speed: v' = −e v (e=0 → stop, e=1 → reverse).
                 let e = self.params.restitution.clamp(0.0, 1.0);
                 self.velocity[1] = -e * self.velocity[1];
