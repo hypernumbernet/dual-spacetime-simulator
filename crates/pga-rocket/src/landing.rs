@@ -100,7 +100,7 @@ impl LandingAutopilot {
     }
 
     pub fn update(&mut self, state: &RocketState, _dt: f64) -> ControlCommand {
-        if !self.enabled || self.complete {
+        if !self.enabled || self.complete || state.destroyed {
             return ControlCommand::default();
         }
 

@@ -50,6 +50,8 @@ pub struct RocketParams {
     /// Normal restitution [0, 1] applied when hard-resolving deep ground penetration
     /// (0 = stick/no bounce, 1 = perfectly elastic bounce of CoM vertical velocity).
     pub restitution: f64,
+    /// Normal impact speed (m/s) above which the vehicle is destroyed on ground contact.
+    pub crash_impact_speed: f64,
 }
 
 impl Default for RocketParams {
@@ -95,6 +97,7 @@ impl Default for RocketParams {
             friction_slip_eps: 0.05,
             contact_band: 0.05,
             restitution: 0.35,
+            crash_impact_speed: 10.0,
         }
     }
 }
@@ -200,6 +203,14 @@ pub struct RocketState {
     pub contacting: bool,
     /// True when a body/nozzle/nose hull sample was in contact this step.
     pub body_contacting: bool,
+    /// True after a hard ground impact destroys the vehicle.
+    pub destroyed: bool,
+    /// Seconds since the crash explosion started.
+    pub explosion_age: f64,
+    /// World CoM position at the moment of destruction.
+    pub explosion_origin: [f64; 3],
+    /// Peak normal impact speed (m/s) recorded at destruction.
+    pub last_impact_speed: f64,
 }
 
 impl Default for RocketState {
@@ -223,6 +234,10 @@ impl RocketState {
             params,
             contacting: true,
             body_contacting: false,
+            destroyed: false,
+            explosion_age: 0.0,
+            explosion_origin: [0.0, com_y, 0.0],
+            last_impact_speed: 0.0,
         }
     }
 
@@ -232,6 +247,10 @@ impl RocketState {
         s.motor = motor_from_pose(0.0, altitude_com, 0.0, 0.0, 0.0, 0.0);
         s.contacting = false;
         s.body_contacting = false;
+        s.destroyed = false;
+        s.explosion_age = 0.0;
+        s.explosion_origin = [0.0, altitude_com, 0.0];
+        s.last_impact_speed = 0.0;
         s
     }
 
@@ -333,14 +352,26 @@ impl RocketState {
         min_y
     }
 
-    /// Apply a control command (clamped).
+    /// Apply a control command (clamped). Ignored while destroyed.
     pub fn set_command(&mut self, cmd: ControlCommand) {
+        if self.destroyed {
+            self.command = ControlCommand::default();
+            return;
+        }
         self.command = cmd.clamp();
     }
 
     /// Advance physics by `dt` seconds (semi-implicit Euler + PGA motor update).
     pub fn step(&mut self, dt: f64) {
         if dt <= 0.0 {
+            return;
+        }
+        if self.destroyed {
+            self.explosion_age += dt;
+            self.contacting = true;
+            self.velocity = [0.0, 0.0, 0.0];
+            self.omega = [0.0, 0.0, 0.0];
+            self.command = ControlCommand::default();
             return;
         }
         let mass = self.params.mass;
@@ -473,6 +504,19 @@ impl RocketState {
                     body_torque[2] += tau_fb[2];
                 }
             }
+        }
+
+        // Hard-impact destruction before bounce/restitution can mask the approach speed.
+        let impact_speed = (-impact_vn).max(0.0);
+        if self.contacting && impact_speed >= self.params.crash_impact_speed.max(0.0) {
+            self.destroyed = true;
+            self.explosion_age = 0.0;
+            self.explosion_origin = pos;
+            self.last_impact_speed = impact_speed;
+            self.velocity = [0.0, 0.0, 0.0];
+            self.omega = [0.0, 0.0, 0.0];
+            self.command = ControlCommand::default();
+            return;
         }
 
         // Linear integration (semi-implicit Euler).

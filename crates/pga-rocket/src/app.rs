@@ -7,7 +7,7 @@ use crate::mesh::{GRASS_METERS_PER_TILE, hud_text};
 use crate::renderer::{
     MIN_CAMERA_HEIGHT, Renderer, SKY_COLOR, camera_view_proj, min_orbit_pitch,
 };
-use crate::sim::{RocketState, step_rocket};
+use crate::sim::{ControlCommand, RocketState, step_rocket};
 use crate::ui::draw_params_panel;
 use ash::vk;
 use glam::Vec3;
@@ -186,7 +186,9 @@ impl App {
             self.landing.disable();
         }
 
-        let cmd = if self.landing.enabled {
+        let cmd = if self.rocket.destroyed {
+            ControlCommand::default()
+        } else if self.landing.enabled {
             self.landing.update(&self.rocket, dt as f64)
         } else {
             self.control.apply(&keys, dt as f64)

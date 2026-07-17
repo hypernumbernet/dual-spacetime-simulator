@@ -61,6 +61,10 @@ pub fn grass_ground_mesh(half_extent: f32, divisions: u32) -> (Vec<GroundVertex>
 
 /// Build a legged rocket mesh in world space from PGA-transformed body points.
 pub fn rocket_mesh(state: &RocketState) -> (Vec<Vertex>, Vec<u32>) {
+    if state.destroyed {
+        return explosion_mesh(state);
+    }
+
     let mut verts = Vec::new();
     let mut idx = Vec::new();
 
@@ -177,6 +181,249 @@ pub fn rocket_mesh(state: &RocketState) -> (Vec<Vertex>, Vec<u32>) {
     }
 
     (verts, idx)
+}
+
+/// Explosion fireball + debris after a hard crash.
+fn explosion_mesh(state: &RocketState) -> (Vec<Vertex>, Vec<u32>) {
+    let mut verts = Vec::new();
+    let mut idx = Vec::new();
+    let age = state.explosion_age as f32;
+    let origin = [
+        state.explosion_origin[0] as f32,
+        state.explosion_origin[1] as f32,
+        state.explosion_origin[2] as f32,
+    ];
+
+    append_explosion(&mut verts, &mut idx, origin, age, state.params.body_radius as f32);
+    (verts, idx)
+}
+
+/// Multi-layer fireball and radial debris shards.
+fn append_explosion(verts: &mut Vec<Vertex>, idx: &mut Vec<u32>, origin: [f32; 3], age: f32, body_r: f32) {
+    let segs = 10u32;
+    let grow = age.min(0.6);
+    let fade = if age > 2.5 {
+        (1.0 - (age - 2.5) / 1.5).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+
+    if age <= 2.5 {
+        let base_r = body_r * (1.2 + 5.0 * grow);
+        let mid_r = base_r * 1.35;
+        let tip_r = base_r * 0.25;
+        let y0 = origin[1] + body_r * 0.2;
+        let y1 = origin[1] + base_r * 0.55;
+        let y2 = origin[1] + base_r * 1.1;
+
+        append_fireball_layer(
+            verts,
+            idx,
+            origin,
+            segs,
+            y0,
+            y1,
+            y2,
+            base_r * 0.55,
+            mid_r * 0.75,
+            tip_r,
+            scale_color([1.0, 0.98, 0.92], fade),
+            scale_color([1.0, 0.82, 0.25], fade),
+            scale_color([0.95, 0.35, 0.05], fade),
+        );
+        append_fireball_layer(
+            verts,
+            idx,
+            origin,
+            segs,
+            y0 - body_r * 0.15,
+            y1 - body_r * 0.1,
+            y2 - body_r * 0.05,
+            base_r * 0.85,
+            mid_r,
+            tip_r * 1.5,
+            scale_color([1.0, 0.55, 0.08], fade),
+            scale_color([0.92, 0.18, 0.02], fade),
+            scale_color([0.35, 0.05, 0.02], fade),
+        );
+    }
+
+    append_debris_shards(verts, idx, origin, age, body_r, fade);
+}
+
+fn scale_color(c: [f32; 3], fade: f32) -> [f32; 3] {
+    [c[0] * fade, c[1] * fade, c[2] * fade]
+}
+
+fn append_fireball_layer(
+    verts: &mut Vec<Vertex>,
+    idx: &mut Vec<u32>,
+    center: [f32; 3],
+    segs: u32,
+    y0: f32,
+    y1: f32,
+    y2: f32,
+    r0: f32,
+    r1: f32,
+    _r2: f32,
+    col0: [f32; 3],
+    col1: [f32; 3],
+    col2: [f32; 3],
+) {
+    let base = verts.len() as u32;
+    for i in 0..segs {
+        let a = (i as f32) * std::f32::consts::TAU / segs as f32;
+        let (s, c) = a.sin_cos();
+        verts.push(Vertex {
+            pos: [center[0] + c * r0, y0, center[2] + s * r0],
+            color: col0,
+        });
+    }
+    let mid_base = verts.len() as u32;
+    for i in 0..segs {
+        let a = (i as f32) * std::f32::consts::TAU / segs as f32;
+        let (s, c) = a.sin_cos();
+        verts.push(Vertex {
+            pos: [center[0] + c * r1, y1, center[2] + s * r1],
+            color: col1,
+        });
+    }
+    let tip = verts.len() as u32;
+    verts.push(Vertex {
+        pos: [center[0], y2, center[2]],
+        color: col2,
+    });
+    for i in 0..segs {
+        let i0 = base + i;
+        let i1 = base + (i + 1) % segs;
+        let j0 = mid_base + i;
+        let j1 = mid_base + (i + 1) % segs;
+        idx.extend_from_slice(&[i0, i1, j1, i0, j1, j0, j0, j1, tip]);
+    }
+}
+
+fn append_debris_shards(
+    verts: &mut Vec<Vertex>,
+    idx: &mut Vec<u32>,
+    origin: [f32; 3],
+    age: f32,
+    body_r: f32,
+    fade: f32,
+) {
+    let n = 12usize;
+    let shard_size = body_r * 0.35;
+    for i in 0..n {
+        let t = i as f32 / n as f32;
+        let az = t * std::f32::consts::TAU * 1.7 + 0.31;
+        let el = (t * 2.3 + 0.15).sin() * 0.65 + 0.25;
+        let dir = [
+            az.cos() * el.cos(),
+            el.sin().abs() * 0.55 + 0.25,
+            az.sin() * el.cos(),
+        ];
+        let speed = body_r * (4.5 + (i as f32 * 0.37) % 3.0);
+        let dist = speed * age;
+        let center = [
+            origin[0] + dir[0] * dist,
+            origin[1] + dir[1] * dist,
+            origin[2] + dir[2] * dist,
+        ];
+        let burn = (age / 2.0).clamp(0.0, 1.0);
+        let col = [
+            (0.75 - 0.35 * burn) * fade,
+            (0.78 - 0.55 * burn) * fade,
+            (0.82 - 0.65 * burn) * fade,
+        ];
+        append_oriented_box(verts, idx, center, dir, shard_size, col);
+    }
+}
+
+fn append_oriented_box(
+    verts: &mut Vec<Vertex>,
+    idx: &mut Vec<u32>,
+    center: [f32; 3],
+    dir: [f32; 3],
+    half: f32,
+    color: [f32; 3],
+) {
+    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
+    let d = [dir[0] / len, dir[1] / len, dir[2] / len];
+    let up = if d[1].abs() < 0.9 {
+        [0.0, 1.0, 0.0]
+    } else {
+        [1.0, 0.0, 0.0]
+    };
+    let px = [
+        d[1] * up[2] - d[2] * up[1],
+        d[2] * up[0] - d[0] * up[2],
+        d[0] * up[1] - d[1] * up[0],
+    ];
+    let pl = (px[0] * px[0] + px[1] * px[1] + px[2] * px[2]).sqrt().max(1e-4);
+    let px = [px[0] / pl * half, px[1] / pl * half, px[2] / pl * half];
+    let py = [
+        d[1] * px[2] - d[2] * px[1],
+        d[2] * px[0] - d[0] * px[2],
+        d[0] * px[1] - d[1] * px[0],
+    ];
+    let pz = [d[0] * half * 0.6, d[1] * half * 0.6, d[2] * half * 0.6];
+
+    let corners = [
+        [
+            center[0] - px[0] - py[0] - pz[0],
+            center[1] - px[1] - py[1] - pz[1],
+            center[2] - px[2] - py[2] - pz[2],
+        ],
+        [
+            center[0] + px[0] - py[0] - pz[0],
+            center[1] + px[1] - py[1] - pz[1],
+            center[2] + px[2] - py[2] - pz[2],
+        ],
+        [
+            center[0] + px[0] + py[0] - pz[0],
+            center[1] + px[1] + py[1] - pz[1],
+            center[2] + px[2] + py[2] - pz[2],
+        ],
+        [
+            center[0] - px[0] + py[0] - pz[0],
+            center[1] - px[1] + py[1] - pz[1],
+            center[2] - px[2] + py[2] - pz[2],
+        ],
+        [
+            center[0] - px[0] - py[0] + pz[0],
+            center[1] - px[1] - py[1] + pz[1],
+            center[2] - px[2] - py[2] + pz[2],
+        ],
+        [
+            center[0] + px[0] - py[0] + pz[0],
+            center[1] + px[1] - py[1] + pz[1],
+            center[2] + px[2] - py[2] + pz[2],
+        ],
+        [
+            center[0] + px[0] + py[0] + pz[0],
+            center[1] + px[1] + py[1] + pz[1],
+            center[2] + px[2] + py[2] + pz[2],
+        ],
+        [
+            center[0] - px[0] + py[0] + pz[0],
+            center[1] - px[1] + py[1] + pz[1],
+            center[2] - px[2] + py[2] + pz[2],
+        ],
+    ];
+    let base = verts.len() as u32;
+    for c in &corners {
+        verts.push(Vertex { pos: *c, color });
+    }
+    let faces = [
+        [0, 1, 5, 4],
+        [1, 2, 6, 5],
+        [2, 3, 7, 6],
+        [3, 0, 4, 7],
+        [0, 3, 2, 1],
+        [4, 5, 6, 7],
+    ];
+    for f in &faces {
+        idx.extend_from_slice(&[base + f[0], base + f[1], base + f[2], base + f[0], base + f[2], base + f[3]]);
+    }
 }
 
 fn body_to_world(state: &RocketState, body: [f32; 3]) -> [f32; 3] {
@@ -493,6 +740,11 @@ pub fn hud_text(state: &RocketState, landing: &LandingAutopilot, fps: f32) -> St
     let p = state.position();
     let thr = state.command.throttle * 100.0;
     let contact = if state.contacting { "YES" } else { "no" };
+    let status = if state.destroyed {
+        format!("EXPLODED ({:.1} m/s impact)", state.last_impact_speed)
+    } else {
+        landing.status_label().to_string()
+    };
     format!(
         "PGA Rocket  |  alt={:.1} m  vel_y={:.1} m/s  thr={:.0}%  land={}  contact={}  fps={:.0}\n\
          Space/Ctrl: throttle  W/S: pitch  Q/E: yaw  A/D: roll RCS  L: auto-land  R: reset\n\
@@ -500,7 +752,7 @@ pub fn hud_text(state: &RocketState, landing: &LandingAutopilot, fps: f32) -> St
         p[1],
         state.velocity[1],
         thr,
-        landing.status_label(),
+        status,
         contact,
         fps
     )

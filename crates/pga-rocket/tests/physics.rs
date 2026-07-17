@@ -138,10 +138,12 @@ fn tipped_body_hull_contacts_ground_without_penetration() {
 fn restitution_causes_bounce_on_hard_impact() {
     let mut soft = RocketState::at_altitude(30.0);
     soft.params.restitution = 0.0;
+    soft.params.crash_impact_speed = 1.0e6;
     soft.set_command(ControlCommand::default());
 
     let mut bouncy = RocketState::at_altitude(30.0);
     bouncy.params.restitution = 0.75;
+    bouncy.params.crash_impact_speed = 1.0e6;
     bouncy.set_command(ControlCommand::default());
 
     let mut max_up_soft = 0.0_f64;
@@ -396,4 +398,57 @@ fn engine_lever_arm_magnitude_matches_analytic() {
         w.torque[0],
         expected
     );
+}
+
+#[test]
+fn hard_ground_impact_destroys_vehicle() {
+    let mut s = RocketState::at_altitude(80.0);
+    s.set_command(ControlCommand::default());
+    let mut destroyed = false;
+    for _ in 0..4000 {
+        step_rocket(&mut s, DT);
+        if s.destroyed {
+            destroyed = true;
+            break;
+        }
+    }
+    assert!(destroyed, "expected destruction on hard impact");
+    assert!(
+        s.last_impact_speed >= s.params.crash_impact_speed,
+        "impact={} threshold={}",
+        s.last_impact_speed,
+        s.params.crash_impact_speed
+    );
+    assert!(s.explosion_age >= 0.0);
+}
+
+#[test]
+fn soft_ground_contact_does_not_destroy() {
+    let mut s = RocketState::at_altitude(3.0);
+    s.velocity = [0.0, -1.5, 0.0];
+    s.set_command(ControlCommand::default());
+    for _ in 0..800 {
+        step_rocket(&mut s, DT);
+        assert!(
+            !s.destroyed,
+            "soft landing should survive, vy={} impact={}",
+            s.velocity[1],
+            s.last_impact_speed
+        );
+    }
+}
+
+#[test]
+fn direct_high_speed_impact_triggers_explosion() {
+    let mut s = RocketState::at_altitude(20.0);
+    s.velocity = [0.0, -12.0, 0.0];
+    s.set_command(ControlCommand::default());
+    for _ in 0..500 {
+        step_rocket(&mut s, DT);
+        if s.destroyed {
+            break;
+        }
+    }
+    assert!(s.destroyed, "12 m/s descent should exceed 10 m/s crash threshold");
+    assert!(s.last_impact_speed >= 10.0);
 }

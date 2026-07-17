@@ -58,7 +58,9 @@ fn flight_section(ui: &mut egui::Ui, rocket: &RocketState) {
     kv(
         ui,
         "Contact",
-        if rocket.contacting {
+        if rocket.destroyed {
+            format!("DESTROYED ({:.1} m/s impact)", rocket.last_impact_speed)
+        } else if rocket.contacting {
             if rocket.body_contacting {
                 "YES (body)".to_string()
             } else {
@@ -154,6 +156,7 @@ fn vehicle_section(ui: &mut egui::Ui, rocket: &RocketState) {
     kv(ui, "Foot μ", format!("{:.2}", p.friction_mu));
     kv(ui, "Body μ", format!("{:.2}", p.body_friction_mu));
     kv(ui, "Restitution", format!("{:.2}", p.restitution));
+    kv(ui, "Crash speed", format!("{:.1} m/s", p.crash_impact_speed));
     kv(ui, "Slip eps", format!("{:.3} m/s", p.friction_slip_eps));
 }
 
