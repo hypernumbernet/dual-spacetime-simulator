@@ -1,17 +1,21 @@
-//! Target-pad autopilot (T key): burn–coast loft, powered cruise, then land.
+//! Target-pad autopilot (T key): burn–coast loft, airplane-style cruise, then land.
 //!
 //! Vertical plan is burn-then-coast: near-full throttle (leaning downrange to
 //! build horizontal speed at the same time) until the ballistic apogee clears
 //! the loft target, an upright straightening leg still under full thrust, then
-//! a thrust-free coast over the top — gravity kills the climb. The powered
-//! cruise leg fades in as the ascent dies and flies a deceleration-limited
-//! approach speed profile to the pad. Terminal descent reuses
-//! [`LandingAutopilot`] with pad-square success (Chebyshev half-extent), armed
-//! only once over the pad approach with drift and attitude quiet enough for
-//! the lander's gentler gains.
+//! a thrust-free coast over the top — gravity kills the climb.
+//!
+//! Far-pad cruise is airplane-like: deep lean of the body +Y thrust axis toward
+//! the T-mark free vector, with **no hard speed cap**. Closing speed is governed
+//! only by a braking envelope `v_stop = √(2 a r)` — accelerate while below it,
+//! reverse-lean while above it. Terminal descent reuses [`LandingAutopilot`]
+//! with pad-square success (Chebyshev half-extent), armed only once over the
+//! pad approach with drift and attitude quiet enough for the lander's gains.
 //!
 //! Attitude uses the same inverse sandwich transports as the L lander
-//! (`motor_inverse_rotate_vector` / `world_up_in_body`).
+//! (`motor_inverse_rotate_vector` / `world_up_in_body`). Desired thrust is a
+//! free vector from CoM toward the lofted pad waypoint, `clamp_tilt`-ed into
+//! the cruise lean cone.
 
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::landing::{
@@ -27,20 +31,20 @@ const GATE_ALT_MIN: f64 = 480.0;
 pub const TARGET_PAD_HALF_M: f64 = PAD_HALF_M;
 /// Chebyshev margin outside the pad when starting terminal descent (m).
 const PAD_APPROACH_MARGIN_M: f64 = 8.0;
-/// Max lean cone half-angle during transit (rad).
-const LEAN_TRANSIT_MAX: f64 = 0.38;
 /// Lean cap during the full-throttle ascent burn (rad): keeps the climb fast
 /// while still building downrange speed (3g·sin ≈ 8.7 m/s² lateral).
 const LEAN_BURN_MAX: f64 = 0.30;
-/// Deeper lean allowed for the horizontal deceleration leg (rad).
-const LEAN_DECEL_MAX: f64 = 0.55;
-/// Far-from-pad lean toward the T-mark (rad, ~60°). Deep enough for a decisive
-/// return burn; must stay below the flip gate ([`COS_TILT_AIM`]).
-const LEAN_FAR_MAX: f64 = 1.05;
-/// Range (m) where far-pad guidance takes over (point at T, hold deep cone).
-const RANGE_FAR_M: f64 = 90.0;
-/// Max commanded ground speed during transit (m/s).
-const V_CRUISE_MAX: f64 = 45.0;
+/// Airplane-style cruise lean (rad, ~54°). Body +Y points well toward the T
+/// free vector so horizontal accel is large under altitude-hold throttle.
+/// Must stay below the flip gate ([`COS_TILT_AIM`]).
+const LEAN_CRUISE: f64 = 0.95;
+/// Mid-range lean while still on the envelope but closer in (rad).
+const LEAN_MID: f64 = 0.55;
+/// Range (m) where deep airplane cruise takes over.
+const RANGE_FAR_M: f64 = 80.0;
+/// Soft ceiling above the altitude gate (m). Once lofted, prefer a slight
+/// sink rather than riding thrust upward past this.
+const CRUISE_ALT_CAP: f64 = GATE_ALT_MIN + 40.0;
 /// Ballistic apogee the climb burn aims for (m). Cut thrust once the coast
 /// alone clears this, so the loft tops out just above [`CLIMB_ALT_M`].
 const APOGEE_TARGET_M: f64 = CLIMB_ALT_M + 30.0;
@@ -54,17 +58,18 @@ const APOGEE_STRAIGHTEN_M: f64 = APOGEE_TARGET_M - 250.0;
 /// Near-full climb throttle (gimbal authority scales with thrust, so no
 /// reserve is needed — full thrust is also max attitude authority).
 const THR_CLIMB_BURN: f64 = 0.97;
-/// Horizontal deceleration assumed by the approach speed profile (m/s²).
-/// The braking lean at vertical-neutral throttle delivers ≈ g·tan(0.55) ≈ 6,
-/// so this keeps a ~25% margin on top of the anticipation term.
-const A_DEC_H: f64 = 4.5;
-/// Stand-off subtracted from range in the approach profile (m) so the
-/// commanded speed is already small when terminal descent arms.
-const V_APPROACH_OFF_M: f64 = 20.0;
+/// Horizontal deceleration assumed by the braking envelope (m/s²).
+/// Conservative vs peak g·tan(LEAN_CRUISE) so attitude-flip lag still fits
+/// inside the remaining range (starts reverse lean earlier).
+const A_DEC_H: f64 = 4.0;
+/// Stand-off subtracted from range in the envelope (m) so speed is already
+/// small when terminal descent arms.
+const V_APPROACH_OFF_M: f64 = 30.0;
+/// Attitude-reversal lag anticipation (s) folded into the envelope distance.
+const T_ATT_LAG_S: f64 = 2.0;
 /// Downrange speed built during the ascent burn (m/s). Ballistic coast keeps
-/// whatever vh burnout leaves — there is no cheap way to shed it until the
-/// powered cruise leg, so build only what the cruise brake can absorb.
-const V_CLIMB_H_MAX: f64 = 24.0;
+/// whatever vh burnout leaves — cruise then accelerates freely on the envelope.
+const V_CLIMB_H_MAX: f64 = 28.0;
 /// Max drift allowed when arming terminal descent (m/s): a fast overflight
 /// must brake on the powered cruise leg first, not hand the lander a sprint.
 const VH_HANDOFF_MAX: f64 = 12.0;
@@ -81,13 +86,17 @@ const OMEGA_MAX: f64 = 1.15;
 const KP_ATT: f64 = 2.0;
 const KD_ATT: f64 = 3.0;
 const KD_ROLL: f64 = 2.0;
-/// Flip only when past the commanded far lean (was cos(1.05) which fought any
-/// lean past ~60° and produced upright↔lean chatter / body spin).
-const COS_TILT_AIM: f64 = 0.30; // ~72.5°, below cos(LEAN_FAR_MAX)≈0.41
+/// Flip only when past the commanded cruise lean (cos(LEAN_CRUISE)≈0.58).
+const COS_TILT_AIM: f64 = 0.30; // ~72.5°
 /// Pitch/yaw rate (rad/s) above which attitude is pure rate-kill.
 const OMEGA_RATE_KILL: f64 = 0.80;
-/// Overspeed (m/s) to enter hard anti-velocity brake lean when far.
-const V_BRAKE_ENTER: f64 = 8.0;
+/// Overspeed margin (m/s) above the envelope before commanding brake lean.
+const V_BRAKE_ENTER: f64 = 1.0;
+/// Band below enter where mid lean holds (avoids go↔brake chatter).
+const V_BRAKE_EXIT: f64 = -2.0;
+/// Vertical component of the free-vector aim (dimensionless relative to |horiz|).
+/// Keeps the thrust axis from going fully horizontal.
+const AIM_Y_BIAS: f64 = 1.0;
 
 /// Guidance phase while the T-key autopilot is armed.
 ///
@@ -234,12 +243,40 @@ fn kill_climb_vy(vy: f64) -> f64 {
     }
 }
 
-/// Simultaneous climb + translate toward the lofted pad waypoint.
+/// Vertical rate target for lofted cruise / far burn (altitude-hold).
+/// Never commands climb; above [`CRUISE_ALT_CAP`] asks for a gentle sink.
+#[inline]
+fn cruise_v_des_y(alt: f64, vy: f64) -> f64 {
+    let sink = if alt > CRUISE_ALT_CAP {
+        // Bleed excess altitude while translating (~1–3 m/s sink).
+        (-0.04 * (alt - CRUISE_ALT_CAP)).clamp(-3.0, -0.5)
+    } else {
+        0.0
+    };
+    if vy > sink {
+        // Stronger than kill_climb_vy so residual climb from lateral burns dies.
+        (sink - 0.55 * (vy - sink)).max(-10.0)
+    } else {
+        sink
+    }
+}
+
+/// Braking-envelope max approach speed (m/s). **No hard cruise speed cap** —
+/// the rocket accelerates freely until this distance-limited stop speed.
+#[inline]
+fn envelope_v_stop(range: f64, v_approach: f64) -> f64 {
+    let range_eff =
+        (range - V_APPROACH_OFF_M - T_ATT_LAG_S * v_approach.max(0.0)).max(0.0);
+    (2.0 * A_DEC_H * range_eff).sqrt()
+}
+
+/// Simultaneous climb + airplane-style translate toward the lofted pad waypoint.
 ///
 /// Vertical plan is burn-then-coast: near-full throttle until the ballistic
 /// apogee (`alt + vy²/2g`, conserved in vacuum coast) clears the loft target,
-/// then thrust drops to attitude-authority only and gravity tops out the climb
-/// — no engine time is spent killing the ascent.
+/// then thrust drops and gravity tops out the climb. Far cruise aims body +Y
+/// along the free vector to the pad with a deep lean cone; speed is only
+/// limited by the braking envelope (accelerate / reverse-brake).
 fn transit_command(state: &RocketState, target_xz: [f64; 2], pos: [f64; 3]) -> ControlCommand {
     let lofted = pos[1] >= GATE_ALT_MIN;
     let dx = target_xz[0] - pos[0];
@@ -254,10 +291,8 @@ fn transit_command(state: &RocketState, target_xz: [f64; 2], pos: [f64; 3]) -> C
     let apogee = pos[1] + vy.max(0.0) * vy.max(0.0) / (2.0 * GRAVITY);
     let burn_up = !lofted && apogee < APOGEE_TARGET_M;
     // Powered-cruise weight: 1 at vy ≤ +3 (hover/translate), 0 at vy ≥ +8
-    // (ballistic coast). The continuous blend matters: a hard vy threshold
-    // slides on its own boundary — the aim flips upright/lean every frame,
-    // the resulting gimbal effort holds ~hover thrust, and the vehicle rides
-    // the boundary upward at constant vy indefinitely.
+    // (ballistic coast). Continuous blend avoids upright/lean chatter on the
+    // boundary that would hold hover thrust forever.
     let cruise_w = if burn_up {
         0.0
     } else {
@@ -270,94 +305,71 @@ fn transit_command(state: &RocketState, target_xz: [f64; 2], pos: [f64; 3]) -> C
     let uz = dz * inv_range;
     let v_approach = vx * ux + vz * uz;
 
-    // Near-pad station keeping is deliberately gentle: a crawl speed command
-    // and small lean caps. Chasing residual error with deep hover-thrust leans
-    // re-energizes the drift through attitude lag (limit cycle) and keeps the
-    // hand-off quiet-gates from ever passing.
+    // Near-pad station keeping is gentle: quiet enough for hand-off.
     let terminal = lofted && range <= 55.0;
 
-    // Approach speed profile toward the pad (deceleration-limited, capped).
-    // The anticipation term discounts the distance the attitude-reversal lag
-    // eats before braking actually bites (~1.5 s at current closing speed);
-    // without it a hot approach detects the overspeed too late and sails
-    // ~100 m past the pad.
-    let v_des_h = if terminal {
+    let v_stop = envelope_v_stop(range, v_approach);
+    // Climb burn only: modest horizontal build; free accel happens on cruise.
+    let v_cmd_h = if burn_up || ballistic {
+        v_stop.min(V_CLIMB_H_MAX)
+    } else if terminal {
         (0.12 * (range - 6.0)).clamp(0.0, 10.0)
     } else {
-        let range_eff =
-            (range - V_APPROACH_OFF_M - 1.5 * v_approach.max(0.0)).max(0.0);
-        (2.0 * A_DEC_H * range_eff).sqrt().min(V_CRUISE_MAX)
+        v_stop
     };
-    let mut v_cmd_h = if v_approach < -0.5 {
-        0.0
-    } else if v_approach > v_des_h + 1.5 {
-        v_des_h * 0.3
-    } else {
-        v_des_h
-    };
-    if burn_up || ballistic {
-        v_cmd_h = v_cmd_h.min(V_CLIMB_H_MAX);
-    }
 
     let need_x = ux * v_cmd_h - vx;
     let need_z = uz * v_cmd_h - vz;
 
-    // Far-pad: powered cruise, well off the T-mark (or reverse after overshoot).
-    // Aim is a **stable pad-facing direction**, not velocity-PD (which flipped
-    // go↔brake every few metres and spun the body continuously).
-    // Deep pad-facing / reverse burn only well away from the hand-off zone.
-    // Reverse after overshoot is allowed from 70 m so the stack does not crawl.
-    // cruise_w > 0.75 ≈ vy ≲ 4.2 m/s. Residual climb must not cancel the
-    // pad-facing lean. True ballistic coast (vy ≫ 8, cruise_w≈0) still uses
-    // the mid-cone path with rate-kill-only throttle.
-    let far_pad = lofted
-        && cruise_w > 0.75
-        && !terminal
-        && (range > RANGE_FAR_M || (range > 70.0 && v_approach < -1.5));
+    // Far cruise: airplane lean along the free vector to T, or reverse-brake
+    // when above the envelope. No velocity-PD flip — aim is direction-stable.
+    let far = lofted && cruise_w > 0.75 && !terminal && range > RANGE_FAR_M;
+    // Allow reverse after overshoot a bit closer than RANGE_FAR_M.
+    let far_or_overshoot = far || (lofted && cruise_w > 0.75 && !terminal && range > 55.0 && v_approach < -1.5);
 
-    let (ax, az, lean_max, far_deep) = if burn_up {
-        (0.14 * need_x, 0.14 * need_z, LEAN_BURN_MAX, false)
+    let (desired_raw, lean_max, deep) = if burn_up {
+        // Light downrange lean while lofting.
+        ([0.14 * need_x, AIM_Y_BIAS, 0.14 * need_z], LEAN_BURN_MAX, false)
     } else if terminal {
         (
-            0.12 * need_x,
-            0.12 * need_z,
+            [0.12 * need_x, AIM_Y_BIAS, 0.12 * need_z],
             (0.08 + 0.03 * vh).clamp(0.10, 0.35),
             false,
         )
-    } else if far_pad {
-        if v_approach > v_des_h + V_BRAKE_ENTER {
-            // Hard brake only when clearly overspeed (wide enter threshold).
-            let s = 30.0 / vh.max(1.0);
-            (-vx * s, -vz * s, LEAN_FAR_MAX, true)
-        } else if v_approach > 8.0
-            && (v_approach - v_des_h).abs() < 4.0
-        {
-            // On the speed profile: hold cruise, do not reverse lean.
-            (0.10 * need_x, 0.10 * need_z, LEAN_TRANSIT_MAX, false)
+    } else if far_or_overshoot {
+        let braking = v_approach > v_stop + V_BRAKE_ENTER
+            || (v_approach < -1.5 && range > 55.0);
+        if braking {
+            // Anti-velocity free vector (horizontal kill, hold altitude bias).
+            let s = vh.max(1.0);
+            ([-vx / s, AIM_Y_BIAS, -vz / s], LEAN_CRUISE, true)
+        } else if v_approach > v_stop + V_BRAKE_EXIT {
+            // Hysteresis band: light hold, do not reverse yet.
+            ([0.08 * need_x, AIM_Y_BIAS, 0.08 * need_z], LEAN_MID, false)
         } else {
-            // Default far behaviour: **immediately lean toward the T-mark**.
-            (ux * 30.0, uz * 30.0, LEAN_FAR_MAX, true)
+            // Free vector CoM → pad (XZ) + vertical bias: airplane go lean.
+            ([ux, AIM_Y_BIAS, uz], LEAN_CRUISE, true)
         }
     } else {
-        let k_p = 0.012 * cruise_w;
-        let lean = if v_approach > v_des_h + 3.0 || v_approach < v_des_h - 5.0 {
-            LEAN_DECEL_MAX
+        // Mid-range: same envelope idea, shallower cone.
+        let braking = v_approach > v_stop + V_BRAKE_ENTER;
+        if braking {
+            let s = vh.max(1.0);
+            ([-vx / s, AIM_Y_BIAS, -vz / s], LEAN_MID, false)
         } else {
-            LEAN_TRANSIT_MAX
-        };
-        (
-            0.14 * need_x + k_p * dx,
-            0.14 * need_z + k_p * dz,
-            lean,
-            false,
-        )
+            (
+                [ux + 0.05 * need_x, AIM_Y_BIAS, uz + 0.05 * need_z],
+                LEAN_MID,
+                false,
+            )
+        }
     };
 
     // Straightening burn aims strictly upright: cutoff then happens with no
     // lean and no rates, so the coast needs almost no recovery thrust.
     let straighten = burn_up && apogee >= APOGEE_STRAIGHTEN_M;
-    // Far deep lean must not be faded by cruise_w (half-open aim = sway).
-    let aim_w = if burn_up || far_deep {
+    // Deep airplane lean must not be faded by cruise_w (half-open aim = sway).
+    let aim_w = if burn_up || deep {
         1.0
     } else {
         cruise_w
@@ -365,14 +377,18 @@ fn transit_command(state: &RocketState, target_xz: [f64; 2], pos: [f64; 3]) -> C
     let desired = if straighten {
         [0.0, 1.0, 0.0]
     } else {
-        clamp_tilt([aim_w * ax, 1.0, aim_w * az], lean_max)
+        clamp_tilt(
+            [aim_w * desired_raw[0], desired_raw[1], aim_w * desired_raw[2]],
+            lean_max,
+        )
     };
     let (pitch, yaw, roll, up_y) = attitude_toward(state, desired);
 
     let mass = state.params.mass;
     let hover = mass * GRAVITY / state.params.max_thrust;
-    let upy_floor = if far_deep { 0.30 } else { 0.40 };
-    let hover_cmd = (hover / up_y.max(upy_floor)).clamp(0.0, 0.98);
+    // Altitude-hold at current lean: throttle ≈ hover / cos(tilt).
+    let upy_floor = if deep { 0.45 } else { 0.40 };
+    let hover_cmd = (hover / up_y.max(upy_floor)).clamp(0.0, 0.95);
 
     let mut throttle = if burn_up {
         THR_CLIMB_BURN
@@ -382,20 +398,23 @@ fn transit_command(state: &RocketState, target_xz: [f64; 2], pos: [f64; 3]) -> C
         } else {
             vy
         };
-        let v_des_y = kill_climb_vy(vy);
-        let base = hover_cmd + 0.08 * (v_des_y - vy) - 0.03 * v_damp.clamp(-5.0, 5.0);
-        // Always scale by cruise_w so residual climb cannot re-loft the stack.
-        cruise_w * base.max(hover_cmd * 0.70)
+        let v_des_y = if lofted {
+            cruise_v_des_y(pos[1], vy)
+        } else {
+            kill_climb_vy(vy)
+        };
+        let kv = if lofted { 0.12 } else { 0.08 };
+        let base = hover_cmd + kv * (v_des_y - vy) - 0.03 * v_damp.clamp(-5.0, 5.0);
+        cruise_w * base.max(hover_cmd * 0.65)
     };
 
     let effort = pitch.abs() + yaw.abs() + 0.35 * roll.abs();
-    if far_deep && up_y < 0.75 {
-        // Leaned toward the pad: keep thrust on the g·tan wall.
-        throttle = throttle.max(0.60).min(0.97);
-    } else if far_deep {
-        // Rotating into the pad-facing lean: enough gimbal authority to snap
-        // the nose toward T immediately (not a loft burn while upright).
-        throttle = throttle.max(0.50 + 0.20 * effort).clamp(0.50, 0.68);
+    if deep && up_y < 0.80 {
+        // Airplane cruise: track hover/cos so vertical net accel ≈ 0.
+        throttle = throttle.clamp(hover_cmd * 0.85, (hover_cmd + 0.08).min(0.92));
+    } else if deep {
+        // Still rotating into lean: gimbal only — never a climb burn.
+        throttle = throttle.max(0.35 + 0.20 * effort).clamp(0.35, 0.55);
     } else if ballistic || burn_up {
         throttle = throttle.max((0.9 * (effort - 0.15).max(0.0)).min(0.35));
     } else if effort > 0.04 {
@@ -502,5 +521,55 @@ mod tests {
         assert!(kill_climb_vy(10.0) < 0.0);
         assert_eq!(kill_climb_vy(-3.0), 0.0);
         assert_eq!(kill_climb_vy(0.0), 0.0);
+    }
+
+    #[test]
+    fn envelope_has_no_hard_speed_cap() {
+        // At 400 m remaining with low closing speed, stop speed exceeds the old 45 m/s cap.
+        let v = envelope_v_stop(400.0, 10.0);
+        assert!(
+            v > 45.0,
+            "envelope should allow >45 m/s at long range, got {v}"
+        );
+        let v_far = envelope_v_stop(800.0, 0.0);
+        assert!(v_far > v, "longer range must allow higher stop speed");
+    }
+
+    #[test]
+    fn far_cruise_leans_toward_target_when_underspeed() {
+        let mut state = RocketState::at_altitude(500.0);
+        state.contacting = false;
+        state.velocity = [20.0, 0.0, 0.0]; // well under envelope at 500 m range
+        let mut ap = TargetLandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
+        assert_eq!(ap.phase, TargetPhase::Cruise);
+        // Target on +X → pitch gimbal (about body +X) should be non-trivial lean.
+        assert!(
+            cmd.pitch.abs() + cmd.yaw.abs() > 0.05,
+            "expected airplane go lean, pitch={} yaw={} thr={}",
+            cmd.pitch,
+            cmd.yaw,
+            cmd.throttle
+        );
+    }
+
+    #[test]
+    fn far_cruise_brakes_when_overspeed() {
+        let mut state = RocketState::at_altitude(500.0);
+        state.contacting = false;
+        // Closing very fast at short remaining range → above envelope.
+        state.velocity = [80.0, 0.0, 0.0];
+        let mut ap = TargetLandingAutopilot::default();
+        ap.enabled = true;
+        // Pad only 120 m ahead: v_stop ≈ √(2·5.5·(120-25-1.5·80)) ≈ small.
+        let cmd = ap.update(&state, [120.0, 0.0], 1.0 / 120.0);
+        assert_eq!(ap.phase, TargetPhase::Cruise);
+        assert!(
+            cmd.pitch.abs() + cmd.yaw.abs() > 0.05,
+            "expected brake lean when overspeed, pitch={} yaw={}",
+            cmd.pitch,
+            cmd.yaw
+        );
     }
 }
