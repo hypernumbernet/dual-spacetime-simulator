@@ -66,6 +66,12 @@ const ALPHA_PLAN: f64 = 0.5;
 const UPY_BRAKE: f64 = 0.25;
 const UPY_AUTH: f64 = 0.5;
 const UPY_SOFT: f64 = 0.6;
+/// Target / launch pad half-extent (m) — matches `mesh::TARGET_PAD_HALF_EXTENT`.
+pub(crate) const PAD_HALF_M: f64 = 30.0;
+/// On-pad complete thresholds (looser than free-field L-mode lock).
+const TILT_PAD_DONE: f64 = 0.18;
+const OMEGA_PAD_DONE: f64 = 0.22;
+const VH_PAD_DONE: f64 = 2.5;
 
 /// Automatic landing autopilot toggled with `L`.
 #[derive(Clone, Debug)]
@@ -110,6 +116,29 @@ impl Default for LandingAutopilot {
 }
 
 impl LandingAutopilot {
+    /// Snappier gains for T-key pad landings (faster upright settle after touchdown).
+    pub fn for_target_pad() -> Self {
+        Self {
+            kp_attitude: 2.6,
+            kd_attitude: 3.4,
+            kd_roll: 2.4,
+            k_lat: 0.028,
+            max_lat_tilt: 0.11,
+            k_h: 0.42,
+            v_max_descent: 2.2,
+            kv_descent: 0.34,
+            omega_max: 2.0,
+            ..Self::default()
+        }
+    }
+
+    /// Arm this lander (clear complete/lock). Used by the T-key autopilot hand-off.
+    pub fn arm(&mut self) {
+        self.enabled = true;
+        self.complete = false;
+        self.attitude_locked = false;
+    }
+
     pub fn toggle(&mut self) {
         self.enabled = !self.enabled;
         if self.enabled {
@@ -136,7 +165,17 @@ impl LandingAutopilot {
         }
     }
 
-    pub fn update(&mut self, state: &RocketState, _dt: f64) -> ControlCommand {
+    pub fn update(&mut self, state: &RocketState, dt: f64) -> ControlCommand {
+        self.update_with_target(state, None, dt)
+    }
+
+    /// Same as [`update`](Self::update), but bias lateral guidance toward a world XZ pad.
+    pub fn update_with_target(
+        &mut self,
+        state: &RocketState,
+        target_xz: Option<[f64; 2]>,
+        _dt: f64,
+    ) -> ControlCommand {
         if !self.enabled || self.complete || state.destroyed {
             return ControlCommand::default();
         }
@@ -161,14 +200,21 @@ impl LandingAutopilot {
         let h = state.lowest_foot_y();
         let vy = state.velocity[1];
         let v_down = (-vy).max(0.0);
+        let pos = state.position();
+        // Inside the painted square (Chebyshev) — square success, not bullseye.
+        let on_pad = target_xz.is_some_and(|t| on_pad_square(pos, t));
 
         // While tilted the feet are not the lowest structure; run the burn
         // envelope on the true lowest hull point so an inverted fall brakes early.
         let h_env = if tilt > TILT_PROBE { state.lowest_probe_y() } else { h };
 
+        // Once feet are down on the T-pad square, only upright + rate kill matter.
+        let pad_settle = state.contacting && on_pad;
+
         // Desired body +Y as a shortest-arc axis/angle in the body frame.
-        // High tilt: aim world-up (flip first). Near upright: velocity-kill aim.
-        let (axis, angle) = if tilt > TILT_AIM {
+        // High tilt: aim world-up (flip first). Near upright: velocity-kill / target aim.
+        let (axis, angle) = if tilt > TILT_AIM || pad_settle {
+            // Flip recovery, or on-pad settle: always aim world-up (no lean chase).
             axis_angle_from_cross([up_body[2], 0.0, -up_body[0]], up_y)
         } else {
             // Allowed lean cone about world-up (all lean policy lives here):
@@ -176,8 +222,12 @@ impl LandingAutopilot {
             //   never past the attitude whose vertical thrust share still brakes
             //   the current fall inside the remaining altitude;
             // - hovering off a drift near the pad: moderately deeper lean;
+            // - over the pad square: shrink lean — square success, not bullseye;
             // - otherwise: the small touchdown trim cone.
-            let lat_tilt = if h > H_TERMINAL + 2.0 {
+            let lat_tilt = if on_pad && h < H_TERMINAL + 8.0 {
+                // Inside the square near the ground: almost upright; kill residual vh only.
+                (self.max_lat_tilt * 0.45 + 0.02 * vh).min(0.12)
+            } else if h > H_TERMINAL + 2.0 {
                 let a_req = if v_down > V_TOUCH {
                     1.15 * (v_down * v_down - V_TOUCH * V_TOUCH)
                         / (2.0 * (h_env - H_BURN_MARGIN - T_REACT * v_down).max(1.0))
@@ -193,6 +243,8 @@ impl LandingAutopilot {
             } else {
                 self.max_lat_tilt
             };
+            // Over the pad: drop position PD (square is success); only kill velocity.
+            let aim_target = if on_pad { None } else { target_xz };
             let desired = desired_thrust_axis_world(
                 state.velocity[0],
                 state.velocity[1],
@@ -200,27 +252,66 @@ impl LandingAutopilot {
                 h,
                 self.k_lat,
                 lat_tilt,
+                pos[0],
+                pos[2],
+                aim_target,
             );
             let d = motor_inverse_rotate_vector(&state.motor, desired);
             axis_angle_from_cross([d[2], 0.0, -d[0]], d[1].clamp(-1.0, 1.0))
         };
 
-        // √-profile rate command: fast for big angles, no overshoot near target.
-        let w_mag = (self.kp_attitude * angle)
-            .min((2.0 * ALPHA_PLAN * angle).sqrt())
-            .min(self.omega_max);
+        // √-profile rate command. On-pad settle: higher α and gains for a fast snap.
+        let (kp, kd, kd_roll, alpha, w_cap) = if pad_settle {
+            (
+                self.kp_attitude * 1.5,
+                self.kd_attitude * 1.55,
+                self.kd_roll * 1.45,
+                ALPHA_PLAN * 1.8,
+                self.omega_max * 1.15,
+            )
+        } else if on_pad && h < 20.0 {
+            (
+                self.kp_attitude * 1.2,
+                self.kd_attitude * 1.25,
+                self.kd_roll * 1.15,
+                ALPHA_PLAN * 1.25,
+                self.omega_max,
+            )
+        } else {
+            (
+                self.kp_attitude,
+                self.kd_attitude,
+                self.kd_roll,
+                ALPHA_PLAN,
+                self.omega_max,
+            )
+        };
+        let w_mag = (kp * angle).min((2.0 * alpha * angle).sqrt()).min(w_cap);
         let rate_err_x = omega[0] - axis[0] * w_mag;
         let rate_err_z = omega[2] - axis[2] * w_mag;
-        let pitch = saturate(self.kd_attitude * rate_err_x);
-        let yaw = saturate(self.kd_attitude * rate_err_z);
-        let roll = saturate(-self.kd_roll * omega[1]);
+        let pitch = saturate(kd * rate_err_x);
+        let yaw = saturate(kd * rate_err_z);
+        let roll = saturate(-kd_roll * omega[1]);
 
         update_lock_latch(&mut self.attitude_locked, tilt, omega_sq, vh_sq);
 
+        // Free-field L-mode: tight upright lock.
         if state.contacting
             && vy.abs() < 0.5
             && tilt < TILT_LOCK
             && omega_sq < 0.15 * 0.15
+        {
+            self.complete = true;
+            return ControlCommand::default();
+        }
+        // T-pad: inside the painted square is success — accept a looser upright
+        // sooner so the post-touchdown settle does not drag on.
+        if state.contacting
+            && on_pad
+            && vy.abs() < 0.8
+            && vh < VH_PAD_DONE
+            && tilt < TILT_PAD_DONE
+            && omega_sq < OMEGA_PAD_DONE * OMEGA_PAD_DONE
         {
             self.complete = true;
             return ControlCommand::default();
@@ -233,6 +324,24 @@ impl LandingAutopilot {
                 throttle: 0.0,
                 pitch: 0.0,
                 yaw: 0.0,
+                roll,
+            }
+            .clamp();
+        }
+
+        // On-pad upright snap: light hover for gimbal/RCS torque, no lateral thrust.
+        if pad_settle && up_y >= 0.5 {
+            let hover_cmd = (hover / up_y.max(0.35)).clamp(0.0, 0.9);
+            let thr = if tilt > 0.06 || omega_sq > 0.02 {
+                // Need torque authority until nearly upright.
+                (hover_cmd * 0.45 + 0.15 * (pitch.abs() + yaw.abs() + roll.abs())).min(0.55)
+            } else {
+                0.0
+            };
+            return ControlCommand {
+                throttle: thr,
+                pitch,
+                yaw,
                 roll,
             }
             .clamp();
@@ -335,10 +444,15 @@ fn update_lock_latch(locked: &mut bool, tilt: f64, omega_sq: f64, vh_sq: f64) {
     }
 }
 
+#[inline]
+pub(crate) fn on_pad_square(pos: [f64; 3], target_xz: [f64; 2]) -> bool {
+    (pos[0] - target_xz[0]).abs() <= PAD_HALF_M && (pos[2] - target_xz[1]).abs() <= PAD_HALF_M
+}
+
 /// Rotation axis (unit, zero-Y cross form) and angle from a `cross(body_up, d)`
 /// vector plus `cos(angle)`. Handles the antipodal case (inverted vehicle) where
 /// the cross vanishes but a π rotation about any horizontal axis is needed.
-fn axis_angle_from_cross(cross: [f64; 3], cos_angle: f64) -> ([f64; 3], f64) {
+pub(crate) fn axis_angle_from_cross(cross: [f64; 3], cos_angle: f64) -> ([f64; 3], f64) {
     let s = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
     if s < 1e-9 {
         if cos_angle > 0.0 {
@@ -405,9 +519,15 @@ fn soft_touch_throttle(
     t
 }
 
+/// Position-hold gain when a pad target is set (1/s² scale after mixing with vel).
+const K_POS_TARGET: f64 = 0.035;
+/// Extra velocity damping toward a pad target (dimensionless mix with pos error).
+const K_VEL_TARGET: f64 = 0.50;
+
 /// Desired thrust axis inside the allowed lean cone `lat_tilt` (policy for the
 /// cone size lives in `update`). Near the pad or nearly at rest: upright with a
-/// small drift-kill trim. Otherwise: anti-velocity for the braking burn.
+/// small drift-kill trim (and optional pad position bias). Otherwise: anti-velocity
+/// for the braking burn, or position-PD lean when `target_xz` is set.
 fn desired_thrust_axis_world(
     vx: f64,
     vy: f64,
@@ -415,9 +535,31 @@ fn desired_thrust_axis_world(
     h: f64,
     k_lat: f64,
     lat_tilt: f64,
+    x: f64,
+    z: f64,
+    target_xz: Option<[f64; 2]>,
 ) -> [f64; 3] {
     let v_down = (-vy).max(0.0);
     let speed_sq = vx * vx + v_down * v_down + vz * vz;
+
+    if let Some([tx, tz]) = target_xz {
+        let ex = tx - x;
+        let ez = tz - z;
+        // Fade pad-seek while braking a fast fall so vertical thrust stays available.
+        let pos_w = if v_down > 8.0 {
+            (1.0 - ((v_down - 8.0) / 20.0).clamp(0.0, 0.85)).max(0.15)
+        } else {
+            1.0
+        };
+        let ax = pos_w * (K_POS_TARGET * ex - K_VEL_TARGET * vx);
+        let az = pos_w * (K_POS_TARGET * ez - K_VEL_TARGET * vz);
+        if h < H_TERMINAL + 2.0 || speed_sq < 0.16 {
+            return clamp_tilt([ax - k_lat * vx, 1.0, az - k_lat * vz], lat_tilt);
+        }
+        // Prefer anti-velocity (brake) with a mild pad-seek bias.
+        return clamp_tilt([ax - vx, v_down.max(0.5), az - vz], lat_tilt);
+    }
+
     if h < H_TERMINAL + 2.0 || speed_sq < 0.16 {
         return clamp_tilt([-k_lat * vx, 1.0, -k_lat * vz], lat_tilt);
     }
@@ -425,7 +567,7 @@ fn desired_thrust_axis_world(
 }
 
 /// Normalize `v` and limit its angle from +Y to `max_tilt` (uses cos test, no acos).
-fn clamp_tilt(v: [f64; 3], max_tilt: f64) -> [f64; 3] {
+pub(crate) fn clamp_tilt(v: [f64; 3], max_tilt: f64) -> [f64; 3] {
     let len_sq = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
     if len_sq < 1e-24 {
         return [0.0, 1.0, 0.0];
@@ -445,7 +587,7 @@ fn clamp_tilt(v: [f64; 3], max_tilt: f64) -> [f64; 3] {
 }
 
 #[inline]
-fn saturate(x: f64) -> f64 {
+pub(crate) fn saturate(x: f64) -> f64 {
     x.clamp(-1.0, 1.0)
 }
 

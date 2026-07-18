@@ -74,7 +74,9 @@ fn attitude_keys_set_pitch_yaw_roll() {
 fn map_keys_is_not_noop() {
     // space, thrust_down, w, s, a, d, q, e, r
     // A/D → roll, Q/E → yaw: d=roll_right, q=yaw_left
-    let snap = map_keys(true, false, true, false, false, true, true, false, false, false);
+    let snap = map_keys(
+        true, false, true, false, false, true, true, false, false, false, false,
+    );
     assert!(snap.thrust_up);
     assert!(snap.pitch_up);
     assert!(snap.roll_right);
@@ -127,10 +129,12 @@ fn mapped_throttle_affects_shipped_physics() {
 fn hud_text_mentions_altitude_and_thrust() {
     let s = RocketState::resting_on_pad();
     let landing = pga_rocket::LandingAutopilot::default();
-    let text = pga_rocket::mesh::hud_text(&s, &landing, 60.0);
+    let target = pga_rocket::TargetLandingAutopilot::default();
+    let text = pga_rocket::mesh::hud_text(&s, &landing, &target, 60.0);
     assert!(text.contains("alt="), "HUD missing altitude: {text}");
     assert!(text.contains("thr="), "HUD missing thrust: {text}");
     assert!(text.contains("Space"), "HUD missing key help: {text}");
+    assert!(text.contains("T:"), "HUD missing T key help: {text}");
 }
 
 #[test]

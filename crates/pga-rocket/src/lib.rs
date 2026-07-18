@@ -9,9 +9,13 @@ pub mod explosion;
 pub mod landing;
 pub mod mesh;
 pub mod sim;
+pub mod target_landing;
 
 pub use control::{ControlMapper, KeySnapshot, map_keys};
 pub use landing::LandingAutopilot;
+pub use target_landing::{
+    inside_target_pad, TargetLandingAutopilot, TargetPhase, CLIMB_ALT_M, TARGET_PAD_HALF_M,
+};
 pub use sim::{
     BodyWrench, ContactKind, ContactProbe, ControlCommand, RocketParams, RocketState, ThrusterSample,
     body_wrench_at, cross, engine_wrench, gimbal_rotor, ground_contact_probes, propulsive_wrench,

@@ -2,6 +2,7 @@
 
 use crate::landing::LandingAutopilot;
 use crate::sim::RocketState;
+use crate::target_landing::TargetLandingAutopilot;
 use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
@@ -878,18 +879,25 @@ fn append_leg_prism(
 }
 
 /// HUD text lines from simulation state (also used for window title / render-state checks).
-pub fn hud_text(state: &RocketState, landing: &LandingAutopilot, fps: f32) -> String {
+pub fn hud_text(
+    state: &RocketState,
+    landing: &LandingAutopilot,
+    target: &TargetLandingAutopilot,
+    fps: f32,
+) -> String {
     let p = state.position();
     let thr = state.command.throttle * 100.0;
     let contact = if state.contacting { "YES" } else { "no" };
     let status = if state.destroyed {
         format!("EXPLODED ({:.1} m/s impact)", state.last_impact_speed)
+    } else if target.enabled {
+        format!("T:{}", target.status_label())
     } else {
-        landing.status_label().to_string()
+        format!("L:{}", landing.status_label())
     };
     format!(
-        "PGA Rocket  |  alt={:.1} m  vel_y={:.1} m/s  thr={:.0}%  land={}  contact={}  fps={:.0}\n\
-         Space/Ctrl: throttle  W/S: pitch  Q/E: yaw  A/D: roll RCS  L: auto-land  R: reset\n\
+        "PGA Rocket  |  alt={:.1} m  vel_y={:.1} m/s  thr={:.0}%  auto={}  contact={}  fps={:.0}\n\
+         Space/Ctrl: throttle  W/S: pitch  Q/E: yaw  A/D: roll RCS  L: land  T: target-land  R: reset\n\
          Drag LMB/RMB: orbit camera  Wheel: zoom  Arrows: orbit  Esc: quit",
         p[1],
         state.velocity[1],

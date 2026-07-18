@@ -2,6 +2,7 @@
 
 use crate::landing::LandingAutopilot;
 use crate::sim::{GRAVITY, RocketState};
+use crate::target_landing::TargetLandingAutopilot;
 use egui::{RichText, ScrollArea};
 
 /// Fixed width of the left parameter panel (logical points).
@@ -12,6 +13,7 @@ pub fn draw_params_panel(
     ctx: &egui::Context,
     rocket: &RocketState,
     landing: &LandingAutopilot,
+    target_landing: &TargetLandingAutopilot,
     fps: f32,
     cam_yaw: f32,
     cam_pitch: f32,
@@ -30,7 +32,7 @@ pub fn draw_params_panel(
                 .show(ui, |ui| {
                     flight_section(ui, rocket, target_xz);
                     ui.separator();
-                    control_section(ui, rocket, landing);
+                    control_section(ui, rocket, landing, target_landing);
                     ui.separator();
                     vehicle_section(ui, rocket);
                     ui.separator();
@@ -88,12 +90,22 @@ fn flight_section(ui: &mut egui::Ui, rocket: &RocketState, target_xz: [f32; 2]) 
     );
 }
 
-fn control_section(ui: &mut egui::Ui, rocket: &RocketState, landing: &LandingAutopilot) {
+fn control_section(
+    ui: &mut egui::Ui,
+    rocket: &RocketState,
+    landing: &LandingAutopilot,
+    target_landing: &TargetLandingAutopilot,
+) {
     ui.label(RichText::new("Control").strong());
     kv(
         ui,
-        "Auto-land",
+        "Auto-land (L)",
         landing.status_label().to_string(),
+    );
+    kv(
+        ui,
+        "Target-land (T)",
+        target_landing.status_label().to_string(),
     );
     let cmd = rocket.command;
     let thrust = rocket.thrust_newtons();
@@ -187,6 +199,7 @@ fn help_section(ui: &mut egui::Ui) {
     ui.label("Q/E: yaw gimbal (needs thrust)");
     ui.label("A/D: roll RCS thrusters");
     ui.label("L: auto-land toggle");
+    ui.label("T: land at T mark");
     ui.label("R: reset");
     ui.label("LMB/RMB drag: orbit");
     ui.label("Wheel / PgUp-Dn: zoom");

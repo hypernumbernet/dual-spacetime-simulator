@@ -4,6 +4,7 @@ use crate::control::{ControlMapper, KeySnapshot};
 use crate::integration::Gui;
 use crate::landing::LandingAutopilot;
 use crate::mesh::{GRASS_METERS_PER_TILE, hud_text, random_target_xz};
+use crate::target_landing::TargetLandingAutopilot;
 use crate::renderer::{
     MIN_CAMERA_HEIGHT, Renderer, SKY_COLOR, camera_view_proj, min_orbit_pitch,
 };
@@ -38,6 +39,7 @@ pub struct App {
     rocket: RocketState,
     control: ControlMapper,
     landing: LandingAutopilot,
+    target_landing: TargetLandingAutopilot,
     input: InputState,
     last_frame: Option<Instant>,
     accum: f64,
@@ -70,6 +72,7 @@ impl Default for App {
             rocket: RocketState::resting_on_pad(),
             control: ControlMapper::default(),
             landing: LandingAutopilot::default(),
+            target_landing: TargetLandingAutopilot::default(),
             input: InputState::default(),
             last_frame: None,
             accum: 0.0,
@@ -117,6 +120,7 @@ impl App {
             roll_right: self.input.held(KeyCode::KeyD),
             reset: self.input.just_pressed(KeyCode::KeyR),
             toggle_landing: self.input.just_pressed(KeyCode::KeyL),
+            toggle_target_landing: self.input.just_pressed(KeyCode::KeyT),
         }
     }
 
@@ -181,20 +185,34 @@ impl App {
 
         if keys.toggle_landing {
             self.landing.toggle();
+            if self.landing.enabled {
+                self.target_landing.disable();
+            }
+        }
+        if keys.toggle_target_landing {
+            self.target_landing.toggle();
+            if self.target_landing.enabled {
+                self.landing.disable();
+            }
         }
 
         if keys.reset {
             self.rocket = RocketState::resting_on_pad();
             self.control = ControlMapper::default();
             self.landing.disable();
+            self.target_landing.disable();
             self.target_xz = random_target_xz();
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.set_target_xz(self.target_xz);
             }
         }
 
+        let target_xz_f64 = [self.target_xz[0] as f64, self.target_xz[1] as f64];
         let cmd = if self.rocket.destroyed {
             ControlCommand::default()
+        } else if self.target_landing.enabled {
+            self.target_landing
+                .update(&self.rocket, target_xz_f64, dt as f64)
         } else if self.landing.enabled {
             self.landing.update(&self.rocket, dt as f64)
         } else {
@@ -227,7 +245,7 @@ impl App {
             (pos[0] as f32 / tile).round() * tile,
             (pos[2] as f32 / tile).round() * tile,
         ];
-        let hud = hud_text(&self.rocket, &self.landing, self.fps);
+        let hud = hud_text(&self.rocket, &self.landing, &self.target_landing, self.fps);
         let title = hud.lines().next().unwrap_or("PGA Rocket").to_string();
         window.set_title(&title);
 
@@ -259,6 +277,7 @@ impl App {
                 &ctx,
                 &self.rocket,
                 &self.landing,
+                &self.target_landing,
                 fps,
                 cam_yaw,
                 cam_pitch,
@@ -294,7 +313,9 @@ impl ApplicationHandler for App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("PGA Rocket — Space/Ctrl throttle, WASD/QE attitude, L auto-land, R reset")
+            .with_title(
+                "PGA Rocket — Space/Ctrl throttle, WASD/QE attitude, L land, T target-land, R reset",
+            )
             .with_inner_size(LogicalSize::new(1280.0, 720.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
 
