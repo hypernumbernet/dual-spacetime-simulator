@@ -235,9 +235,17 @@ impl LandingAutopilot {
                     0.0
                 };
                 let upy_req = ((a_req + GRAVITY) / a_lift).clamp(0.0, 0.98);
-                (self.max_lat_tilt + LAT_TILT_GAIN * vh)
-                    .min(LEAN_MAX)
-                    .min(upy_req.acos())
+                if target_xz.is_some() {
+                    // T-pad descent starts from a controlled hand-off (near
+                    // upright, small drift), not a tumbling recovery: a modest
+                    // lean is plenty, and the deep anti-velocity lean of the
+                    // free-field lander pendulums during the coasting fall.
+                    (0.12 + 0.04 * vh).min(0.40).min(upy_req.acos())
+                } else {
+                    (self.max_lat_tilt + LAT_TILT_GAIN * vh)
+                        .min(LEAN_MAX)
+                        .min(upy_req.acos())
+                }
             } else if h > 1.0 && vy > -1.5 && vh > VH_TOUCH {
                 self.max_lat_tilt + (LAT_TILT_GAIN * vh).min(LEAN_PAD_EXTRA_MAX)
             } else {
@@ -245,17 +253,29 @@ impl LandingAutopilot {
             };
             // Over the pad: drop position PD (square is success); only kill velocity.
             let aim_target = if on_pad { None } else { target_xz };
-            let desired = desired_thrust_axis_world(
-                state.velocity[0],
-                state.velocity[1],
-                state.velocity[2],
-                h,
-                self.k_lat,
-                lat_tilt,
-                pos[0],
-                pos[2],
-                aim_target,
-            );
+            // Well inside the square only — near the edge keep the pad seek so
+            // a slow outward drift cannot ride the boundary to a rim landing.
+            let deep_on_pad = target_xz.is_some_and(|t| {
+                (pos[0] - t[0]).abs().max((pos[2] - t[1]).abs()) <= PAD_HALF_M - 8.0
+            });
+            let desired = if deep_on_pad && vh < 2.5 && h > H_TERMINAL + 2.0 {
+                // Quiet fall over the pad: walking-pace drift needs no lean.
+                // Chasing it keeps the authority throttle alive, whose tilted
+                // thrust re-excites the drift — a soft self-sustained pendulum.
+                [0.0, 1.0, 0.0]
+            } else {
+                desired_thrust_axis_world(
+                    state.velocity[0],
+                    state.velocity[1],
+                    state.velocity[2],
+                    h,
+                    self.k_lat,
+                    lat_tilt,
+                    pos[0],
+                    pos[2],
+                    aim_target,
+                )
+            };
             let d = motor_inverse_rotate_vector(&state.motor, desired);
             axis_angle_from_cross([d[2], 0.0, -d[0]], d[1].clamp(-1.0, 1.0))
         };
@@ -417,7 +437,16 @@ impl LandingAutopilot {
             } else {
                 0.0
             };
-            t_support.max(t_brake).max(t_auth)
+            // T-pad drift kill: coasting keeps whatever drift the hand-off
+            // left, all the way down to the burn — buy lateral authority now
+            // (the anti-drift lean converts this thrust into braking) instead
+            // of skidding across the pad at the bottom.
+            let t_drift = if target_xz.is_some() && vh > 4.0 && up_y >= UPY_AUTH {
+                (0.10 + 0.030 * vh).min(0.40)
+            } else {
+                0.0
+            };
+            t_support.max(t_brake).max(t_auth).max(t_drift)
         };
 
         ControlCommand {
@@ -556,8 +585,11 @@ fn desired_thrust_axis_world(
         if h < H_TERMINAL + 2.0 || speed_sq < 0.16 {
             return clamp_tilt([ax - k_lat * vx, 1.0, az - k_lat * vz], lat_tilt);
         }
-        // Prefer anti-velocity (brake) with a mild pad-seek bias.
-        return clamp_tilt([ax - vx, v_down.max(0.5), az - vz], lat_tilt);
+        // Damped station-keeping over the pad: `ax`/`az` already mix position
+        // error with strong velocity damping; keep the aim vertical-dominant.
+        // (An anti-velocity aim with a `v_down` vertical component made the
+        // early, slow part of the coasting descent swing like a pendulum.)
+        return clamp_tilt([ax, 1.0, az], lat_tilt);
     }
 
     if h < H_TERMINAL + 2.0 || speed_sq < 0.16 {
