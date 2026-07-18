@@ -63,13 +63,21 @@ fn autopilot_uprights_tilted_hover() {
 
 #[test]
 fn autopilot_uprights_from_roll() {
+    // The autopilot may lean deliberately mid-descent to kill drift, so assert
+    // the outcome — an intact upright touchdown — rather than transient tilt.
     let mut state = RocketState::at_altitude(55.0);
     state.motor = motor_from_pose(0.0, 55.0, 0.0, 0.0, 0.0, 0.55);
     state.contacting = false;
 
-    let (state, _) = run_landing(state, 10 * 120);
+    let (state, ap) = run_landing(state, 45 * 120);
     let tilt = tilt_of(&state);
-    assert!(tilt < 0.12, "expected upright from roll, tilt={tilt:.3}");
+    assert!(!state.destroyed, "impact={}", state.last_impact_speed);
+    assert!(
+        ap.complete,
+        "expected touchdown from roll tilt, tilt={tilt:.3} h={}",
+        state.lowest_foot_y()
+    );
+    assert!(tilt < 0.12, "expected upright at rest, tilt={tilt:.3}");
 }
 
 #[test]
@@ -79,10 +87,15 @@ fn autopilot_uprights_combined_attitude() {
     state.velocity = [1.0, -0.5, -0.8];
     state.contacting = false;
 
-    let (state, _) = run_landing(state, 12 * 120);
+    let (state, ap) = run_landing(state, 45 * 120);
     let tilt = tilt_of(&state);
-    assert!(tilt < 0.15, "expected upright from combined tilt, tilt={tilt:.3}");
-    assert!(state.altitude() > 8.0);
+    assert!(!state.destroyed, "impact={}", state.last_impact_speed);
+    assert!(
+        ap.complete,
+        "expected touchdown from combined tilt, tilt={tilt:.3} h={}",
+        state.lowest_foot_y()
+    );
+    assert!(tilt < 0.12, "expected upright at rest, tilt={tilt:.3}");
 }
 
 #[test]
@@ -148,6 +161,76 @@ fn autopilot_coasts_then_lands_from_high_altitude() {
         impulse < 6.5,
         "expected fuel-efficient impulse, got {impulse:.2} throttle·s"
     );
+}
+
+#[test]
+fn autopilot_survives_sideways_attitude() {
+    // 90° tilt at moderate altitude used to end in a crash; the flip + brake
+    // channels must recover it to an intact upright touchdown.
+    let mut state = RocketState::at_altitude(60.0);
+    state.motor = motor_from_pose(0.0, 60.0, 0.0, 1.57, 0.0, 0.0);
+    state.velocity = [0.0, -2.0, 0.0];
+    state.contacting = false;
+
+    let (state, ap) = run_landing(state, 60 * 120);
+    assert!(
+        !state.destroyed,
+        "sideways start must not explode, impact={}",
+        state.last_impact_speed
+    );
+    assert!(ap.complete, "expected touchdown, h={}", state.lowest_foot_y());
+}
+
+#[test]
+fn autopilot_survives_inverted_attitude() {
+    // Fully inverted needs a fast flip, an idle coast, and an early hard brake.
+    // (Below ~150 m CoM there is no survivable trajectory at T/W = 3.)
+    let mut state = RocketState::at_altitude(170.0);
+    state.motor = motor_from_pose(0.0, 170.0, 0.0, 3.1, 0.0, 0.0);
+    state.contacting = false;
+
+    let (state, ap) = run_landing(state, 60 * 120);
+    assert!(
+        !state.destroyed,
+        "inverted start must not explode, impact={}",
+        state.last_impact_speed
+    );
+    assert!(ap.complete, "expected touchdown, h={}", state.lowest_foot_y());
+}
+
+#[test]
+fn autopilot_survives_fast_fall_with_tilt() {
+    // A tilted fast fall must brake on the envelope even before the attitude
+    // has settled (the old attitude-phase gate caused free-fall into the pad).
+    let mut state = RocketState::at_altitude(80.0);
+    state.motor = motor_from_pose(0.0, 80.0, 0.0, 0.5, 0.0, 0.0);
+    state.velocity = [0.0, -30.0, 0.0];
+    state.contacting = false;
+
+    let (state, ap) = run_landing(state, 45 * 120);
+    assert!(
+        !state.destroyed,
+        "fast tilted fall must not explode, impact={}",
+        state.last_impact_speed
+    );
+    assert!(ap.complete, "expected touchdown, h={}", state.lowest_foot_y());
+}
+
+#[test]
+fn autopilot_survives_tumbling_entry() {
+    let mut state = RocketState::at_altitude(100.0);
+    state.motor = motor_from_pose(0.0, 100.0, 0.0, 1.2, 0.5, 0.8);
+    state.velocity = [3.0, -8.0, -3.0];
+    state.omega = [0.8, 0.4, -0.7];
+    state.contacting = false;
+
+    let (state, ap) = run_landing(state, 60 * 120);
+    assert!(
+        !state.destroyed,
+        "tumbling entry must not explode, impact={}",
+        state.last_impact_speed
+    );
+    assert!(ap.complete, "expected touchdown, h={}", state.lowest_foot_y());
 }
 
 #[test]

@@ -1,15 +1,24 @@
 //! Fuel-aware automatic landing via PGA motor sandwich transports.
 //!
 //! Guidance geometry (attitude aim, body-frame velocity) is obtained by sandwiching
-//! free vectors through the pose motor. Vertical thrust follows a closed-loop
-//! suicide-burn schedule: coast while above the braking envelope, then brake hard,
-//! then soft-touch near the pad — minimizing ∫throttle dt versus hover-descent.
+//! free vectors through the pose motor. Control is split into two channels that are
+//! combined with `max()`:
+//!
+//! - Attitude: shortest-arc axis/angle error → √-profile rate command → gimbal PD.
+//!   Works for any initial attitude including inverted (antipodal singularity handled).
+//! - Vertical: closed-loop suicide-burn schedule — coast while above the braking
+//!   envelope, brake hard on it, soft-touch near the pad. The envelope brake is
+//!   always live (never gated behind attitude recovery), so a fast fall brakes even
+//!   while still tilted, as long as thrust has a useful upward component.
 
-use crate::euclidean_pga::{attitude_error_body, motor_inverse_rotate_vector, world_up_in_body};
+use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::sim::{ControlCommand, GRAVITY, RocketState};
 
-/// Aim world-up until body +Y is within this of vertical (rad).
-const TILT_AIM: f64 = 0.12;
+/// Aim world-up above this tilt (flip regime); below it the velocity-kill aim
+/// takes over. Must sit above the deepest commanded lean to avoid limit cycles.
+const TILT_AIM: f64 = 1.05;
+/// Above this tilt the burn envelope tracks the lowest hull probe, not the feet.
+const TILT_PROBE: f64 = 0.30;
 /// Hysteresis for the HUD "locked" latch (rad / rad/s / m/s).
 const TILT_LOCK: f64 = 0.08;
 const TILT_UNLOCK: f64 = 0.14;
@@ -17,19 +26,41 @@ const OMEGA_LOCK: f64 = 0.07;
 const OMEGA_UNLOCK: f64 = 0.14;
 const VH_LOCK: f64 = 1.0;
 const VH_UNLOCK: f64 = 1.8;
-/// Treat as still uprighting above this tilt or rate.
-const TILT_PHASE: f64 = 0.12;
+/// Treat as still maneuvering above this attitude *error* angle or body rate.
+const ERR_PHASE: f64 = 0.12;
 const OMEGA_PHASE: f64 = 0.12;
+/// Lateral-lean allowance grows with horizontal speed up to LEAN_MAX (rad), so
+/// a vertical-neutral hard burn can kill flip-induced drift instead of crawling
+/// at 8°. cos(LEAN_MAX) must stay above UPY_AUTH so support thrust keeps flowing.
+const LAT_TILT_GAIN: f64 = 0.06;
+const LEAN_MAX: f64 = 1.0;
+/// Bang brake only fights real descent; slower falls belong to the soft law.
+const V_BRAKE_MIN: f64 = 1.5;
+/// Do not settle onto the pad while drifting faster than this (m/s); hover and
+/// bleed the drift first. Touching down fast sideways bounces into a tip-over;
+/// slower skids are safely eaten by foot friction.
+const VH_TOUCH: f64 = 3.5;
 /// Soft touchdown target speed (m/s, positive = descent).
 const V_TOUCH: f64 = 0.55;
 /// Foot height where we switch from hard brake to soft pad control (m).
 const H_TERMINAL: f64 = 4.5;
 /// Extra height margin on the suicide-burn envelope (m).
 const H_BURN_MARGIN: f64 = 3.0;
+/// Reaction-time margin on the burn envelope (s of current descent speed).
+const T_REACT: f64 = 0.25;
 /// Planning throttle fraction for brake-envelope (leave headroom for attitude).
 const BURN_PLAN_FRAC: f64 = 0.95;
 /// Above this foot height, prefer coast/suicide-burn over continuous soft descent.
 const H_COAST_ENABLE: f64 = 12.0;
+/// Planning angular deceleration for the √-profile rate command (rad/s²).
+/// Conservative fraction of gimbal authority T·sinδ·|r_y|/Ixx ≈ 1.2 rad/s² at full T.
+const ALPHA_PLAN: f64 = 0.5;
+/// Thrust up-component thresholds gating the vertical sub-channels.
+/// Below UPY_BRAKE the engine cannot brake a fall (thrust mostly lateral/down);
+/// below UPY_AUTH throttle exists only for gimbal torque authority.
+const UPY_BRAKE: f64 = 0.25;
+const UPY_AUTH: f64 = 0.5;
+const UPY_SOFT: f64 = 0.6;
 
 /// Automatic landing autopilot toggled with `L`.
 #[derive(Clone, Debug)]
@@ -45,7 +76,8 @@ pub struct LandingAutopilot {
     pub k_h: f64,
     pub v_max_descent: f64,
     pub kv_descent: f64,
-    /// Max body rate commanded while uprighting (rad/s).
+    /// Hard cap on commanded body rate (rad/s); the √-profile keeps rates far
+    /// lower near upright, this only limits large-angle flips.
     pub omega_max: f64,
     /// Near-vertical + low rates (HUD only; actuators stay active).
     pub attitude_locked: bool,
@@ -56,7 +88,7 @@ impl Default for LandingAutopilot {
         Self {
             enabled: false,
             complete: false,
-            // Cascaded attitude: outer rate from tilt error, inner rate tracking.
+            // Cascaded attitude: outer rate from angle error, inner rate tracking.
             // +pitch/+yaw gimbal ⇒ −τ_x/−τ_z (nozzle below CoM), opposite RCS roll sign.
             kp_attitude: 1.8,
             kd_attitude: 2.4,
@@ -66,7 +98,7 @@ impl Default for LandingAutopilot {
             k_h: 0.35,
             v_max_descent: 1.8,
             kv_descent: 0.28,
-            omega_max: 0.55,
+            omega_max: 1.5,
             attitude_locked: false,
         }
     }
@@ -120,55 +152,60 @@ impl LandingAutopilot {
         let vh_sq = state.velocity[0] * state.velocity[0] + state.velocity[2] * state.velocity[2];
         let vh = vh_sq.sqrt();
         let h = state.lowest_foot_y();
+        let vy = state.velocity[1];
+        let v_down = (-vy).max(0.0);
 
-        // Desired body +Y in world, then one sandwich for the body-frame attitude error.
-        // High: thrust anti-aligned with velocity (max Δv per fuel). Low: upright + lateral kill.
-        let err = if tilt > TILT_AIM {
-            [up_body[2], 0.0, -up_body[0]]
+        // While tilted the feet are not the lowest structure; run the burn
+        // envelope on the true lowest hull point so an inverted fall brakes early.
+        let h_env = if tilt > TILT_PROBE { state.lowest_probe_y() } else { h };
+
+        // Desired body +Y as a shortest-arc axis/angle in the body frame.
+        // High tilt: aim world-up (flip first). Near upright: velocity-kill aim.
+        let (axis, angle) = if tilt > TILT_AIM {
+            axis_angle_from_cross([up_body[2], 0.0, -up_body[0]], up_y)
         } else {
+            // With altitude in hand, allow a deeper anti-velocity lean so the
+            // burn kills horizontal drift as fast as it kills descent — but never
+            // lean past the attitude whose vertical thrust share still brakes the
+            // current fall inside the remaining altitude.
+            let lat_tilt = if h > H_TERMINAL + 2.0 {
+                let a_req = if v_down > V_TOUCH {
+                    1.15 * (v_down * v_down - V_TOUCH * V_TOUCH)
+                        / (2.0 * (h_env - H_BURN_MARGIN - T_REACT * v_down).max(1.0))
+                } else {
+                    0.0
+                };
+                let upy_req = ((a_req + GRAVITY) * mass / (BURN_PLAN_FRAC * max_thrust))
+                    .clamp(0.0, 0.98);
+                (self.max_lat_tilt + LAT_TILT_GAIN * vh)
+                    .min(LEAN_MAX)
+                    .min(upy_req.acos())
+            } else {
+                self.max_lat_tilt
+            };
             let desired = desired_thrust_axis_world(
                 state.velocity[0],
                 state.velocity[1],
                 state.velocity[2],
                 h,
                 self.k_lat,
-                self.max_lat_tilt,
+                lat_tilt,
             );
-            attitude_error_body(&state.motor, desired)
+            let d = motor_inverse_rotate_vector(&state.motor, desired);
+            axis_angle_from_cross([d[2], 0.0, -d[0]], d[1].clamp(-1.0, 1.0))
         };
 
-        let kd = self.kd_attitude;
-        let pitch = saturate(kd * (omega[0] - clamp_rate(self.kp_attitude * err[0], self.omega_max)));
-        let yaw = saturate(kd * (omega[2] - clamp_rate(self.kp_attitude * err[2], self.omega_max)));
+        // √-profile rate command: fast for big angles, no overshoot near target.
+        let w_mag = (self.kp_attitude * angle)
+            .min((2.0 * ALPHA_PLAN * angle).sqrt())
+            .min(self.omega_max);
+        let rate_err_x = omega[0] - axis[0] * w_mag;
+        let rate_err_z = omega[2] - axis[2] * w_mag;
+        let pitch = saturate(self.kd_attitude * rate_err_x);
+        let yaw = saturate(self.kd_attitude * rate_err_z);
         let roll = saturate(-self.kd_roll * omega[1]);
 
         update_lock_latch(&mut self.attitude_locked, tilt, omega_sq, vh_sq);
-
-        let vy = state.velocity[1];
-        let attitude_phase = tilt > TILT_PHASE || omega_sq > OMEGA_PHASE * OMEGA_PHASE;
-
-        // Max net upward accel along world +Y at planned burn throttle (lift ≈ T·up_y).
-        let a_brake = ((BURN_PLAN_FRAC * max_thrust / mass) * up_y.max(0.35) - GRAVITY).max(0.5);
-        // Lateral kinetic energy ≈ needs a little extra altitude while we tilt-brake.
-        let h_lat = (vh * vh) / (2.0 * a_brake.max(1.0) + 4.0 * GRAVITY);
-        let h_burn = burn_height(vy, a_brake, V_TOUCH) + H_BURN_MARGIN + h_lat;
-
-        let att_throttle = attitude_authority_throttle(pitch, yaw, roll, hover);
-        let throttle = fuel_optimal_throttle(
-            hover,
-            up_y,
-            h,
-            vy,
-            v_body[1],
-            attitude_phase,
-            state.contacting,
-            h_burn,
-            a_brake,
-            att_throttle,
-            self.k_h,
-            self.v_max_descent,
-            self.kv_descent,
-        );
 
         if state.contacting
             && vy.abs() < 0.5
@@ -179,8 +216,96 @@ impl LandingAutopilot {
             return ControlCommand::default();
         }
 
+        // Lying on the ground past recovery: the engine cannot upright a grounded
+        // hull, thrusting only shoves it around. Cut power, keep roll damping.
+        if state.contacting && up_y < 0.5 {
+            return ControlCommand {
+                throttle: 0.0,
+                pitch: 0.0,
+                yaw: 0.0,
+                roll,
+            }
+            .clamp();
+        }
+
+        let attitude_busy = angle > ERR_PHASE || omega_sq > OMEGA_PHASE * OMEGA_PHASE;
+
+        // --- Vertical channel (always live; attitude never gates the brake) ---
+        let hover_cmd = (hover / up_y.max(0.25)).clamp(0.0, 0.95);
+
+        // Max net upward accel along world +Y at planned burn throttle with the
+        // *current* attitude (lift ≈ T·up_y). Pessimistic while tilted ⇒ brakes early.
+        let a_brake = ((BURN_PLAN_FRAC * max_thrust / mass) * up_y.max(0.0) - GRAVITY).max(0.5);
+        // Lateral kinetic energy ≈ needs a little extra altitude while we tilt-brake.
+        let h_lat = (vh * vh) / (2.0 * a_brake.max(1.0) + 4.0 * GRAVITY);
+        let h_need = burn_height(vy, a_brake, V_TOUCH) + H_BURN_MARGIN + T_REACT * v_down + h_lat;
+
+        let (h_gate, need_gate) = (h_env, h_need);
+
+        // Gimbal torque needs thrust. Severely tilted: throttle tracks the rate
+        // error so spin-up/spin-down get full torque, while the coasting middle of
+        // a flip idles — every N·s of thrust while inverted is downward Δv.
+        let t_auth = if up_y < UPY_AUTH {
+            // Deadband: don't chase the last ~0.15 rad/s of tracking lag during
+            // the coasting middle of a flip — that thrust is downward Δv.
+            let lag = (rate_err_x.abs().max(rate_err_z.abs()) - 0.15).max(0.0);
+            (0.08 + 1.2 * lag).min(1.0)
+        } else {
+            attitude_authority_throttle(pitch, yaw, roll, hover)
+        };
+
+        let use_coast_burn = h_env >= H_COAST_ENABLE || h_need + 1.0 >= h_env;
+        let soft_regime =
+            up_y >= UPY_SOFT && (state.contacting || h < H_TERMINAL || !use_coast_burn);
+
+        let throttle = if state.contacting && vh > VH_TOUCH {
+            // Skidding on the pad: thrust while tilted becomes a rocket sled.
+            // Keep weight on the feet and let Coulomb friction stop the slide.
+            (hover_cmd * 0.55).max(t_auth * 0.5)
+        } else if soft_regime {
+            soft_touch_throttle(
+                hover_cmd,
+                h,
+                vy,
+                vh,
+                state.contacting,
+                self.k_h,
+                self.v_max_descent,
+                self.kv_descent,
+            )
+            .max(t_auth)
+        } else {
+            // Hold near hover while gimbaling or leaning close to the envelope so
+            // we do not dig a hole; with plenty of altitude in hand, coast instead.
+            // During a deliberate lean this is the vertical-neutral kill burn:
+            // hover/up_y keeps altitude while the lateral component eats drift.
+            let leaning = tilt > 0.12;
+            let t_support = if (attitude_busy || leaning)
+                && up_y >= UPY_AUTH
+                && h_gate <= need_gate + 12.0
+            {
+                let lo = hover_cmd * 0.92;
+                let hi = (hover_cmd * 1.25).min(1.0);
+                // Mild rate damping along body +Y (sandwich-transported velocity).
+                // While leaning, lateral drift shows up in this term and lifts the
+                // hover slightly — buying time aloft to finish the drift kill.
+                (hover_cmd - 0.08 * v_body[1]).clamp(lo, hi)
+            } else {
+                0.0
+            };
+            // Bang-coast-bang: above the curve → free-fall; on/under → hard brake.
+            // Only fights genuine descent; margins alone must never cause a loft.
+            let t_brake = if up_y >= UPY_BRAKE && v_down > V_BRAKE_MIN && h_gate <= need_gate + 0.75
+            {
+                BURN_PLAN_FRAC + (v_down - V_TOUCH).max(0.0) * 0.015
+            } else {
+                0.0
+            };
+            t_support.max(t_brake).max(t_auth)
+        };
+
         ControlCommand {
-            throttle,
+            throttle: throttle.clamp(0.0, 1.0),
             pitch,
             yaw,
             roll,
@@ -203,6 +328,26 @@ fn update_lock_latch(locked: &mut bool, tilt: f64, omega_sq: f64, vh_sq: f64) {
     }
 }
 
+/// Rotation axis (unit, zero-Y cross form) and angle from a `cross(body_up, d)`
+/// vector plus `cos(angle)`. Handles the antipodal case (inverted vehicle) where
+/// the cross vanishes but a π rotation about any horizontal axis is needed.
+fn axis_angle_from_cross(cross: [f64; 3], cos_angle: f64) -> ([f64; 3], f64) {
+    let s = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+    if s < 1e-9 {
+        if cos_angle > 0.0 {
+            ([0.0, 0.0, 0.0], 0.0)
+        } else {
+            ([1.0, 0.0, 0.0], std::f64::consts::PI)
+        }
+    } else {
+        let inv = 1.0 / s;
+        (
+            [cross[0] * inv, cross[1] * inv, cross[2] * inv],
+            s.atan2(cos_angle),
+        )
+    }
+}
+
 /// Height needed to brake descent speed `−vy` down to `v_touch` at constant `a_brake`.
 fn burn_height(vy: f64, a_brake: f64, v_touch: f64) -> f64 {
     let v_down = (-vy).max(0.0);
@@ -222,71 +367,35 @@ fn attitude_authority_throttle(pitch: f64, yaw: f64, roll: f64, hover: f64) -> f
     }
 }
 
-/// Coast above the suicide-burn envelope; bang brake on it; soft √h near the pad.
-///
-/// Bang-coast-bang (with a soft terminal) avoids the hover equilibrium that a
-/// proportional "slack" throttle creates when starting slow and already low.
-fn fuel_optimal_throttle(
-    hover: f64,
-    up_y: f64,
+/// Soft √h descent-rate schedule for the final metres and pad contact.
+fn soft_touch_throttle(
+    hover_cmd: f64,
     h: f64,
     vy: f64,
-    v_along_body_up: f64,
-    attitude_phase: bool,
+    vh: f64,
     contacting: bool,
-    h_burn: f64,
-    a_brake: f64,
-    att_throttle: f64,
     k_h: f64,
     v_max: f64,
     kv: f64,
 ) -> f64 {
-    let lift_factor = if up_y > 0.25 { 1.0 / up_y } else { 1.2 };
-    let hover_cmd = (hover * lift_factor).clamp(0.0, 0.95);
-
-    // Recover upright: hold near hover so we do not dig a hole while gimbaling.
-    // Slightly under-hover when high enough that the burn envelope still fits.
-    if attitude_phase {
-        let lo = if h > h_burn + 12.0 {
-            hover_cmd * 0.72
-        } else {
-            hover_cmd * 0.92
-        };
-        let hi = (hover_cmd * 1.25).min(1.0);
-        // Mild rate damping along body +Y (sandwich-transported velocity).
-        let mut t = hover_cmd - 0.08 * v_along_body_up;
-        t = t.clamp(lo, hi).max(att_throttle);
-        return t.clamp(0.0, 1.0);
+    let v_tgt = if vh > VH_TOUCH && !contacting {
+        // Still drifting: hold off the pad (climb gently if skimming it) and
+        // let the lateral-kill lean bleed the drift before settling.
+        if h < 1.2 { 0.35 } else { 0.0 }
+    } else if h < 1.0 {
+        -0.4
+    } else {
+        -v_max.min(k_h * h.sqrt())
+    };
+    let mut t = hover_cmd + kv * (v_tgt - vy);
+    if h < 2.0 && !contacting && vh <= VH_TOUCH {
+        t -= 0.04;
     }
-
-    let h_need = burn_height(vy, a_brake, V_TOUCH) + H_BURN_MARGIN;
-    let use_coast_burn = h >= H_COAST_ENABLE || h_need + 1.0 >= h;
-
-    // Soft pad, or short final when we never entered a high-altitude coast.
-    if contacting || h < H_TERMINAL || !use_coast_burn {
-        let v_tgt = if h < 1.0 {
-            -0.4
-        } else {
-            -v_max.min(k_h * h.sqrt())
-        };
-        let mut t = hover_cmd + kv * (v_tgt - vy);
-        if h < 2.0 && !contacting {
-            t -= 0.04;
-        }
-        // Never loft back up once committed to the soft approach.
-        if vy > 0.15 {
-            t = t.min(hover_cmd * 0.85);
-        }
-        return t.max(att_throttle).clamp(0.0, 1.0);
+    // Never loft back up once committed to the soft approach.
+    if vy > 0.15 && vh <= VH_TOUCH {
+        t = t.min(hover_cmd * 0.85);
     }
-
-    // Bang-coast-bang: above the curve → free-fall; on/under → hard brake.
-    if h > h_need + 0.75 {
-        return att_throttle.clamp(0.0, 1.0);
-    }
-
-    let catch_up = (-vy - V_TOUCH).max(0.0) * 0.015;
-    (BURN_PLAN_FRAC + catch_up).max(att_throttle).clamp(0.0, 1.0)
+    t
 }
 
 fn desired_thrust_axis_world(
@@ -298,19 +407,25 @@ fn desired_thrust_axis_world(
     max_lat_tilt: f64,
 ) -> [f64; 3] {
     // Near the pad: stay upright and bleed lateral speed with a small tilt.
+    // While hovering off a drift (not descending) allow a moderately deeper
+    // lean so the kill does not take tens of seconds.
     if h < H_TERMINAL + 2.0 {
-        return clamp_tilt([-k_lat * vx, 1.0, -k_lat * vz], max_lat_tilt);
+        let vh = (vx * vx + vz * vz).sqrt();
+        let lat = if h > 1.0 && vy > -1.5 && vh > VH_TOUCH {
+            max_lat_tilt + (0.06 * vh).min(0.35)
+        } else {
+            max_lat_tilt
+        };
+        return clamp_tilt([-k_lat * vx, 1.0, -k_lat * vz], lat);
     }
     // Higher up: aim body +Y against the velocity vector (PGA sandwich maps this
-    // into attitude error). Keeps a strong upward bias so we never tip over.
+    // into attitude error), clamped to the allowed lean cone about world-up.
     let v_down = (-vy).max(0.0);
     let speed = (vx * vx + v_down * v_down + vz * vz).sqrt();
     if speed < 0.4 {
         return clamp_tilt([-k_lat * vx, 1.0, -k_lat * vz], max_lat_tilt);
     }
-    // anti-velocity with floor on +Y so the rocket stays mostly upright.
-    let anti = [-vx / speed, (v_down / speed).max(0.75), -vz / speed];
-    clamp_tilt(anti, max_lat_tilt)
+    clamp_tilt([-vx, v_down, -vz], max_lat_tilt)
 }
 
 /// Normalize `v` and limit its angle from +Y to `max_tilt` (uses cos test, no acos).
@@ -334,11 +449,6 @@ fn clamp_tilt(v: [f64; 3], max_tilt: f64) -> [f64; 3] {
 }
 
 #[inline]
-fn clamp_rate(x: f64, max: f64) -> f64 {
-    x.clamp(-max, max)
-}
-
-#[inline]
 fn saturate(x: f64) -> f64 {
     x.clamp(-1.0, 1.0)
 }
@@ -346,7 +456,7 @@ fn saturate(x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::euclidean_pga::{motor_from_pose, motor_body_up_world, motor_inverse_rotate_vector};
+    use crate::euclidean_pga::{motor_from_pose, motor_body_up_world, motor_inverse_rotate_vector, attitude_error_body};
 
     const DT: f64 = 1.0 / 120.0;
 
@@ -369,43 +479,83 @@ mod tests {
     }
 
     #[test]
+    fn axis_angle_recovers_full_angle_range() {
+        // 45°: cross magnitude sin(θ), cos component cos(θ).
+        let th = std::f64::consts::FRAC_PI_4;
+        let (axis, angle) = axis_angle_from_cross([th.sin(), 0.0, 0.0], th.cos());
+        assert!((angle - th).abs() < 1e-12);
+        assert!((axis[0] - 1.0).abs() < 1e-12);
+
+        // 135°: sin is the same as 45° but the angle must not fold back.
+        let th = 3.0 * std::f64::consts::FRAC_PI_4;
+        let (_, angle) = axis_angle_from_cross([th.sin(), 0.0, 0.0], th.cos());
+        assert!((angle - th).abs() < 1e-12, "angle={angle}");
+
+        // Inverted: zero cross, cos = −1 ⇒ π about a fallback horizontal axis.
+        let (axis, angle) = axis_angle_from_cross([0.0, 0.0, 0.0], -1.0);
+        assert!((angle - std::f64::consts::PI).abs() < 1e-12);
+        assert!(axis[0].abs() + axis[2].abs() > 0.5);
+
+        // Aligned: no rotation.
+        let (_, angle) = axis_angle_from_cross([0.0, 0.0, 0.0], 1.0);
+        assert!(angle.abs() < 1e-12);
+    }
+
+    #[test]
     fn coast_above_envelope_uses_near_zero_throttle() {
-        let t = fuel_optimal_throttle(
-            1.0 / 3.0,
-            1.0,
-            80.0,
-            -2.0,
-            -2.0,
-            false,
-            false,
-            12.0,
-            2.0 * GRAVITY,
-            0.0,
-            0.35,
-            1.8,
-            0.28,
-        );
-        assert!(t < 0.05, "expected coast, throttle={t}");
+        // Upright, slow descent, high above the burn envelope ⇒ coast.
+        let mut state = RocketState::at_altitude(80.0);
+        state.velocity = [0.0, -2.0, 0.0];
+        state.contacting = false;
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = ap.update(&state, DT);
+        assert!(cmd.throttle < 0.05, "expected coast, throttle={}", cmd.throttle);
     }
 
     #[test]
     fn behind_curve_commands_hard_brake() {
-        let t = fuel_optimal_throttle(
-            1.0 / 3.0,
-            1.0,
-            8.0,
-            -25.0,
-            -25.0,
-            false,
-            false,
-            20.0,
-            2.0 * GRAVITY,
-            0.0,
-            0.35,
-            1.8,
-            0.28,
+        // Upright but falling fast near the ground ⇒ full brake.
+        let mut state = RocketState::at_altitude(25.0);
+        state.velocity = [0.0, -25.0, 0.0];
+        state.contacting = false;
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = ap.update(&state, DT);
+        assert!(cmd.throttle > 0.85, "expected suicide burn, throttle={}", cmd.throttle);
+    }
+
+    #[test]
+    fn fast_fall_brakes_even_while_tilted() {
+        // Inside the burn envelope, the brake must not be gated behind attitude
+        // recovery: a tilted fast fall still commands a hard burn.
+        let mut state = RocketState::at_altitude(30.0);
+        state.motor = motor_from_pose(0.0, 30.0, 0.0, 0.3, 0.0, 0.0);
+        state.velocity = [0.0, -18.0, 0.0];
+        state.contacting = false;
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = ap.update(&state, DT);
+        assert!(
+            cmd.throttle > 0.85,
+            "tilted fast fall must brake, throttle={}",
+            cmd.throttle
         );
-        assert!(t > 0.85, "expected suicide burn, throttle={t}");
+    }
+
+    #[test]
+    fn inverted_rocket_gets_flip_command() {
+        let mut state = RocketState::at_altitude(150.0);
+        state.motor = motor_from_pose(0.0, 150.0, 0.0, std::f64::consts::PI - 0.05, 0.0, 0.0);
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = ap.update(&state, DT);
+        assert!(
+            cmd.pitch.abs() > 0.5,
+            "inverted vehicle needs strong gimbal, pitch={}",
+            cmd.pitch
+        );
+        assert!(cmd.throttle > 0.2, "flip needs torque authority, throttle={}", cmd.throttle);
     }
 
     #[test]
