@@ -34,6 +34,11 @@ const LEAN_TRANSIT_MAX: f64 = 0.38;
 const LEAN_BURN_MAX: f64 = 0.30;
 /// Deeper lean allowed for the horizontal deceleration leg (rad).
 const LEAN_DECEL_MAX: f64 = 0.55;
+/// Far-from-pad lean toward the T-mark (rad, ~60°). Deep enough for a decisive
+/// return burn; must stay below the flip gate ([`COS_TILT_AIM`]).
+const LEAN_FAR_MAX: f64 = 1.05;
+/// Range (m) where far-pad guidance takes over (point at T, hold deep cone).
+const RANGE_FAR_M: f64 = 90.0;
 /// Max commanded ground speed during transit (m/s).
 const V_CRUISE_MAX: f64 = 45.0;
 /// Ballistic apogee the climb burn aims for (m). Cut thrust once the coast
@@ -72,12 +77,17 @@ const OMEGA_HANDOFF_MAX: f64 = 0.15;
 const COS_TILT_HANDOFF: f64 = 0.939; // cos(0.35)
 /// Attitude √-profile planning accel (rad/s²).
 const ALPHA_PLAN: f64 = 0.5;
-const OMEGA_MAX: f64 = 1.5;
-const KP_ATT: f64 = 1.8;
-const KD_ATT: f64 = 2.4;
-const KD_ROLL: f64 = 1.6;
-/// cos(TILT_AIM) ≈ cos(1.05) — flip regime without calling acos each frame.
-const COS_TILT_AIM: f64 = 0.497571;
+const OMEGA_MAX: f64 = 1.15;
+const KP_ATT: f64 = 2.0;
+const KD_ATT: f64 = 3.0;
+const KD_ROLL: f64 = 2.0;
+/// Flip only when past the commanded far lean (was cos(1.05) which fought any
+/// lean past ~60° and produced upright↔lean chatter / body spin).
+const COS_TILT_AIM: f64 = 0.30; // ~72.5°, below cos(LEAN_FAR_MAX)≈0.41
+/// Pitch/yaw rate (rad/s) above which attitude is pure rate-kill.
+const OMEGA_RATE_KILL: f64 = 0.80;
+/// Overspeed (m/s) to enter hard anti-velocity brake lean when far.
+const V_BRAKE_ENTER: f64 = 8.0;
 
 /// Guidance phase while the T-key autopilot is armed.
 ///
@@ -289,35 +299,69 @@ fn transit_command(state: &RocketState, target_xz: [f64; 2], pos: [f64; 3]) -> C
         v_cmd_h = v_cmd_h.min(V_CLIMB_H_MAX);
     }
 
-    // Ballistic legs steer by velocity only: chasing the position term keeps
-    // the lean saturated well past the wanted burnout vh.
-    let k_p = if burn_up { 0.0 } else { 0.012 * cruise_w };
-    let ax = 0.14 * (ux * v_cmd_h - vx) + k_p * dx;
-    let az = 0.14 * (uz * v_cmd_h - vz) + k_p * dz;
+    let need_x = ux * v_cmd_h - vx;
+    let need_z = uz * v_cmd_h - vz;
 
-    let lean_max = if burn_up {
-        LEAN_BURN_MAX
+    // Far-pad: powered cruise, well off the T-mark (or reverse after overshoot).
+    // Aim is a **stable pad-facing direction**, not velocity-PD (which flipped
+    // go↔brake every few metres and spun the body continuously).
+    // Deep pad-facing / reverse burn only well away from the hand-off zone.
+    // Reverse after overshoot is allowed from 70 m so the stack does not crawl.
+    // cruise_w > 0.75 ≈ vy ≲ 4.2 m/s. Residual climb must not cancel the
+    // pad-facing lean. True ballistic coast (vy ≫ 8, cruise_w≈0) still uses
+    // the mid-cone path with rate-kill-only throttle.
+    let far_pad = lofted
+        && cruise_w > 0.75
+        && !terminal
+        && (range > RANGE_FAR_M || (range > 70.0 && v_approach < -1.5));
+
+    let (ax, az, lean_max, far_deep) = if burn_up {
+        (0.14 * need_x, 0.14 * need_z, LEAN_BURN_MAX, false)
     } else if terminal {
-        // Speed-proportional: hot entries still get real braking lean, but the
-        // near-rest crawl stays gentle — deep leans at walking pace pendulum
-        // through attitude lag.
-        (0.10 + 0.04 * vh).clamp(0.12, 0.50)
-    } else if v_approach > v_des_h + 3.0 || v_approach < v_des_h - 5.0 {
-        // Far off the speed profile in either direction: deep lean (braking or
-        // catching up); hover_cmd below compensates 1/cos.
-        LEAN_DECEL_MAX
+        (
+            0.12 * need_x,
+            0.12 * need_z,
+            (0.08 + 0.03 * vh).clamp(0.10, 0.35),
+            false,
+        )
+    } else if far_pad {
+        if v_approach > v_des_h + V_BRAKE_ENTER {
+            // Hard brake only when clearly overspeed (wide enter threshold).
+            let s = 30.0 / vh.max(1.0);
+            (-vx * s, -vz * s, LEAN_FAR_MAX, true)
+        } else if v_approach > 8.0
+            && (v_approach - v_des_h).abs() < 4.0
+        {
+            // On the speed profile: hold cruise, do not reverse lean.
+            (0.10 * need_x, 0.10 * need_z, LEAN_TRANSIT_MAX, false)
+        } else {
+            // Default far behaviour: **immediately lean toward the T-mark**.
+            (ux * 30.0, uz * 30.0, LEAN_FAR_MAX, true)
+        }
     } else {
-        LEAN_TRANSIT_MAX
+        let k_p = 0.012 * cruise_w;
+        let lean = if v_approach > v_des_h + 3.0 || v_approach < v_des_h - 5.0 {
+            LEAN_DECEL_MAX
+        } else {
+            LEAN_TRANSIT_MAX
+        };
+        (
+            0.14 * need_x + k_p * dx,
+            0.14 * need_z + k_p * dz,
+            lean,
+            false,
+        )
     };
 
     // Straightening burn aims strictly upright: cutoff then happens with no
-    // lean and no rates, so the coast needs almost no recovery thrust. The
-    // ballistic blend fades the lean out toward the same upright aim — a
-    // stable, already-achieved aim lets the attitude effort (and with it the
-    // authority throttle) decay to ~0, keeping the coast truly ballistic,
-    // while near-zero thrust with a leaning aim would tumble the stack.
+    // lean and no rates, so the coast needs almost no recovery thrust.
     let straighten = burn_up && apogee >= APOGEE_STRAIGHTEN_M;
-    let aim_w = if burn_up { 1.0 } else { cruise_w };
+    // Far deep lean must not be faded by cruise_w (half-open aim = sway).
+    let aim_w = if burn_up || far_deep {
+        1.0
+    } else {
+        cruise_w
+    };
     let desired = if straighten {
         [0.0, 1.0, 0.0]
     } else {
@@ -327,15 +371,12 @@ fn transit_command(state: &RocketState, target_xz: [f64; 2], pos: [f64; 3]) -> C
 
     let mass = state.params.mass;
     let hover = mass * GRAVITY / state.params.max_thrust;
-    let hover_cmd = (hover / up_y.max(0.40)).clamp(0.0, 0.98);
+    let upy_floor = if far_deep { 0.30 } else { 0.40 };
+    let hover_cmd = (hover / up_y.max(upy_floor)).clamp(0.0, 0.98);
 
     let mut throttle = if burn_up {
         THR_CLIMB_BURN
     } else {
-        // Altitude-hold cruise: PD on residual vertical rate with mild body-Y
-        // damping (only sandwich-transport when leaning enough to matter).
-        // Scaled by the cruise weight: gravity kills the remaining climb for
-        // free, so the powered hold fades in only as the ascent dies.
         let v_damp = if up_y < 0.92 {
             motor_inverse_rotate_vector(&state.motor, state.velocity)[1]
         } else {
@@ -343,14 +384,19 @@ fn transit_command(state: &RocketState, target_xz: [f64; 2], pos: [f64; 3]) -> C
         };
         let v_des_y = kill_climb_vy(vy);
         let base = hover_cmd + 0.08 * (v_des_y - vy) - 0.03 * v_damp.clamp(-5.0, 5.0);
+        // Always scale by cruise_w so residual climb cannot re-loft the stack.
         cruise_w * base.max(hover_cmd * 0.70)
     };
 
     let effort = pitch.abs() + yaw.abs() + 0.35 * roll.abs();
-    if ballistic || burn_up {
-        // Rate-kill bursts only while ballistic. Chasing the last bit of
-        // tracking lag costs sustained lift (0.15 throttle ≈ half of gravity)
-        // and blows the apogee; the upright cutoff leaves little to kill.
+    if far_deep && up_y < 0.75 {
+        // Leaned toward the pad: keep thrust on the g·tan wall.
+        throttle = throttle.max(0.60).min(0.97);
+    } else if far_deep {
+        // Rotating into the pad-facing lean: enough gimbal authority to snap
+        // the nose toward T immediately (not a loft burn while upright).
+        throttle = throttle.max(0.50 + 0.20 * effort).clamp(0.50, 0.68);
+    } else if ballistic || burn_up {
         throttle = throttle.max((0.9 * (effort - 0.15).max(0.0)).min(0.35));
     } else if effort > 0.04 {
         throttle = throttle.max(0.10 + 0.28 * effort);
@@ -372,8 +418,10 @@ fn transit_command(state: &RocketState, target_xz: [f64; 2], pos: [f64; 3]) -> C
 fn attitude_toward(state: &RocketState, desired_world: [f64; 3]) -> (f64, f64, f64, f64) {
     let up_body = world_up_in_body(&state.motor);
     let up_y = up_body[1].clamp(-1.0, 1.0);
+    let omega = state.omega;
+    let omega_xy = (omega[0] * omega[0] + omega[2] * omega[2]).sqrt();
 
-    // Flip first when severely tilted (cos test avoids acos on the hot path).
+    // Flip only past the far-lean cone (near-inverted), not mid-recovery.
     let (axis, angle) = if up_y < COS_TILT_AIM {
         axis_angle_from_cross([up_body[2], 0.0, -up_body[0]], up_y)
     } else {
@@ -381,10 +429,16 @@ fn attitude_toward(state: &RocketState, desired_world: [f64; 3]) -> (f64, f64, f
         axis_angle_from_cross([d[2], 0.0, -d[0]], d[1].clamp(-1.0, 1.0))
     };
 
-    let omega = state.omega;
-    let w_mag = (KP_ATT * angle)
-        .min((2.0 * ALPHA_PLAN * angle).sqrt())
-        .min(OMEGA_MAX);
+    // High residual rate: kill spin first so a lean-direction change cannot
+    // carry the body through upright into continuous tumble.
+    let w_mag = if omega_xy > OMEGA_RATE_KILL {
+        0.0
+    } else {
+        (KP_ATT * angle)
+            .min((2.0 * ALPHA_PLAN * angle).sqrt())
+            .min(OMEGA_MAX)
+            .min((OMEGA_MAX - 0.4 * omega_xy).max(0.0))
+    };
     let pitch = saturate(KD_ATT * (omega[0] - axis[0] * w_mag));
     let yaw = saturate(KD_ATT * (omega[2] - axis[2] * w_mag));
     let roll = saturate(-KD_ROLL * omega[1]);
