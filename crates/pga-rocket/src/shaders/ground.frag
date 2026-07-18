@@ -1,7 +1,7 @@
 #version 450
 
 layout(location = 0) in vec2 v_uv;
-layout(location = 1) in float v_dist;
+layout(location = 1) in float v_edge;
 layout(location = 2) in vec3 v_world;
 
 layout(set = 0, binding = 0) uniform sampler2D grass;
@@ -9,13 +9,17 @@ layout(set = 0, binding = 1) uniform sampler2D paved;
 
 // Push layout (128 bytes, shared with VS). Unused .w slots carry pad target.
 //   camera_pos.w  = target pad world X
+//   fog_color.a   = plane_scale (VS)
+//   fog_params.x  = edge fog start ratio
+//   fog_params.y  = half_extent_world
+//   fog_params.z  = grass meters-per-tile
 //   fog_params.w  = paved meters-per-tile
 //   ground_origin.w = target pad world Z
 layout(push_constant) uniform PC {
     mat4 view_proj;
     vec4 camera_pos;
     vec4 fog_color;
-    vec4 fog_params; // x = fog_start, y = fog_end, z = grass_mpt, w = paved_mpt
+    vec4 fog_params;
     vec4 ground_origin;
 } pc;
 
@@ -93,13 +97,9 @@ void main() {
         lit = grass_col * meadow * shade;
     }
 
-    // Distance fog into the sky color hides the finite plane edge (no hard horizon line).
-    float fog = clamp(
-        (v_dist - pc.fog_params.x) / max(pc.fog_params.y - pc.fog_params.x, 1.0),
-        0.0,
-        1.0
-    );
-    // Smoothstep softens the last band so no linear “stripe” appears.
-    fog = fog * fog * (3.0 - 2.0 * fog);
+    // Edge fog hides the finite plane rim (circular fade); altitude-independent so
+    // the ground under the rocket stays visible from any height.
+    float edge_start = clamp(pc.fog_params.x, 0.0, 0.999);
+    float fog = smoothstep(edge_start, 1.0, v_edge);
     out_color = vec4(mix(lit, pc.fog_color.rgb, fog), 1.0);
 }

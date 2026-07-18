@@ -3,8 +3,9 @@
 use crate::explosion::explosion_fx_mesh;
 use crate::integration::Gui;
 use crate::mesh::{
-    FxVertex, GRASS_METERS_PER_TILE, GROUND_FOG_END, GROUND_FOG_START, GROUND_HALF_EXTENT,
-    GroundVertex, PAD_METERS_PER_TILE, TARGET_DISTANCE_M, Vertex, grass_ground_mesh, rocket_mesh,
+    CAMERA_NEAR, FxVertex, GRASS_METERS_PER_TILE, GROUND_EDGE_FOG_START, GROUND_HALF_EXTENT,
+    GroundVertex, PAD_METERS_PER_TILE, TARGET_DISTANCE_M, Vertex, camera_far_for_eye_height,
+    grass_ground_mesh, ground_half_extent_for_eye_height, ground_plane_scale, rocket_mesh,
 };
 use crate::sim::RocketState;
 use crate::texture::{Texture, create_grass_texture, create_paved_texture};
@@ -34,9 +35,10 @@ struct MeshPush {
     view_proj: [[f32; 4]; 4],
 }
 
-/// Ground push constants (128 bytes). Packed `.w` fields feed pad painting in FS:
+/// Ground push constants (128 bytes). Packed channels:
 /// - `camera_pos.w` = target pad world X
-/// - `fog_params` = fog_start, fog_end, grass_mpt, paved_mpt
+/// - `fog_color.a` = plane_scale (VS grows the local mesh at high altitude)
+/// - `fog_params` = edge_fog_start, half_extent_world, grass_mpt, paved_mpt
 /// - `ground_origin.w` = target pad world Z
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -431,14 +433,19 @@ impl Renderer {
             vb.device.cmd_set_scissor(cmd, 0, &[scissor]);
 
             // --- Ground plane (grass + paved pads + H/T painted in-shader) ---
+            // Scale + edge fog keep the disk visible under the rocket at any altitude
+            // while still hiding the finite rim into the sky color.
+            let plane_scale = ground_plane_scale(camera_eye.y);
+            let half_extent_world = ground_half_extent_for_eye_height(camera_eye.y);
             let gpc = GroundPush {
                 view_proj: view_proj.to_cols_array_2d(),
                 // .w = target pad X for fragment pad / T-mark tests.
                 camera_pos: [camera_eye.x, camera_eye.y, camera_eye.z, target_xz[0]],
-                fog_color: [clear[0], clear[1], clear[2], 1.0],
+                // .a = plane_scale for VS local XZ growth.
+                fog_color: [clear[0], clear[1], clear[2], plane_scale],
                 fog_params: [
-                    GROUND_FOG_START,
-                    GROUND_FOG_END,
+                    GROUND_EDGE_FOG_START,
+                    half_extent_world,
                     GRASS_METERS_PER_TILE,
                     PAD_METERS_PER_TILE,
                 ],
@@ -865,12 +872,17 @@ pub fn min_orbit_pitch(target_y: f32, distance: f32, min_eye_y: f32) -> f32 {
 
 /// Build look-at view-projection and return (view_proj, eye position).
 /// Eye is never placed below the ground plane.
+///
+/// `far` is the perspective far plane (meters). Callers should pass
+/// [`camera_far_for_eye_height`] for the expected eye height so the scaled
+/// ground disk is not clipped at high altitude.
 pub fn camera_view_proj(
     target: Vec3,
     yaw: f32,
     pitch: f32,
     distance: f32,
     aspect: f32,
+    far: f32,
 ) -> (Mat4, Vec3) {
     let max_pitch = 1.4;
     let min_pitch = min_orbit_pitch(target.y, distance, MIN_CAMERA_HEIGHT);
@@ -887,7 +899,20 @@ pub fn camera_view_proj(
     }
     let view = Mat4::look_at_rh(eye, target, Vec3::Y);
     // Vulkan NDC has +Y down; flip projection Y so world +Y appears up on screen.
-    let mut proj = Mat4::perspective_rh(45f32.to_radians(), aspect.max(0.1), 0.5, 4000.0);
+    let far = far.max(10.0);
+    let mut proj = Mat4::perspective_rh(45f32.to_radians(), aspect.max(0.1), CAMERA_NEAR, far);
     proj.y_axis.y *= -1.0;
     (proj * view, eye)
+}
+
+/// Estimate orbit eye height without building the full view matrix.
+pub fn estimate_orbit_eye_y(target_y: f32, pitch: f32, distance: f32) -> f32 {
+    let min_pitch = min_orbit_pitch(target_y, distance, MIN_CAMERA_HEIGHT);
+    let pitch = pitch.clamp(min_pitch, 1.4);
+    (target_y + distance * pitch.sin()).max(MIN_CAMERA_HEIGHT)
+}
+
+/// Far plane covering the altitude-scaled ground for the given orbit.
+pub fn orbit_camera_far(target_y: f32, pitch: f32, distance: f32) -> f32 {
+    camera_far_for_eye_height(estimate_orbit_eye_y(target_y, pitch, distance))
 }

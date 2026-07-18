@@ -27,13 +27,47 @@ pub struct GroundVertex {
     pub uv: [f32; 2],
 }
 
-/// Half-extent of the local grass plane (meters). Re-centered under the rocket each frame.
+/// Half-extent of the local grass plane mesh (meters). Re-centered under the rocket
+/// each frame; may be scaled in the vertex shader for high altitude (see
+/// [`ground_plane_scale`]).
 pub const GROUND_HALF_EXTENT: f32 = 1800.0;
 /// World meters covered by one grass texture tile (minecraft-like 1 m block).
 pub const GRASS_METERS_PER_TILE: f32 = 1.0;
-/// Fog distances (meters) — edge of the plane is fully fogged into the sky.
-pub const GROUND_FOG_START: f32 = 350.0;
-pub const GROUND_FOG_END: f32 = 1400.0;
+/// Edge-fog start as a fraction of the effective ground half-extent (horizontal).
+/// Fragments with radial distance / half_extent_world below this stay fully lit;
+/// the rim fades to sky so the finite plane has no hard horizon.
+pub const GROUND_EDGE_FOG_START: f32 = 0.72;
+/// How much the ground disk grows with camera eye height: half_extent ≥ eye_y × this.
+/// ~2.5 keeps a 45° FOV looking down mostly filled with terrain at high altitude.
+pub const GROUND_EXTENT_PER_EYE_Y: f32 = 2.5;
+/// Baseline far plane (meters) used near the pad / low flight.
+pub const CAMERA_FAR_BASE: f32 = 4000.0;
+/// Near plane (meters); keep small so the rocket stays sharp at orbit distance.
+pub const CAMERA_NEAR: f32 = 0.5;
+
+/// Effective world-space half-extent of the grass plane for a given eye height.
+/// Floors at [`GROUND_HALF_EXTENT`] so low-altitude looks unchanged.
+pub fn ground_half_extent_for_eye_height(eye_y: f32) -> f32 {
+    let h = eye_y.max(0.0);
+    GROUND_HALF_EXTENT.max(h * GROUND_EXTENT_PER_EYE_Y)
+}
+
+/// Vertex-shader scale applied to the local grass mesh so its world half-extent
+/// matches [`ground_half_extent_for_eye_height`].
+pub fn ground_plane_scale(eye_y: f32) -> f32 {
+    ground_half_extent_for_eye_height(eye_y) / GROUND_HALF_EXTENT
+}
+
+/// Perspective far plane that keeps the scaled ground disk inside the frustum.
+///
+/// Uses eye height + diagonal of the ground square (half_extent × √2) with margin.
+pub fn camera_far_for_eye_height(eye_y: f32) -> f32 {
+    let half = ground_half_extent_for_eye_height(eye_y);
+    let h = eye_y.max(0.0);
+    // Corner of the plane is √2 farther horizontally than the half-edge.
+    let slant = (h * h + 2.0 * half * half).sqrt();
+    CAMERA_FAR_BASE.max(slant * 1.15)
+}
 
 /// Half-extent of the launch / target pad square (meters) → 60 m side.
 /// Painted in `ground.frag` on the single grass plane (no separate pad mesh).
@@ -143,6 +177,40 @@ mod tests {
         assert!((LAUNCH_PAD_HALF_EXTENT - 30.0).abs() < 1e-6);
         assert!((TARGET_PAD_HALF_EXTENT - LAUNCH_PAD_HALF_EXTENT).abs() < 1e-6);
         assert!((PAD_METERS_PER_TILE - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ground_scale_is_one_near_the_pad() {
+        assert!((ground_plane_scale(0.0) - 1.0).abs() < 1e-6);
+        assert!((ground_plane_scale(100.0) - 1.0).abs() < 1e-6);
+        // Still under the floor: 1800 / 2.5 = 720 m eye height.
+        assert!((ground_plane_scale(700.0) - 1.0).abs() < 1e-6);
+        assert!((ground_half_extent_for_eye_height(50.0) - GROUND_HALF_EXTENT).abs() < 1e-3);
+    }
+
+    #[test]
+    fn ground_extent_grows_with_high_altitude() {
+        let half = ground_half_extent_for_eye_height(2000.0);
+        assert!(half > GROUND_HALF_EXTENT);
+        assert!((half - 2000.0 * GROUND_EXTENT_PER_EYE_Y).abs() < 1e-3);
+        assert!(ground_plane_scale(2000.0) > 1.0);
+        assert!(ground_plane_scale(5000.0) > ground_plane_scale(2000.0));
+    }
+
+    #[test]
+    fn camera_far_covers_high_altitude_ground() {
+        assert!((camera_far_for_eye_height(50.0) - CAMERA_FAR_BASE).abs() < 1e-3);
+        let far_hi = camera_far_for_eye_height(3000.0);
+        assert!(far_hi > CAMERA_FAR_BASE);
+        // Far must exceed the slant range to a ground-plane corner.
+        let half = ground_half_extent_for_eye_height(3000.0);
+        let slant = (3000.0f32 * 3000.0 + 2.0 * half * half).sqrt();
+        assert!(far_hi >= slant);
+    }
+
+    #[test]
+    fn edge_fog_start_is_inside_unit_interval() {
+        assert!(GROUND_EDGE_FOG_START > 0.0 && GROUND_EDGE_FOG_START < 1.0);
     }
 }
 

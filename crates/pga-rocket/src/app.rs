@@ -6,7 +6,7 @@ use crate::landing::LandingAutopilot;
 use crate::mesh::{GRASS_METERS_PER_TILE, hud_text, random_target_xz};
 use crate::target_landing::TargetLandingAutopilot;
 use crate::renderer::{
-    MIN_CAMERA_HEIGHT, Renderer, SKY_COLOR, camera_view_proj, min_orbit_pitch,
+    MIN_CAMERA_HEIGHT, Renderer, SKY_COLOR, camera_view_proj, min_orbit_pitch, orbit_camera_far,
 };
 use crate::sim::{ControlCommand, RocketState, step_rocket};
 use crate::ui::{ContentRegion, draw_params_panel};
@@ -238,12 +238,14 @@ impl App {
             size.height as f32,
             window.scale_factor() as f32,
         );
+        let far = orbit_camera_far(target.y, self.cam_pitch, self.cam_distance);
         let (vp, eye) = camera_view_proj(
             target,
             self.cam_yaw,
             self.cam_pitch,
             self.cam_distance,
             content.aspect,
+            far,
         );
         // Snap ground origin to the grass tile grid under the rocket so tiling stays stable.
         let tile = GRASS_METERS_PER_TILE;
