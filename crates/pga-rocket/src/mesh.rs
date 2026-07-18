@@ -35,25 +35,18 @@ pub const GRASS_METERS_PER_TILE: f32 = 1.0;
 pub const GROUND_FOG_START: f32 = 350.0;
 pub const GROUND_FOG_END: f32 = 1400.0;
 
-/// Half-extent of the fixed launch pad square at world origin (meters) → 60 m side.
+/// Half-extent of the launch / target pad square (meters) → 60 m side.
+/// Painted in `ground.frag` on the single grass plane (no separate pad mesh).
 pub const LAUNCH_PAD_HALF_EXTENT: f32 = 30.0;
-/// Slight lift above the grass plane so depth test prefers the pad (avoids z-fighting).
-pub const LAUNCH_PAD_Y: f32 = 0.02;
-/// World meters covered by one paved texture tile.
+/// World meters covered by one paved texture tile (ground.frag PAD_METERS_PER_TILE).
 pub const PAD_METERS_PER_TILE: f32 = 2.0;
 
 /// Horizontal range from launch origin to the random landing target (meters).
 pub const TARGET_DISTANCE_M: f32 = 500.0;
 /// Target pad uses the same half-extent as the launch pad.
 pub const TARGET_PAD_HALF_EXTENT: f32 = LAUNCH_PAD_HALF_EXTENT;
-/// Letter-mark height above the grass (slightly above the paved pad).
-pub const PAD_MARK_Y: f32 = 0.04;
-/// High-contrast paint color for pad letter marks (H / T).
+/// High-contrast paint color for pad letter marks (H / T) — must match ground.frag.
 pub const PAD_MARK_COLOR: [f32; 3] = [0.95, 0.82, 0.12];
-
-// Back-compat aliases used by older call sites / tests.
-pub const TARGET_MARK_Y: f32 = PAD_MARK_Y;
-pub const TARGET_MARK_COLOR: [f32; 3] = PAD_MARK_COLOR;
 
 /// Flat local-space grass plane on y = 0, lightly subdivided for depth stability.
 pub fn grass_ground_mesh(half_extent: f32, divisions: u32) -> (Vec<GroundVertex>, Vec<u32>) {
@@ -85,35 +78,6 @@ pub fn grass_ground_mesh(half_extent: f32, divisions: u32) -> (Vec<GroundVertex>
             idx.extend_from_slice(&[i0, i2, i1, i1, i2, i3]);
         }
     }
-    (verts, idx)
-}
-
-/// Square launch pad centered at local origin, slightly above y = 0.
-/// World placement is fixed at XZ origin via ground push constants (`ground_origin = 0`).
-pub fn launch_pad_mesh(half_extent: f32) -> (Vec<GroundVertex>, Vec<u32>) {
-    let h = half_extent;
-    let y = LAUNCH_PAD_Y;
-    let mpt = PAD_METERS_PER_TILE;
-    // CCW when viewed from +Y (sky). UV falls back if the VS does not recompute.
-    let verts = vec![
-        GroundVertex {
-            pos: [-h, y, -h],
-            uv: [-h / mpt, -h / mpt],
-        },
-        GroundVertex {
-            pos: [h, y, -h],
-            uv: [h / mpt, -h / mpt],
-        },
-        GroundVertex {
-            pos: [h, y, h],
-            uv: [h / mpt, h / mpt],
-        },
-        GroundVertex {
-            pos: [-h, y, h],
-            uv: [-h / mpt, h / mpt],
-        },
-    ];
-    let idx = vec![0, 1, 2, 0, 2, 3];
     (verts, idx)
 }
 
@@ -149,164 +113,9 @@ pub fn random_target_xz() -> [f32; 2] {
     target_xz_from_seed(nanos)
 }
 
-/// Axis-aligned quad on y = `y`, extents in world XZ, CCW from +Y.
-fn quad_xz(
-    verts: &mut Vec<Vertex>,
-    idx: &mut Vec<u32>,
-    cx: f32,
-    cz: f32,
-    half_x: f32,
-    half_z: f32,
-    y: f32,
-    color: [f32; 3],
-) {
-    let base = verts.len() as u32;
-    verts.extend_from_slice(&[
-        Vertex {
-            pos: [cx - half_x, y, cz - half_z],
-            color,
-        },
-        Vertex {
-            pos: [cx + half_x, y, cz - half_z],
-            color,
-        },
-        Vertex {
-            pos: [cx + half_x, y, cz + half_z],
-            color,
-        },
-        Vertex {
-            pos: [cx - half_x, y, cz + half_z],
-            color,
-        },
-    ]);
-    idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-}
-
-/// World-space yellow "H" mark centered on the home / launch pad (readable from above).
-///
-/// ```text
-/// ██    ██
-/// ██    ██
-/// ████████  ← crossbar
-/// ██    ██
-/// ██    ██
-/// ```
-pub fn home_h_mark_mesh(center_x: f32, center_z: f32) -> (Vec<Vertex>, Vec<u32>) {
-    let mut verts = Vec::with_capacity(12);
-    let mut idx = Vec::with_capacity(18);
-    let y = PAD_MARK_Y;
-    let col = PAD_MARK_COLOR;
-
-    let upright_half_x = 3.0;
-    let upright_half_z = 12.0;
-    let upright_offset_x = 9.0;
-    // Left upright.
-    quad_xz(
-        &mut verts,
-        &mut idx,
-        center_x - upright_offset_x,
-        center_z,
-        upright_half_x,
-        upright_half_z,
-        y,
-        col,
-    );
-    // Right upright.
-    quad_xz(
-        &mut verts,
-        &mut idx,
-        center_x + upright_offset_x,
-        center_z,
-        upright_half_x,
-        upright_half_z,
-        y,
-        col,
-    );
-    // Horizontal bar connecting the uprights.
-    let bar_half_x = upright_offset_x + upright_half_x;
-    let bar_half_z = 3.0;
-    quad_xz(
-        &mut verts,
-        &mut idx,
-        center_x,
-        center_z,
-        bar_half_x,
-        bar_half_z,
-        y,
-        col,
-    );
-
-    (verts, idx)
-}
-
-/// World-space yellow "T" mark centered on the target pad (readable from above).
-///
-/// ```text
-/// ████████  ← crossbar (+Z side)
-///    ██
-///    ██     ← stem
-///    ██
-/// ```
-pub fn target_t_mark_mesh(center_x: f32, center_z: f32) -> (Vec<Vertex>, Vec<u32>) {
-    let mut verts = Vec::with_capacity(8);
-    let mut idx = Vec::with_capacity(12);
-    let y = PAD_MARK_Y;
-    let col = PAD_MARK_COLOR;
-
-    // Stem: tall along Z, narrow along X.
-    let stem_half_x = 3.0;
-    let stem_half_z = 11.0;
-    let stem_cz = center_z - 2.0;
-    quad_xz(
-        &mut verts,
-        &mut idx,
-        center_x,
-        stem_cz,
-        stem_half_x,
-        stem_half_z,
-        y,
-        col,
-    );
-
-    // Crossbar on the +Z end of the stem (top of the T).
-    let bar_half_x = 12.0;
-    let bar_half_z = 3.0;
-    let stem_z_max = stem_cz + stem_half_z;
-    let bar_cz = stem_z_max - bar_half_z;
-    quad_xz(
-        &mut verts,
-        &mut idx,
-        center_x,
-        bar_cz,
-        bar_half_x,
-        bar_half_z,
-        y,
-        col,
-    );
-
-    (verts, idx)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn launch_pad_mesh_is_square_above_ground() {
-        let half = 30.0;
-        let (verts, idx) = launch_pad_mesh(half);
-        assert_eq!(verts.len(), 4);
-        assert_eq!(idx, [0, 1, 2, 0, 2, 3]);
-        for v in &verts {
-            assert!((v.pos[1] - LAUNCH_PAD_Y).abs() < 1e-6);
-            assert!((v.pos[0].abs() - half).abs() < 1e-6);
-            assert!((v.pos[2].abs() - half).abs() < 1e-6);
-        }
-        let xs: Vec<_> = verts.iter().map(|v| v.pos[0]).collect();
-        let zs: Vec<_> = verts.iter().map(|v| v.pos[2]).collect();
-        assert!(xs.contains(&-half) && xs.contains(&half));
-        assert!(zs.contains(&-half) && zs.contains(&half));
-    }
 
     #[test]
     fn target_from_seed_is_at_fixed_range() {
@@ -329,30 +138,11 @@ mod tests {
     }
 
     #[test]
-    fn t_mark_mesh_sits_on_target() {
-        let cx = 100.0;
-        let cz = -200.0;
-        let (verts, idx) = target_t_mark_mesh(cx, cz);
-        assert!(!verts.is_empty());
-        assert_eq!(idx.len() % 3, 0);
-        assert!(!idx.is_empty());
-        for v in &verts {
-            assert!((v.pos[1] - PAD_MARK_Y).abs() < 1e-6);
-            assert!((v.pos[0] - cx).abs() < 20.0);
-            assert!((v.pos[2] - cz).abs() < 20.0);
-        }
-    }
-
-    #[test]
-    fn h_mark_mesh_sits_on_home() {
-        let (verts, idx) = home_h_mark_mesh(0.0, 0.0);
-        assert_eq!(verts.len(), 12);
-        assert_eq!(idx.len(), 18);
-        for v in &verts {
-            assert!((v.pos[1] - PAD_MARK_Y).abs() < 1e-6);
-            assert!(v.pos[0].abs() < 20.0);
-            assert!(v.pos[2].abs() < 20.0);
-        }
+    fn pad_half_extent_matches_shader_constant() {
+        // ground.frag uses PAD_HALF = 30.0; keep Rust and GLSL in lockstep.
+        assert!((LAUNCH_PAD_HALF_EXTENT - 30.0).abs() < 1e-6);
+        assert!((TARGET_PAD_HALF_EXTENT - LAUNCH_PAD_HALF_EXTENT).abs() < 1e-6);
+        assert!((PAD_METERS_PER_TILE - 2.0).abs() < 1e-6);
     }
 }
 

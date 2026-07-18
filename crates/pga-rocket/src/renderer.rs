@@ -1,11 +1,10 @@
-//! Colored rocket mesh + textured grass ground + launch / target pads.
+//! Colored rocket mesh + textured grass ground with in-plane launch / target pads.
 
 use crate::explosion::explosion_fx_mesh;
 use crate::integration::Gui;
 use crate::mesh::{
     FxVertex, GRASS_METERS_PER_TILE, GROUND_FOG_END, GROUND_FOG_START, GROUND_HALF_EXTENT,
-    GroundVertex, LAUNCH_PAD_HALF_EXTENT, PAD_METERS_PER_TILE, TARGET_DISTANCE_M, Vertex,
-    grass_ground_mesh, home_h_mark_mesh, launch_pad_mesh, rocket_mesh, target_t_mark_mesh,
+    GroundVertex, PAD_METERS_PER_TILE, TARGET_DISTANCE_M, Vertex, grass_ground_mesh, rocket_mesh,
 };
 use crate::sim::RocketState;
 use crate::texture::{Texture, create_grass_texture, create_paved_texture};
@@ -35,6 +34,10 @@ struct MeshPush {
     view_proj: [[f32; 4]; 4],
 }
 
+/// Ground push constants (128 bytes). Packed `.w` fields feed pad painting in FS:
+/// - `camera_pos.w` = target pad world X
+/// - `fog_params` = fog_start, fog_end, grass_mpt, paved_mpt
+/// - `ground_origin.w` = target pad world Z
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GroundPush {
@@ -67,13 +70,10 @@ pub struct Renderer {
     paved: Texture,
     desc_set_layout: vk::DescriptorSetLayout,
     desc_pool: vk::DescriptorPool,
+    /// Grass (binding 0) + paved (binding 1) for the single ground plane.
     desc_set: vk::DescriptorSet,
-    pad_desc_set: vk::DescriptorSet,
     ground: Option<GpuMesh>,
-    pad: Option<GpuMesh>,
-    home_mark: Option<GpuMesh>,
-    target_mark: Option<GpuMesh>,
-    /// World XZ of the random landing target (pad + T mark).
+    /// World XZ of the random landing target (painted in ground.frag).
     target_xz: [f32; 2],
     rocket: Option<GpuMesh>,
     fx: Option<GpuMesh>,
@@ -127,12 +127,18 @@ impl Renderer {
         let grass = create_grass_texture(vb, &allocator);
         let paved = create_paved_texture(vb, &allocator);
 
-        let binding = vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
-        let bindings = [binding];
+        let bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        ];
         let dsl_ci = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         let desc_set_layout =
             unsafe { device.create_descriptor_set_layout(&dsl_ci, None) }.unwrap();
@@ -144,15 +150,14 @@ impl Renderer {
         let pool_sizes = [pool_size];
         let pool_ci = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(2);
+            .max_sets(1);
         let desc_pool = unsafe { device.create_descriptor_pool(&pool_ci, None) }.unwrap();
-        let set_layouts = [desc_set_layout, desc_set_layout];
+        let set_layouts = [desc_set_layout];
         let alloc_ci = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(desc_pool)
             .set_layouts(&set_layouts);
         let sets = unsafe { device.allocate_descriptor_sets(&alloc_ci) }.unwrap();
         let desc_set = sets[0];
-        let pad_desc_set = sets[1];
 
         let grass_info = [vk::DescriptorImageInfo {
             sampler: grass.sampler,
@@ -171,8 +176,8 @@ impl Renderer {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(&grass_info),
             vk::WriteDescriptorSet::default()
-                .dst_set(pad_desc_set)
-                .dst_binding(0)
+                .dst_set(desc_set)
+                .dst_binding(1)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(&paved_info),
         ];
@@ -208,11 +213,7 @@ impl Renderer {
             desc_set_layout,
             desc_pool,
             desc_set,
-            pad_desc_set,
             ground: None,
-            pad: None,
-            home_mark: None,
-            target_mark: None,
             target_xz: [TARGET_DISTANCE_M, 0.0],
             rocket: None,
             fx: None,
@@ -221,30 +222,17 @@ impl Renderer {
             last_hud: String::new(),
         };
 
-        // Local grass plane; recentered under the rocket each frame via push constants.
+        // Single grass plane; pads + H/T are painted in ground.frag (no coplanar meshes).
         let (gverts, gidx) = grass_ground_mesh(GROUND_HALF_EXTENT, 32);
         renderer.ground = Some(renderer.upload_ground(&gverts, &gidx));
-        // Fixed launch pad at world XZ origin (spawn / pad rest pose).
-        let (pverts, pidx) = launch_pad_mesh(LAUNCH_PAD_HALF_EXTENT);
-        renderer.pad = Some(renderer.upload_ground(&pverts, &pidx));
-        // Home "H" mark at launch origin (fixed for the session).
-        let (hverts, hidx) = home_h_mark_mesh(0.0, 0.0);
-        renderer.home_mark = Some(renderer.upload_mesh(&hverts, &hidx));
         // Default target on +X; App overwrites with a random bearing at startup / reset.
         renderer.set_target_xz([TARGET_DISTANCE_M, 0.0]);
         renderer
     }
 
-    /// Rebuild the painted T mark for a new target location (pad is placed via push constants).
+    /// Update the landing-target XZ used by ground.frag pad / T-mark painting.
     pub fn set_target_xz(&mut self, xz: [f32; 2]) {
         self.target_xz = xz;
-        if let Some(old) = self.target_mark.take() {
-            self.retire_mesh(old);
-        }
-        let (verts, idx) = target_t_mark_mesh(xz[0], xz[1]);
-        if !idx.is_empty() {
-            self.target_mark = Some(self.upload_mesh(&verts, &idx));
-        }
     }
 
     pub fn target_xz(&self) -> [f32; 2] {
@@ -447,23 +435,24 @@ impl Renderer {
             vb.device.cmd_set_viewport(cmd, 0, &[viewport]);
             vb.device.cmd_set_scissor(cmd, 0, &[scissor]);
 
-            // --- Grass ground ---
+            // --- Ground plane (grass + paved pads + H/T painted in-shader) ---
             let gpc = GroundPush {
                 view_proj: view_proj.to_cols_array_2d(),
-                camera_pos: [camera_eye.x, camera_eye.y, camera_eye.z, 0.0],
+                // .w = target pad X for fragment pad / T-mark tests.
+                camera_pos: [camera_eye.x, camera_eye.y, camera_eye.z, target_xz[0]],
                 fog_color: [clear[0], clear[1], clear[2], 1.0],
                 fog_params: [
                     GROUND_FOG_START,
                     GROUND_FOG_END,
                     GRASS_METERS_PER_TILE,
-                    0.0,
+                    PAD_METERS_PER_TILE,
                 ],
-                // Snap to tile grid so UV does not crawl when recentering.
+                // x/z snap the grass plane; .w = target pad Z (FS only).
                 ground_origin: [
                     ground_center_xz[0],
                     0.0,
                     ground_center_xz[1],
-                    0.0,
+                    target_xz[1],
                 ],
             };
             vb.device
@@ -487,59 +476,7 @@ impl Renderer {
                 draw_mesh(&vb.device, cmd, mesh);
             }
 
-            // --- Launch pad (fixed at world origin, slightly above grass) ---
-            let pad_fog = [
-                GROUND_FOG_START,
-                GROUND_FOG_END,
-                PAD_METERS_PER_TILE,
-                0.0,
-            ];
-            let ppc = GroundPush {
-                view_proj: view_proj.to_cols_array_2d(),
-                camera_pos: [camera_eye.x, camera_eye.y, camera_eye.z, 0.0],
-                fog_color: [clear[0], clear[1], clear[2], 1.0],
-                fog_params: pad_fog,
-                ground_origin: [0.0, 0.0, 0.0, 0.0],
-            };
-            vb.device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.ground_layout,
-                0,
-                &[self.pad_desc_set],
-                &[],
-            );
-            vb.device.cmd_push_constants(
-                cmd,
-                self.ground_layout,
-                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                0,
-                bytemuck::bytes_of(&ppc),
-            );
-            if let Some(mesh) = &self.pad {
-                draw_mesh(&vb.device, cmd, mesh);
-            }
-
-            // --- Target pad (same mesh, translated via push constants) ---
-            let tpc = GroundPush {
-                view_proj: view_proj.to_cols_array_2d(),
-                camera_pos: [camera_eye.x, camera_eye.y, camera_eye.z, 0.0],
-                fog_color: [clear[0], clear[1], clear[2], 1.0],
-                fog_params: pad_fog,
-                ground_origin: [target_xz[0], 0.0, target_xz[1], 0.0],
-            };
-            vb.device.cmd_push_constants(
-                cmd,
-                self.ground_layout,
-                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                0,
-                bytemuck::bytes_of(&tpc),
-            );
-            if let Some(mesh) = &self.pad {
-                draw_mesh(&vb.device, cmd, mesh);
-            }
-
-            // --- Home H + target T + rocket (colored mesh pipeline) ---
+            // --- Rocket (colored mesh pipeline) ---
             let mpc = MeshPush {
                 view_proj: view_proj.to_cols_array_2d(),
             };
@@ -552,12 +489,6 @@ impl Renderer {
                 0,
                 bytemuck::bytes_of(&mpc),
             );
-            if let Some(mesh) = &self.home_mark {
-                draw_mesh(&vb.device, cmd, mesh);
-            }
-            if let Some(mesh) = &self.target_mark {
-                draw_mesh(&vb.device, cmd, mesh);
-            }
             if let Some(mesh) = &self.rocket {
                 draw_mesh(&vb.device, cmd, mesh);
             }
@@ -602,14 +533,7 @@ impl Drop for Renderer {
         for (_, buf) in self.retired.drain(..) {
             buf.destroy(&self.device, &self.allocator);
         }
-        for mesh in [
-            &mut self.ground,
-            &mut self.pad,
-            &mut self.home_mark,
-            &mut self.target_mark,
-            &mut self.rocket,
-            &mut self.fx,
-        ] {
+        for mesh in [&mut self.ground, &mut self.rocket, &mut self.fx] {
             if let Some(m) = mesh.take() {
                 m.vertex.destroy(&self.device, &self.allocator);
                 m.index.destroy(&self.device, &self.allocator);
