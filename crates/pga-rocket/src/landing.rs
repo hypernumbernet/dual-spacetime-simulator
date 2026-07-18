@@ -18,7 +18,10 @@ use crate::sim::{ControlCommand, GRAVITY, RocketState};
 /// takes over. Must sit above the deepest commanded lean to avoid limit cycles.
 const TILT_AIM: f64 = 1.05;
 /// Above this tilt the burn envelope tracks the lowest hull probe, not the feet.
-const TILT_PROBE: f64 = 0.30;
+/// With the legs 16.4 m below CoM at 5.66 m diagonal radius, the feet stay the
+/// lowest structure up to ~1.75 rad, so the 39-probe scan is pure overhead below
+/// this and only pays off in the flip regime.
+const TILT_PROBE: f64 = 1.2;
 /// Hysteresis for the HUD "locked" latch (rad / rad/s / m/s).
 const TILT_LOCK: f64 = 0.08;
 const TILT_UNLOCK: f64 = 0.14;
@@ -34,6 +37,8 @@ const OMEGA_PHASE: f64 = 0.12;
 /// at 8°. cos(LEAN_MAX) must stay above UPY_AUTH so support thrust keeps flowing.
 const LAT_TILT_GAIN: f64 = 0.06;
 const LEAN_MAX: f64 = 1.0;
+/// Extra lean allowed while hovering off a drift just above the pad (rad).
+const LEAN_PAD_EXTRA_MAX: f64 = 0.35;
 /// Bang brake only fights real descent; slower falls belong to the soft law.
 const V_BRAKE_MIN: f64 = 1.5;
 /// Do not settle onto the pad while drifting faster than this (m/s); hover and
@@ -139,6 +144,8 @@ impl LandingAutopilot {
         let mass = state.params.mass;
         let max_thrust = state.params.max_thrust;
         let hover = mass * GRAVITY / max_thrust;
+        // World-frame lift acceleration available at planned burn throttle (per up_y).
+        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
 
         // One PGA sandwich transport: world +Y → body (tilt cos + uprighting cross).
         let up_body = world_up_in_body(&state.motor);
@@ -164,10 +171,12 @@ impl LandingAutopilot {
         let (axis, angle) = if tilt > TILT_AIM {
             axis_angle_from_cross([up_body[2], 0.0, -up_body[0]], up_y)
         } else {
-            // With altitude in hand, allow a deeper anti-velocity lean so the
-            // burn kills horizontal drift as fast as it kills descent — but never
-            // lean past the attitude whose vertical thrust share still brakes the
-            // current fall inside the remaining altitude.
+            // Allowed lean cone about world-up (all lean policy lives here):
+            // - altitude in hand: deeper anti-velocity lean kills drift fast, but
+            //   never past the attitude whose vertical thrust share still brakes
+            //   the current fall inside the remaining altitude;
+            // - hovering off a drift near the pad: moderately deeper lean;
+            // - otherwise: the small touchdown trim cone.
             let lat_tilt = if h > H_TERMINAL + 2.0 {
                 let a_req = if v_down > V_TOUCH {
                     1.15 * (v_down * v_down - V_TOUCH * V_TOUCH)
@@ -175,11 +184,12 @@ impl LandingAutopilot {
                 } else {
                     0.0
                 };
-                let upy_req = ((a_req + GRAVITY) * mass / (BURN_PLAN_FRAC * max_thrust))
-                    .clamp(0.0, 0.98);
+                let upy_req = ((a_req + GRAVITY) / a_lift).clamp(0.0, 0.98);
                 (self.max_lat_tilt + LAT_TILT_GAIN * vh)
                     .min(LEAN_MAX)
                     .min(upy_req.acos())
+            } else if h > 1.0 && vy > -1.5 && vh > VH_TOUCH {
+                self.max_lat_tilt + (LAT_TILT_GAIN * vh).min(LEAN_PAD_EXTRA_MAX)
             } else {
                 self.max_lat_tilt
             };
@@ -235,12 +245,10 @@ impl LandingAutopilot {
 
         // Max net upward accel along world +Y at planned burn throttle with the
         // *current* attitude (lift ≈ T·up_y). Pessimistic while tilted ⇒ brakes early.
-        let a_brake = ((BURN_PLAN_FRAC * max_thrust / mass) * up_y.max(0.0) - GRAVITY).max(0.5);
+        let a_brake = (a_lift * up_y.max(0.0) - GRAVITY).max(0.5);
         // Lateral kinetic energy ≈ needs a little extra altitude while we tilt-brake.
         let h_lat = (vh * vh) / (2.0 * a_brake.max(1.0) + 4.0 * GRAVITY);
         let h_need = burn_height(vy, a_brake, V_TOUCH) + H_BURN_MARGIN + T_REACT * v_down + h_lat;
-
-        let (h_gate, need_gate) = (h_env, h_need);
 
         // Gimbal torque needs thrust. Severely tilted: throttle tracks the rate
         // error so spin-up/spin-down get full torque, while the coasting middle of
@@ -261,7 +269,7 @@ impl LandingAutopilot {
         let throttle = if state.contacting && vh > VH_TOUCH {
             // Skidding on the pad: thrust while tilted becomes a rocket sled.
             // Keep weight on the feet and let Coulomb friction stop the slide.
-            (hover_cmd * 0.55).max(t_auth * 0.5)
+            hover_cmd * 0.55
         } else if soft_regime {
             soft_touch_throttle(
                 hover_cmd,
@@ -279,10 +287,10 @@ impl LandingAutopilot {
             // we do not dig a hole; with plenty of altitude in hand, coast instead.
             // During a deliberate lean this is the vertical-neutral kill burn:
             // hover/up_y keeps altitude while the lateral component eats drift.
-            let leaning = tilt > 0.12;
+            let leaning = tilt > ERR_PHASE;
             let t_support = if (attitude_busy || leaning)
                 && up_y >= UPY_AUTH
-                && h_gate <= need_gate + 12.0
+                && h_env <= h_need + 12.0
             {
                 let lo = hover_cmd * 0.92;
                 let hi = (hover_cmd * 1.25).min(1.0);
@@ -295,8 +303,7 @@ impl LandingAutopilot {
             };
             // Bang-coast-bang: above the curve → free-fall; on/under → hard brake.
             // Only fights genuine descent; margins alone must never cause a loft.
-            let t_brake = if up_y >= UPY_BRAKE && v_down > V_BRAKE_MIN && h_gate <= need_gate + 0.75
-            {
+            let t_brake = if up_y >= UPY_BRAKE && v_down > V_BRAKE_MIN && h_env <= h_need + 0.75 {
                 BURN_PLAN_FRAC + (v_down - V_TOUCH).max(0.0) * 0.015
             } else {
                 0.0
@@ -398,34 +405,23 @@ fn soft_touch_throttle(
     t
 }
 
+/// Desired thrust axis inside the allowed lean cone `lat_tilt` (policy for the
+/// cone size lives in `update`). Near the pad or nearly at rest: upright with a
+/// small drift-kill trim. Otherwise: anti-velocity for the braking burn.
 fn desired_thrust_axis_world(
     vx: f64,
     vy: f64,
     vz: f64,
     h: f64,
     k_lat: f64,
-    max_lat_tilt: f64,
+    lat_tilt: f64,
 ) -> [f64; 3] {
-    // Near the pad: stay upright and bleed lateral speed with a small tilt.
-    // While hovering off a drift (not descending) allow a moderately deeper
-    // lean so the kill does not take tens of seconds.
-    if h < H_TERMINAL + 2.0 {
-        let vh = (vx * vx + vz * vz).sqrt();
-        let lat = if h > 1.0 && vy > -1.5 && vh > VH_TOUCH {
-            max_lat_tilt + (0.06 * vh).min(0.35)
-        } else {
-            max_lat_tilt
-        };
-        return clamp_tilt([-k_lat * vx, 1.0, -k_lat * vz], lat);
-    }
-    // Higher up: aim body +Y against the velocity vector (PGA sandwich maps this
-    // into attitude error), clamped to the allowed lean cone about world-up.
     let v_down = (-vy).max(0.0);
-    let speed = (vx * vx + v_down * v_down + vz * vz).sqrt();
-    if speed < 0.4 {
-        return clamp_tilt([-k_lat * vx, 1.0, -k_lat * vz], max_lat_tilt);
+    let speed_sq = vx * vx + v_down * v_down + vz * vz;
+    if h < H_TERMINAL + 2.0 || speed_sq < 0.16 {
+        return clamp_tilt([-k_lat * vx, 1.0, -k_lat * vz], lat_tilt);
     }
-    clamp_tilt([-vx, v_down, -vz], max_lat_tilt)
+    clamp_tilt([-vx, v_down, -vz], lat_tilt)
 }
 
 /// Normalize `v` and limit its angle from +Y to `max_tilt` (uses cos test, no acos).

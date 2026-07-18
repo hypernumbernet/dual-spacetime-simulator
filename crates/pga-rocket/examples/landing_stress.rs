@@ -20,6 +20,10 @@ struct Scenario {
 
 fn main() {
     let trace_name = std::env::args().nth(1);
+    if trace_name.as_deref() == Some("--bench") {
+        bench_update();
+        return;
+    }
     let scenarios = vec![
         Scenario { name: "upright_low", alt: 22.0, pitch: 0.0, yaw: 0.0, roll: 0.0, vel: [0.0, -0.8, 0.0], omega: [0.0; 3] },
         Scenario { name: "tilt35_60m", alt: 60.0, pitch: 0.35, yaw: 0.0, roll: 0.0, vel: [0.0, 0.0, 0.0], omega: [0.0; 3] },
@@ -102,4 +106,29 @@ fn main() {
         );
     }
     println!("\n{} / {} scenarios failed", fails, scenarios.len());
+}
+
+/// Micro-benchmark of `LandingAutopilot::update` in three attitude regimes.
+fn bench_update() {
+    let cases = [
+        ("upright ", 0.0),
+        ("lean 0.6", 0.6),
+        ("flip 2.5", 2.5),
+    ];
+    for (name, pitch) in cases {
+        let mut state = RocketState::at_altitude(80.0);
+        state.motor = motor_from_pose(0.0, 80.0, 0.0, pitch, 0.0, 0.0);
+        state.velocity = [3.0, -10.0, 2.0];
+        state.contacting = false;
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        let n = 200_000u32;
+        let mut acc = 0.0;
+        let start = std::time::Instant::now();
+        for _ in 0..n {
+            acc += ap.update(&state, 1.0 / 120.0).throttle;
+        }
+        let ns = start.elapsed().as_nanos() as f64 / n as f64;
+        println!("{name}  {ns:7.0} ns/update  (checksum {acc:.1})");
+    }
 }
