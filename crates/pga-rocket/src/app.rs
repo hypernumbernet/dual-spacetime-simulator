@@ -9,7 +9,7 @@ use crate::renderer::{
     MIN_CAMERA_HEIGHT, Renderer, SKY_COLOR, camera_view_proj, min_orbit_pitch,
 };
 use crate::sim::{ControlCommand, RocketState, step_rocket};
-use crate::ui::draw_params_panel;
+use crate::ui::{draw_params_panel, panel_inset_px};
 use ash::vk;
 use glam::Vec3;
 use std::ffi::CString;
@@ -231,7 +231,11 @@ impl App {
         // Keep orbit pitch above the ground plane (eye.y >= MIN_CAMERA_HEIGHT).
         let pitch_floor = min_orbit_pitch(target.y, self.cam_distance, MIN_CAMERA_HEIGHT);
         self.cam_pitch = self.cam_pitch.clamp(pitch_floor, 1.2);
-        let aspect = size.width as f32 / size.height.max(1) as f32;
+        // Aspect and viewport use the region right of the left panel so the
+        // look-at target is centered in the visible 3D drawing area.
+        let left_inset = panel_inset_px(window.scale_factor() as f32, size.width as f32);
+        let content_w = (size.width as f32 - left_inset).max(1.0);
+        let aspect = content_w / size.height.max(1) as f32;
         let (vp, eye) = camera_view_proj(
             target,
             self.cam_yaw,
@@ -290,7 +294,8 @@ impl App {
         renderer.sync_rocket(&self.rocket, eye);
         renderer.set_hud(hud);
 
-        let draw_result = renderer.draw(vb, vp, eye, ground_xz, target_xz, SKY_COLOR, gui);
+        let draw_result =
+            renderer.draw(vb, vp, eye, ground_xz, target_xz, SKY_COLOR, left_inset, gui);
         // Free egui textures even when the swapchain is out of date.
         gui.finish_frame();
         match draw_result {

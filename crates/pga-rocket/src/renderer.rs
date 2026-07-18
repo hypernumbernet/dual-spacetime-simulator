@@ -369,6 +369,11 @@ impl Renderer {
         self.retired = keep;
     }
 
+    /// Draw the 3D scene and egui overlay.
+    ///
+    /// `left_inset_px` shifts the 3D viewport/scissor to the right (physical pixels)
+    /// so the projection center lands in the middle of the remaining content region
+    /// beside the left UI panel. egui resets viewport for its own pass.
     pub fn draw(
         &mut self,
         vb: &mut VulkanBase,
@@ -377,6 +382,7 @@ impl Renderer {
         ground_center_xz: [f32; 2],
         target_xz: [f32; 2],
         clear: [f32; 4],
+        left_inset_px: f32,
         gui: &mut Gui,
     ) -> Result<(), vk::Result> {
         vb.wait_for_fence();
@@ -420,17 +426,29 @@ impl Renderer {
                 .cmd_begin_render_pass(cmd, &rp_info, vk::SubpassContents::INLINE);
 
             let extent = vb.swapchain_extent;
+            // Inset the 3D view by the left panel so the frustum center matches
+            // the visible drawing region (panel occupies [0, left_inset_px)).
+            let inset_i = left_inset_px
+                .round()
+                .clamp(0.0, (extent.width.saturating_sub(1)) as f32) as i32;
+            let content_w = (extent.width as i32 - inset_i).max(1) as u32;
             let viewport = vk::Viewport {
-                x: 0.0,
+                x: inset_i as f32,
                 y: 0.0,
-                width: extent.width as f32,
+                width: content_w as f32,
                 height: extent.height as f32,
                 min_depth: 0.0,
                 max_depth: 1.0,
             };
             let scissor = vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent,
+                offset: vk::Offset2D {
+                    x: inset_i,
+                    y: 0,
+                },
+                extent: vk::Extent2D {
+                    width: content_w,
+                    height: extent.height,
+                },
             };
             vb.device.cmd_set_viewport(cmd, 0, &[viewport]);
             vb.device.cmd_set_scissor(cmd, 0, &[scissor]);

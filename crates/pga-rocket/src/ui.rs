@@ -9,6 +9,15 @@ use egui::{RichText, ScrollArea};
 /// 70% of the previous 280 pt so more of the 3D view stays visible.
 pub const PANEL_WIDTH: f32 = 196.0;
 
+/// Physical-pixel width of the left panel for a given DPI scale and framebuffer width.
+///
+/// Used to inset the 3D viewport so the look-at target sits in the center of the
+/// remaining drawing region (not under the panel).
+pub fn panel_inset_px(scale_factor: f32, framebuffer_width: f32) -> f32 {
+    let max_inset = (framebuffer_width - 1.0).max(0.0);
+    (PANEL_WIDTH * scale_factor.max(0.0)).clamp(0.0, max_inset)
+}
+
 /// Draws the left docked parameter panel with live simulation telemetry.
 pub fn draw_params_panel(
     ctx: &egui::Context,
