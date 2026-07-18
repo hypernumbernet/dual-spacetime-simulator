@@ -371,9 +371,9 @@ impl Renderer {
 
     /// Draw the 3D scene and egui overlay.
     ///
-    /// `left_inset_px` shifts the 3D viewport/scissor to the right (physical pixels)
-    /// so the projection center lands in the middle of the remaining content region
-    /// beside the left UI panel. egui resets viewport for its own pass.
+    /// `left_inset_px` is the physical-pixel width of the left UI panel; the 3D
+    /// viewport/scissor are shifted so the frustum center matches the remaining
+    /// content region. egui sets its own full-window viewport afterward.
     pub fn draw(
         &mut self,
         vb: &mut VulkanBase,
@@ -425,31 +425,8 @@ impl Renderer {
             vb.device
                 .cmd_begin_render_pass(cmd, &rp_info, vk::SubpassContents::INLINE);
 
-            let extent = vb.swapchain_extent;
-            // Inset the 3D view by the left panel so the frustum center matches
-            // the visible drawing region (panel occupies [0, left_inset_px)).
-            let inset_i = left_inset_px
-                .round()
-                .clamp(0.0, (extent.width.saturating_sub(1)) as f32) as i32;
-            let content_w = (extent.width as i32 - inset_i).max(1) as u32;
-            let viewport = vk::Viewport {
-                x: inset_i as f32,
-                y: 0.0,
-                width: content_w as f32,
-                height: extent.height as f32,
-                min_depth: 0.0,
-                max_depth: 1.0,
-            };
-            let scissor = vk::Rect2D {
-                offset: vk::Offset2D {
-                    x: inset_i,
-                    y: 0,
-                },
-                extent: vk::Extent2D {
-                    width: content_w,
-                    height: extent.height,
-                },
-            };
+            let (viewport, scissor) =
+                content_viewport_scissor(vb.swapchain_extent, left_inset_px);
             vb.device.cmd_set_viewport(cmd, 0, &[viewport]);
             vb.device.cmd_set_scissor(cmd, 0, &[scissor]);
 
@@ -526,7 +503,7 @@ impl Renderer {
             }
 
             // egui overlay (same subpass, alpha-blended by egui-ash-renderer).
-            gui.draw(cmd, extent);
+            gui.draw(cmd, vb.swapchain_extent);
 
             vb.device.cmd_end_render_pass(cmd);
             vb.device.end_command_buffer(cmd).unwrap();
@@ -841,6 +818,36 @@ fn create_graphics_pipeline(
         device.destroy_shader_module(frag, None);
     }
     pipelines[0]
+}
+
+/// Viewport + scissor for the 3D content region to the right of a left UI panel.
+fn content_viewport_scissor(
+    extent: vk::Extent2D,
+    left_inset_px: f32,
+) -> (vk::Viewport, vk::Rect2D) {
+    let inset_i = left_inset_px
+        .round()
+        .clamp(0.0, extent.width.saturating_sub(1) as f32) as i32;
+    let content_w = (extent.width as i32 - inset_i).max(1) as u32;
+    let viewport = vk::Viewport {
+        x: inset_i as f32,
+        y: 0.0,
+        width: content_w as f32,
+        height: extent.height as f32,
+        min_depth: 0.0,
+        max_depth: 1.0,
+    };
+    let scissor = vk::Rect2D {
+        offset: vk::Offset2D {
+            x: inset_i,
+            y: 0,
+        },
+        extent: vk::Extent2D {
+            width: content_w,
+            height: extent.height,
+        },
+    };
+    (viewport, scissor)
 }
 
 /// Minimum camera eye height above the ground plane (y = 0).
