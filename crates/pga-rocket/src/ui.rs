@@ -16,6 +16,7 @@ pub fn draw_params_panel(
     cam_yaw: f32,
     cam_pitch: f32,
     cam_distance: f32,
+    target_xz: [f32; 2],
 ) {
     egui::SidePanel::left("params")
         .exact_width(PANEL_WIDTH)
@@ -27,7 +28,7 @@ pub fn draw_params_panel(
             ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    flight_section(ui, rocket);
+                    flight_section(ui, rocket, target_xz);
                     ui.separator();
                     control_section(ui, rocket, landing);
                     ui.separator();
@@ -40,15 +41,20 @@ pub fn draw_params_panel(
         });
 }
 
-fn flight_section(ui: &mut egui::Ui, rocket: &RocketState) {
+fn flight_section(ui: &mut egui::Ui, rocket: &RocketState, target_xz: [f32; 2]) {
     ui.label(RichText::new("Flight").strong());
     let p = rocket.position();
     let v = rocket.velocity;
     let w = rocket.omega;
+    let range = ((p[0] as f32 - target_xz[0]).powi(2) + (p[2] as f32 - target_xz[1]).powi(2))
+        .sqrt();
     kv(ui, "Altitude", format!("{:.2} m", p[1]));
     kv(ui, "CoM X", format!("{:.2} m", p[0]));
     kv(ui, "CoM Y", format!("{:.2} m", p[1]));
     kv(ui, "CoM Z", format!("{:.2} m", p[2]));
+    kv(ui, "Target X", format!("{:.1} m", target_xz[0]));
+    kv(ui, "Target Z", format!("{:.1} m", target_xz[1]));
+    kv(ui, "Range", format!("{:.1} m", range));
     kv(ui, "Vel X", format!("{:.2} m/s", v[0]));
     kv(ui, "Vel Y", format!("{:.2} m/s", v[1]));
     kv(ui, "Vel Z", format!("{:.2} m/s", v[2]));

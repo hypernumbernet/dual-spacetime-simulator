@@ -1,4 +1,4 @@
-//! Procedural grass tile (minecraft-clone style) and Vulkan upload.
+//! Procedural ground tiles (minecraft-clone style) and Vulkan upload.
 
 use ash::vk;
 use gpu_allocator::MemoryLocation;
@@ -6,7 +6,7 @@ use gpu_allocator::vulkan::Allocator;
 use std::sync::Mutex;
 use vulkanvil::{AllocatedBuffer, AllocatedImage, VulkanBase};
 
-/// Grass tile resolution (pixels). Matches minecraft-clone block tiles.
+/// Grass / paved tile resolution (pixels). Matches minecraft-clone block tiles.
 pub const GRASS_TILE_PX: u32 = 16;
 
 pub struct Texture {
@@ -60,9 +60,49 @@ pub fn generate_grass_pixels() -> Vec<u8> {
     px
 }
 
+/// Generates a 16×16 RGBA8 concrete / paved tile with subtle mortar grid lines.
+pub fn generate_paved_pixels() -> Vec<u8> {
+    let base = [0.52, 0.52, 0.50];
+    let mortar = [0.38, 0.38, 0.36];
+    let mut px = vec![0u8; (GRASS_TILE_PX * GRASS_TILE_PX * 4) as usize];
+    for y in 0..GRASS_TILE_PX {
+        for x in 0..GRASS_TILE_PX {
+            let edge = x == 0 || y == 0 || x + 1 == GRASS_TILE_PX || y + 1 == GRASS_TILE_PX;
+            let d = jitter(x, y, 7, 0.06);
+            // Sparse darker flecks for cast-concrete grit.
+            let grit = if (h(x, y, 11) & 31) == 0 { -0.05 } else { 0.0 };
+            let c = if edge { mortar } else { base };
+            let rgb = [
+                (c[0] + d + grit).clamp(0.0, 1.0),
+                (c[1] + d + grit).clamp(0.0, 1.0),
+                (c[2] + d + grit * 0.8).clamp(0.0, 1.0),
+            ];
+            let i = ((y * GRASS_TILE_PX + x) * 4) as usize;
+            px[i] = (rgb[0] * 255.0) as u8;
+            px[i + 1] = (rgb[1] * 255.0) as u8;
+            px[i + 2] = (rgb[2] * 255.0) as u8;
+            px[i + 3] = 255;
+        }
+    }
+    px
+}
+
 /// Uploads the grass tile with a REPEAT + NEAREST sampler (pixel-art tiling).
 pub fn create_grass_texture(vb: &VulkanBase, allocator: &Mutex<Allocator>) -> Texture {
-    let pixels = generate_grass_pixels();
+    upload_rgba8_tile(vb, allocator, &generate_grass_pixels(), "grass")
+}
+
+/// Uploads the paved / concrete tile with a REPEAT + NEAREST sampler.
+pub fn create_paved_texture(vb: &VulkanBase, allocator: &Mutex<Allocator>) -> Texture {
+    upload_rgba8_tile(vb, allocator, &generate_paved_pixels(), "paved")
+}
+
+fn upload_rgba8_tile(
+    vb: &VulkanBase,
+    allocator: &Mutex<Allocator>,
+    pixels: &[u8],
+    label: &str,
+) -> Texture {
     let width = GRASS_TILE_PX;
     let height = GRASS_TILE_PX;
     let device = &vb.device;
@@ -73,7 +113,7 @@ pub fn create_grass_texture(vb: &VulkanBase, allocator: &Mutex<Allocator>) -> Te
         pixels.len() as u64,
         vk::BufferUsageFlags::TRANSFER_SRC,
         MemoryLocation::CpuToGpu,
-        "grass-staging",
+        &format!("{label}-staging"),
     );
     if let Some(ref alloc) = staging.allocation
         && let Some(mapped) = alloc.mapped_ptr()
@@ -95,7 +135,7 @@ pub fn create_grass_texture(vb: &VulkanBase, allocator: &Mutex<Allocator>) -> Te
         vk::Format::R8G8B8A8_UNORM,
         vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
         vk::ImageAspectFlags::COLOR,
-        "grass",
+        label,
     );
 
     let alloc_ci = vk::CommandBufferAllocateInfo::default()
@@ -198,7 +238,7 @@ pub fn create_grass_texture(vb: &VulkanBase, allocator: &Mutex<Allocator>) -> Te
     }
     staging.destroy(device, allocator);
 
-    // NEAREST + REPEAT: minecraft-style pixel grass that tiles forever.
+    // NEAREST + REPEAT: minecraft-style pixel tiles that tile forever.
     let sampler_ci = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::NEAREST)
         .min_filter(vk::Filter::NEAREST)

@@ -3,7 +3,7 @@
 use crate::control::{ControlMapper, KeySnapshot};
 use crate::integration::Gui;
 use crate::landing::LandingAutopilot;
-use crate::mesh::{GRASS_METERS_PER_TILE, hud_text};
+use crate::mesh::{GRASS_METERS_PER_TILE, hud_text, random_target_xz};
 use crate::renderer::{
     MIN_CAMERA_HEIGHT, Renderer, SKY_COLOR, camera_view_proj, min_orbit_pitch,
 };
@@ -56,6 +56,8 @@ pub struct App {
     scroll_zoom: f32,
     /// Earliest time the next rendered frame may start (60 FPS pacing).
     next_frame_at: Instant,
+    /// Random landing target on a ~500 m ring around the launch pad (world XZ).
+    target_xz: [f32; 2],
 }
 
 impl Default for App {
@@ -82,6 +84,7 @@ impl Default for App {
             drag_delta: (0.0, 0.0),
             scroll_zoom: 0.0,
             next_frame_at: Instant::now(),
+            target_xz: random_target_xz(),
         }
     }
 }
@@ -184,6 +187,10 @@ impl App {
             self.rocket = RocketState::resting_on_pad();
             self.control = ControlMapper::default();
             self.landing.disable();
+            self.target_xz = random_target_xz();
+            if let Some(renderer) = self.renderer.as_mut() {
+                renderer.set_target_xz(self.target_xz);
+            }
         }
 
         let cmd = if self.rocket.destroyed {
@@ -229,6 +236,7 @@ impl App {
         let cam_yaw = self.cam_yaw;
         let cam_pitch = self.cam_pitch;
         let cam_distance = self.cam_distance;
+        let target_xz = self.target_xz;
 
         let (Some(vb), Some(renderer), Some(gui)) = (
             self.vulkan_base.as_mut(),
@@ -255,6 +263,7 @@ impl App {
                 cam_yaw,
                 cam_pitch,
                 cam_distance,
+                target_xz,
             );
         });
         gui.prepare_frame(&window);
@@ -262,7 +271,7 @@ impl App {
         renderer.sync_rocket(&self.rocket, eye);
         renderer.set_hud(hud);
 
-        let draw_result = renderer.draw(vb, vp, eye, ground_xz, SKY_COLOR, gui);
+        let draw_result = renderer.draw(vb, vp, eye, ground_xz, target_xz, SKY_COLOR, gui);
         // Free egui textures even when the swapchain is out of date.
         gui.finish_frame();
         match draw_result {
@@ -298,6 +307,7 @@ impl ApplicationHandler for App {
             vk::make_api_version(0, 0, 1, 0),
         );
         let mut renderer = Renderer::new(&vb);
+        renderer.set_target_xz(self.target_xz);
         // No camera yet; the eye only sorts explosion FX, which is empty at startup.
         renderer.sync_rocket(&self.rocket, Vec3::new(0.0, 30.0, 80.0));
 
