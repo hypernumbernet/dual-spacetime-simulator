@@ -6,7 +6,8 @@ use crate::target_landing::TargetLandingAutopilot;
 use egui::{RichText, ScrollArea};
 
 /// Fixed width of the left parameter panel (logical points).
-pub const PANEL_WIDTH: f32 = 280.0;
+/// 70% of the previous 280 pt so more of the 3D view stays visible.
+pub const PANEL_WIDTH: f32 = 196.0;
 
 /// Draws the left docked parameter panel with live simulation telemetry.
 pub fn draw_params_panel(
@@ -50,7 +51,7 @@ fn flight_section(ui: &mut egui::Ui, rocket: &RocketState, target_xz: [f32; 2]) 
     let w = rocket.omega;
     let range = ((p[0] as f32 - target_xz[0]).powi(2) + (p[2] as f32 - target_xz[1]).powi(2))
         .sqrt();
-    kv(ui, "Altitude", format!("{:.2} m", p[1]));
+    kv(ui, "Alt", format!("{:.2} m", p[1]));
     kv(ui, "CoM X", format!("{:.2} m", p[0]));
     kv(ui, "CoM Y", format!("{:.2} m", p[1]));
     kv(ui, "CoM Z", format!("{:.2} m", p[2]));
@@ -67,27 +68,19 @@ fn flight_section(ui: &mut egui::Ui, rocket: &RocketState, target_xz: [f32; 2]) 
         ui,
         "Contact",
         if rocket.destroyed {
-            format!("DESTROYED ({:.1} m/s impact)", rocket.last_impact_speed)
+            format!("DESTROYED\n{:.1} m/s", rocket.last_impact_speed)
         } else if rocket.contacting {
             if rocket.body_contacting {
-                "YES (body)".to_string()
+                "yes body".to_string()
             } else {
-                "YES (feet)".to_string()
+                "yes feet".to_string()
             }
         } else {
             "no".to_string()
         },
     );
-    kv(
-        ui,
-        "Lowest foot Y",
-        format!("{:.2} m", rocket.lowest_foot_y()),
-    );
-    kv(
-        ui,
-        "Lowest probe Y",
-        format!("{:.2} m", rocket.lowest_probe_y()),
-    );
+    kv(ui, "Foot Y", format!("{:.2} m", rocket.lowest_foot_y()));
+    kv(ui, "Probe Y", format!("{:.2} m", rocket.lowest_probe_y()));
 }
 
 fn control_section(
@@ -97,16 +90,8 @@ fn control_section(
     target_landing: &TargetLandingAutopilot,
 ) {
     ui.label(RichText::new("Control").strong());
-    kv(
-        ui,
-        "Auto-land (L)",
-        landing.status_label().to_string(),
-    );
-    kv(
-        ui,
-        "Target-land (T)",
-        target_landing.status_label().to_string(),
-    );
+    kv(ui, "Land (L)", landing.status_label().to_string());
+    kv(ui, "Target (T)", target_landing.status_label().to_string());
     let cmd = rocket.command;
     let thrust = rocket.thrust_newtons();
     let weight = rocket.params.mass * GRAVITY;
@@ -121,7 +106,7 @@ fn control_section(
     kv(
         ui,
         "Gimbal",
-        format!("{:.1}° / {:.1}°", gp.to_degrees(), gy.to_degrees()),
+        format!("{:.1}°/{:.1}°", gp.to_degrees(), gy.to_degrees()),
     );
     kv(ui, "Thrust", format!("{:.0} N", thrust));
     kv(
@@ -134,47 +119,43 @@ fn control_section(
         ui,
         "Eng τ",
         format!(
-            "{:.0}, {:.0}, {:.0}",
+            "{:.0},{:.0},{:.0}",
             eng.torque[0], eng.torque[1], eng.torque[2]
         ),
     );
-    kv(
-        ui,
-        "RCS τ_y",
-        format!("{:.0} N·m", rcs.torque[1]),
-    );
+    kv(ui, "RCS τ_y", format!("{:.0} N·m", rcs.torque[1]));
 }
 
 fn vehicle_section(ui: &mut egui::Ui, rocket: &RocketState) {
     ui.label(RichText::new("Vehicle").strong());
     let p = &rocket.params;
     kv(ui, "Mass", format!("{:.0} kg", p.mass));
-    kv(ui, "Body half-H", format!("{:.2} m", p.body_half_height));
-    kv(ui, "Body radius", format!("{:.2} m", p.body_radius));
-    kv(ui, "Nozzle len", format!("{:.2} m", p.nozzle_length));
-    kv(ui, "Leg clear", format!("{:.2} m", p.leg_clearance));
+    kv(ui, "Half-H", format!("{:.2} m", p.body_half_height));
+    kv(ui, "Radius", format!("{:.2} m", p.body_radius));
+    kv(ui, "Nozzle", format!("{:.2} m", p.nozzle_length));
+    kv(ui, "Leg clr", format!("{:.2} m", p.leg_clearance));
     kv(
         ui,
         "Inertia",
         format!(
-            "{:.0}, {:.0}, {:.0}",
+            "{:.0},{:.0},{:.0}",
             p.inertia[0], p.inertia[1], p.inertia[2]
         ),
     );
     kv(
         ui,
-        "Max gimbal",
+        "Max gimb",
         format!("{:.1}°", p.max_gimbal_angle.to_degrees()),
     );
-    kv(ui, "Nozzle exit Y", format!("{:.2} m", p.nozzle_exit_y()));
-    kv(ui, "RCS thrust", format!("{:.0} N / thruster", p.rcs_thrust));
+    kv(ui, "Exit Y", format!("{:.2} m", p.nozzle_exit_y()));
+    kv(ui, "RCS thr", format!("{:.0} N/ea", p.rcs_thrust));
     kv(ui, "RCS radius", format!("{:.2} m", p.rcs_radius));
     kv(ui, "Contact k", format!("{:.0}", p.contact_stiffness));
     kv(ui, "Contact c", format!("{:.0}", p.contact_damping));
     kv(ui, "Foot μ", format!("{:.2}", p.friction_mu));
     kv(ui, "Body μ", format!("{:.2}", p.body_friction_mu));
-    kv(ui, "Restitution", format!("{:.2}", p.restitution));
-    kv(ui, "Crash speed", format!("{:.1} m/s", p.crash_impact_speed));
+    kv(ui, "Restit.", format!("{:.2}", p.restitution));
+    kv(ui, "Crash v", format!("{:.1} m/s", p.crash_impact_speed));
     kv(ui, "Slip eps", format!("{:.3} m/s", p.friction_slip_eps));
 }
 
@@ -185,7 +166,7 @@ fn camera_section(
     cam_pitch: f32,
     cam_distance: f32,
 ) {
-    ui.label(RichText::new("Camera / Perf").strong());
+    ui.label(RichText::new("Camera").strong());
     kv(ui, "FPS", format!("{:.0}", fps));
     kv(ui, "Yaw", format!("{:.2} rad", cam_yaw));
     kv(ui, "Pitch", format!("{:.2} rad", cam_pitch));
@@ -195,23 +176,58 @@ fn camera_section(
 fn help_section(ui: &mut egui::Ui) {
     ui.label(RichText::new("Controls").strong());
     ui.label("Space / Ctrl: throttle");
-    ui.label("W/S: pitch gimbal (needs thrust)");
-    ui.label("Q/E: yaw gimbal (needs thrust)");
-    ui.label("A/D: roll RCS thrusters");
-    ui.label("L: auto-land toggle");
+    ui.label("W/S: pitch (needs thr)");
+    ui.label("Q/E: yaw (needs thr)");
+    ui.label("A/D: roll RCS");
+    ui.label("L: auto-land");
     ui.label("T: land at T mark");
     ui.label("R: reset");
     ui.label("LMB/RMB drag: orbit");
-    ui.label("Wheel / PgUp-Dn: zoom");
-    ui.label("Arrows: orbit   Esc: quit");
+    ui.label("Wheel/PgUp-Dn: zoom");
+    ui.label("Arrows: orbit · Esc: quit");
 }
 
-/// Label + monospace value on one row.
+/// Label + monospace value: one row when it fits, otherwise value on the next line.
 fn kv(ui: &mut egui::Ui, key: &str, value: String) {
-    ui.horizontal(|ui| {
+    if value.contains('\n') {
         ui.label(key);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        for line in value.lines() {
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.monospace(line);
+            });
+        }
+        return;
+    }
+
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let value_width = ui
+        .painter()
+        .layout_no_wrap(value.clone(), mono, egui::Color32::WHITE)
+        .size()
+        .x;
+    let key_width = ui
+        .painter()
+        .layout_no_wrap(key.to_owned(), body, egui::Color32::WHITE)
+        .size()
+        .x;
+    // Reserve a small gap between label and value.
+    let gap = 6.0;
+    let fits_one_line = key_width + gap + value_width <= ui.available_width();
+
+    if fits_one_line {
+        ui.horizontal(|ui| {
+            ui.label(key);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.monospace(value);
+            });
+        });
+    } else {
+        ui.label(key);
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
             ui.monospace(value);
         });
-    });
+    }
 }
