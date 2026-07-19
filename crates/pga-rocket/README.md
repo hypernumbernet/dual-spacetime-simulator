@@ -223,9 +223,11 @@ X' = M X M~      (M~ は反転 reverse)
    - 距離フロアにより、高速で 3 km まで寄っても ballistic thr カット／直立ストレッチに
      落ちず、airplane 法を維持する。
 
-2.5. **ターミナル settle（Cruise→Descend 手渡し前、`range ≤ 100 m`）**
+2.5. **ターミナル settle（Cruise→Descend 手渡し前、~90–140 m 肩）**
    - **アーム条件は離散 AND のまま**（高度 ≥480 m、Chebyshev ≤10 m、`vh` ≤4.0 m/s、
      `ω_py` ≤0.12 rad/s、`up_y` ≥0.95）。安全ゲート自体はソフト化しない。
+   - 進入は ~90 m、退出は ~140 m のヒステリシス。包絡内の motion/lean は
+     [`careful_aggression(range)`](src/fuzzy.rs) で距離連続スケール（近い→0.40、遠い→1.0）。
    - その手前の settle 制御は [`HandoffSettlePlan`](src/target_landing.rs) で
      **クリアまでの残り時間**を物理予測:
      - `t_att`: 現 tilt → hand-off tilt（√-profile 反転時間 + レート減速）

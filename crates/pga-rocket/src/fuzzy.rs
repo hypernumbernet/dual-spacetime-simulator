@@ -632,6 +632,58 @@ pub fn cruise_brake_weight(delta_v: f64, v_brake_enter: f64, v_brake_exit: f64) 
     ramp(delta_v, lo, hi)
 }
 
+// --- T-cruise careful envelope (Cruise→Descend hand-off approach) -----------
+
+/// Nominal careful-envelope centre (~legacy 100 m gate).
+pub const CAREFUL_RANGE_M: f64 = 100.0;
+/// Range (m) where motion/lean aggression is at its minimum (most cautious).
+pub const CAREFUL_NEAR_M: f64 = 40.0;
+/// Range (m) where aggression reaches full cruise boldness.
+pub const CAREFUL_FAR_M: f64 = 160.0;
+/// Minimum motion/lean scale inside the careful envelope.
+pub const CAREFUL_AGGRESSION_MIN: f64 = 0.40;
+/// Full cruise aggression outside the far shoulder.
+pub const CAREFUL_AGGRESSION_MAX: f64 = 1.0;
+/// Enter terminal settle when range drops below this (m).
+pub const CAREFUL_TERMINAL_ENTER_M: f64 = 90.0;
+/// Exit terminal settle when range exceeds this (m) — hysteresis vs enter.
+pub const CAREFUL_TERMINAL_EXIT_M: f64 = 140.0;
+
+/// Continuous motion/lean scale: closer → cautious, farther → bold.
+///
+/// Maps `[CAREFUL_NEAR_M, CAREFUL_FAR_M]` → `[MIN, MAX]` via a soft ramp shoulder.
+#[inline]
+pub fn careful_aggression(range_m: f64) -> f64 {
+    let mu = ramp(range_m, CAREFUL_NEAR_M, CAREFUL_FAR_M);
+    CAREFUL_AGGRESSION_MIN + (CAREFUL_AGGRESSION_MAX - CAREFUL_AGGRESSION_MIN) * mu
+}
+
+/// Membership in the careful envelope (1 near pad, 0 beyond far shoulder).
+///
+/// Complement of the aggression ramp — kept in sync via [`careful_aggression`].
+#[inline]
+pub fn careful_envelope_membership(range_m: f64) -> f64 {
+    (CAREFUL_AGGRESSION_MAX - careful_aggression(range_m))
+        / (CAREFUL_AGGRESSION_MAX - CAREFUL_AGGRESSION_MIN)
+}
+
+/// Hysteresis latch for the terminal settle envelope (enter ~90 m, exit ~140 m).
+#[inline]
+pub fn careful_terminal_latch(
+    latched: bool,
+    range_m: f64,
+    cheby_m: f64,
+    lofted: bool,
+    high_pad_pass: bool,
+    cheby_exit_m: f64,
+) -> bool {
+    if latched {
+        range_m <= CAREFUL_TERMINAL_EXIT_M || cheby_m <= cheby_exit_m
+    } else {
+        lofted && range_m <= CAREFUL_TERMINAL_ENTER_M && !high_pad_pass
+    }
+}
+
 // --- Long-range full-throttle altitude-hold cruise ---------------------------
 
 /// Horizontal range (m) where soft long-range membership is 0.5.
@@ -1015,6 +1067,26 @@ mod tests {
         let len = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
         assert!((len - 1.0).abs() < 1e-9, "len={len}");
         assert!(a[0] > 0.5 && a[1] > 0.4);
+    }
+
+    #[test]
+    fn careful_aggression_monotone() {
+        let a = careful_aggression(20.0);
+        let b = careful_aggression(80.0);
+        let c = careful_aggression(160.0);
+        let d = careful_aggression(300.0);
+        assert!((a - CAREFUL_AGGRESSION_MIN).abs() < 1e-9);
+        assert!(a < b && b < c);
+        assert!((c - CAREFUL_AGGRESSION_MAX).abs() < 1e-9);
+        assert!((d - CAREFUL_AGGRESSION_MAX).abs() < 1e-9);
+    }
+
+    #[test]
+    fn careful_envelope_membership_shoulder() {
+        assert!(careful_envelope_membership(20.0) > 0.99);
+        assert!(careful_envelope_membership(200.0) < 0.01);
+        let mid = careful_envelope_membership(CAREFUL_RANGE_M);
+        assert!(mid > 0.4 && mid < 0.7, "mid={mid}");
     }
 }
 

@@ -8,15 +8,19 @@
 //! **Airplane range (≳ 1.5 km):** full throttle toward T while outside the
 //! predicted stop distance; altitude is pitch only (`long_range_hold_cos` /
 //! `long_range_go_aim`). Hold ~800 m. Same stop-distance gate hands off to
-//! reverse lean. Inside ~100 m: sequenced terminal settle (Brake → Upright → Trim)
-//! drives lean and throttle until hard AND gates arm Descend via
-//! [`LandingAutopilot::update_target_descend`] (physics closed-loop suicide burn).
+//! reverse lean. Inside the careful envelope (~90–140 m shoulder): sequenced
+//! terminal settle (Brake → Upright → Trim) drives lean and throttle until hard
+//! AND gates arm Descend via [`LandingAutopilot::update_target_descend`]
+//! (physics closed-loop suicide burn).
 //!
 //! Attitude: PGA inverse sandwich (`motor_inverse_rotate_vector` /
 //! `world_up_in_body`), desired thrust `clamp_tilt`-ed into the lean cone.
 
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
-use crate::fuzzy::{long_range_go_aim, long_range_hold_cos, long_range_weight, LONG_CRUISE_ALT_M};
+use crate::fuzzy::{
+    careful_aggression, careful_terminal_latch, long_range_go_aim, long_range_hold_cos,
+    long_range_weight, ramp, ramp_down, CAREFUL_NEAR_M, CAREFUL_RANGE_M, LONG_CRUISE_ALT_M,
+};
 use crate::landing::{
     axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_target_success_square, saturate,
     LandingAutopilot, PAD_HALF_M,
@@ -44,21 +48,19 @@ const COS_TILT_HANDOFF: f64 = 0.95;
 /// Hand-off AND gates must hold this long (s) before arming Descend — kills
 /// one-frame chatter at the pad edge.
 const HANDOFF_SETTLE_MIN_S: f64 = 0.40;
+/// Chebyshev (m) within which near-handoff altitude gate applies.
+const NEAR_HANDOFF_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M + 20.0;
+/// Chebyshev (m) beyond which terminal latch may release on range exit.
+const TERMINAL_EXIT_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M + 35.0;
 
 // --- Terminal settle (Brake → Upright → Trim) --------------------------------
-/// Last metres of approach: sequenced settle + careful creep / shallow lean.
-const CAREFUL_RANGE_M: f64 = 100.0;
-/// Alias used as the cruise→terminal gate (same envelope).
-const RANGE_TERMINAL_M: f64 = CAREFUL_RANGE_M;
-/// Motion/lean scale inside the careful envelope (1.0 = full prior aggression).
-const CAREFUL_AGGRESSION: f64 = 0.40;
 /// Upright attitude must hold this long (s) before terminal position trim.
 const UPRIGHT_STABLE_MIN_S: f64 = 0.45;
 /// Max pitch/yaw rate (rad/s) allowed before leaving Upright for Trim.
 const OMEGA_TRIM_ENTER: f64 = OMEGA_HANDOFF_MAX * 0.50;
 /// Inside this Chebyshev (m) with quiet vh, Trim holds upright (no chase).
 const TRIM_DEADZONE_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M * 0.60;
-// Unscaled bases; runtime values multiply by [`CAREFUL_AGGRESSION`].
+// Unscaled bases; runtime values multiply by distance-dependent aggression.
 const TRIM_LEAN_CAP_BASE: f64 = 0.055;
 const TRIM_LEAN_NEAR_BASE: f64 = 0.025;
 const TRIM_V_CREEP_PER_M_BASE: f64 = 0.035;
@@ -114,50 +116,67 @@ const OMEGA_RATE_KILL: f64 = 0.80;
 const AIM_Y_BIAS: f64 = 1.0;
 
 #[inline]
-fn careful(x: f64) -> f64 {
-    x * CAREFUL_AGGRESSION
+fn careful(x: f64, aggression: f64) -> f64 {
+    x * aggression
+}
+
+/// Pad approach: latched terminal envelope or already over the pad box.
+#[inline]
+fn near_handoff_zone(terminal_latched: bool, cheby: f64) -> bool {
+    terminal_latched || cheby <= NEAR_HANDOFF_CHEBY_M
+}
+
+/// Loft gate cleared, or near-handoff with soft altitude floor.
+#[inline]
+fn transit_lofted(alt: f64, near_handoff: bool) -> bool {
+    alt >= GATE_ALT_MIN || (near_handoff && alt >= GATE_ALT_MIN - 40.0)
+}
+
+/// Blend pad-near curve with outer Chebyshev shoulder (creep / v-cap shared).
+#[inline]
+fn cheby_near_pad_blend(cheby: f64, pad_near: f64, outer: f64) -> f64 {
+    let mu_pad = ramp_down(cheby, 12.0, 22.0);
+    mu_pad * pad_near + (1.0 - mu_pad) * outer
+}
+
+/// Continuous creep-speed cap vs Chebyshev offset (closer → slower).
+#[inline]
+fn cheby_creep_cap(cheby: f64) -> f64 {
+    let pad_near = (0.10 + 0.05 * cheby).min(0.85);
+    let outer = 0.60 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 0.65;
+    cheby_near_pad_blend(cheby, pad_near, outer)
+}
+
+/// Continuous speed ceiling base vs Chebyshev offset (closer → slower).
+#[inline]
+fn cheby_v_cap_base(cheby: f64) -> f64 {
+    let pad_near = (0.10 + 0.05 * cheby).min(0.85);
+    let outer = 1.05 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 0.50;
+    cheby_near_pad_blend(cheby, pad_near, outer)
 }
 
 /// Horizontal creep speed (m/s) for Trim / careful `v_allow`.
 #[inline]
-fn trim_creep_speed(cheby: f64) -> f64 {
-    let mut v = (careful(TRIM_V_CREEP_PER_M_BASE) * cheby).clamp(
-        careful(TRIM_V_CREEP_MIN_BASE),
-        careful(TRIM_V_CREEP_MAX_BASE),
+fn trim_creep_speed(cheby: f64, aggression: f64) -> f64 {
+    let mut v = (careful(TRIM_V_CREEP_PER_M_BASE, aggression) * cheby).clamp(
+        careful(TRIM_V_CREEP_MIN_BASE, aggression),
+        careful(TRIM_V_CREEP_MAX_BASE, aggression),
     );
-    // Piecewise caps: closer → slower (already aggression-scaled).
-    let cap = if cheby <= HANDOFF_CHEBY_MAX_M {
-        0.40
-    } else if cheby <= 25.0 {
-        0.60
-    } else if cheby <= 50.0 {
-        0.90
-    } else {
-        1.25
-    };
-    v = v.min(careful(cap));
+    v = v.min(careful(cheby_creep_cap(cheby), aggression));
     v
 }
 
 /// Soft speed ceiling (m/s) while inside the careful / terminal envelope.
 #[inline]
-fn terminal_v_cap(cheby: f64) -> f64 {
-    careful(if cheby <= HANDOFF_CHEBY_MAX_M {
-        (0.10 + 0.05 * cheby).min(0.85)
-    } else if cheby <= 25.0 {
-        1.05
-    } else if cheby <= 50.0 {
-        1.25
-    } else {
-        1.55
-    })
+fn terminal_v_cap(cheby: f64, aggression: f64) -> f64 {
+    careful(cheby_v_cap_base(cheby), aggression)
 }
 
 /// Brake lean cap: mild demand stays shallow; hard demand can still open fully.
 #[inline]
-fn careful_brake_lean_cap(soft: f64, demand_shaped: f64) -> f64 {
+fn careful_brake_lean_cap(soft: f64, demand_shaped: f64, aggression: f64) -> f64 {
     let open = (demand_shaped * demand_shaped).clamp(0.0, 1.0);
-    let hi_frac = CAREFUL_AGGRESSION + (1.0 - CAREFUL_AGGRESSION) * open;
+    let hi_frac = aggression + (1.0 - aggression) * open;
     soft + open * (LEAN_BRAKE_MAX * hi_frac - soft).max(0.0)
 }
 
@@ -174,7 +193,7 @@ pub enum TargetPhase {
     Descend,
 }
 
-/// Sub-phase within cruise terminal settle (~100 m careful range): brake → upright → trim.
+/// Sub-phase within cruise terminal settle (careful envelope): brake → upright → trim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum TerminalSettlePhase {
     /// Reverse lean to kill horizontal speed / overshoot.
@@ -196,6 +215,8 @@ pub struct TargetLandingAutopilot {
     lander: LandingAutopilot,
     /// Latched reverse-lean brake (hysteresis) — kills go↔brake sway.
     brake_latched: bool,
+    /// Terminal settle envelope latch (enter ~90 m, exit ~140 m).
+    terminal_latched: bool,
     /// Terminal-pad brake blend latch (separate from mid-range [`brake_latched`]).
     terminal_brake_latched: bool,
     /// Seconds the hand-off AND gates have been continuously satisfied.
@@ -217,6 +238,7 @@ impl Default for TargetLandingAutopilot {
             phase: TargetPhase::Climb,
             lander: LandingAutopilot::for_target_pad(),
             brake_latched: false,
+            terminal_latched: false,
             terminal_brake_latched: false,
             handoff_settle_s: 0.0,
             terminal_settle_phase: TerminalSettlePhase::Brake,
@@ -237,6 +259,7 @@ impl TargetLandingAutopilot {
 
     fn reset_transit_latches(&mut self) {
         self.brake_latched = false;
+        self.terminal_latched = false;
         self.mpc_hold = TransitCandidate::CruiseGo;
         self.mpc_hold_counter = MPC_REPLAN_EVERY;
         self.reset_terminal_settle();
@@ -300,14 +323,28 @@ impl TargetLandingAutopilot {
         let pos = state.position();
         let alt = pos[1];
         let cheby = chebyshev_xz(pos, target_xz);
+        let dx = target_xz[0] - pos[0];
+        let dz = target_xz[1] - pos[2];
+        let range = (dx * dx + dz * dz).sqrt();
+        let high_pad_pass = cheby <= HANDOFF_CHEBY_MAX_M && alt > CRUISE_ALT_CAP + 20.0;
 
-        // HUD phase only — both use the same transit controller.
         if self.phase != TargetPhase::Descend {
-            let dx = target_xz[0] - pos[0];
-            let dz = target_xz[1] - pos[2];
-            let range = (dx * dx + dz * dz).sqrt();
-            let near_handoff = range <= RANGE_TERMINAL_M
-                || cheby <= HANDOFF_CHEBY_MAX_M + 20.0;
+            let was_terminal = self.terminal_latched;
+            let near_handoff = near_handoff_zone(self.terminal_latched, cheby);
+            self.terminal_latched = careful_terminal_latch(
+                self.terminal_latched,
+                range,
+                cheby,
+                transit_lofted(alt, near_handoff),
+                high_pad_pass,
+                TERMINAL_EXIT_CHEBY_M,
+            );
+            if was_terminal && !self.terminal_latched {
+                self.reset_terminal_settle();
+            }
+
+            // HUD phase only — both use the same transit controller.
+            let near_handoff = near_handoff_zone(self.terminal_latched, cheby);
             // Do not drop back to Climb (full-T re-loft) while settling over the pad.
             let gate = if near_handoff {
                 GATE_ALT_MIN - 40.0
@@ -352,13 +389,6 @@ impl TargetLandingAutopilot {
             self.reset_terminal_settle();
         }
 
-        let dx = target_xz[0] - pos[0];
-        let dz = target_xz[1] - pos[2];
-        let range = (dx * dx + dz * dz).sqrt();
-        if range > RANGE_TERMINAL_M + 15.0 && cheby > HANDOFF_CHEBY_MAX_M + 35.0 {
-            self.reset_terminal_settle();
-        }
-
         match self.phase {
             TargetPhase::Climb | TargetPhase::Cruise => {
                 let (cmd, brake, terminal_brake, settle_phase, upright_s, mpc_hold, mpc_counter) =
@@ -367,6 +397,7 @@ impl TargetLandingAutopilot {
                         target_xz,
                         pos,
                         self.brake_latched,
+                        self.terminal_latched,
                         self.terminal_brake_latched,
                         self.terminal_settle_phase,
                         self.upright_stable_s,
@@ -1602,6 +1633,7 @@ fn terminal_brake_aim(
     max_thrust: f64,
     brake_mode: LateralThrMode,
     brake_w: f64,
+    aggression: f64,
 ) -> ([f64; 3], f64) {
     let pos_urgency = (hp.t_pos / 3.0).clamp(0.0, 1.0);
     let vh_urgency = (hp.t_vh / 3.0).clamp(0.0, 1.0);
@@ -1651,17 +1683,19 @@ fn terminal_brake_aim(
     };
 
     // Terminal settle is always inside the careful envelope.
-    let soft0 = careful(0.05);
-    let soft = (soft0 + careful(0.004) * cheby).clamp(soft0, careful(CAREFUL_BRAKE_LEAN_SOFT_BASE));
-    let lean_cap = careful_brake_lean_cap(soft, demand_shaped);
-    let a_scale = careful(0.12 + 0.55 * demand_shaped);
-    let a_cmd = (a_lat.max(overshoot_boost) * a_scale).max(careful(0.05) * demand_shaped);
+    let soft0 = careful(0.05, aggression);
+    let soft = (soft0 + careful(0.004, aggression) * cheby)
+        .clamp(soft0, careful(CAREFUL_BRAKE_LEAN_SOFT_BASE, aggression));
+    let lean_cap = careful_brake_lean_cap(soft, demand_shaped, aggression);
+    let a_scale = careful(0.12 + 0.55 * demand_shaped, aggression);
+    let a_cmd = (a_lat.max(overshoot_boost) * a_scale)
+        .max(careful(0.05, aggression) * demand_shaped);
     let lean = lean_for_lateral_accel(
         a_cmd,
         brake_mode,
         mass,
         max_thrust,
-        lean_cap.clamp(careful(0.05), LEAN_BRAKE_MAX),
+        lean_cap.clamp(careful(0.05, aggression), LEAN_BRAKE_MAX),
     );
 
     ([aim_x, AIM_Y_BIAS, aim_z], lean)
@@ -1677,34 +1711,35 @@ fn terminal_trim_aim(
     cheby: f64,
     v_cheby: f64,
     omega_py: f64,
+    aggression: f64,
 ) -> ([f64; 3], f64) {
     // Quiet and already in the hand-off box: hold upright.
     if cheby <= TRIM_DEADZONE_CHEBY_M
         && vh <= VH_HANDOFF_MAX * 0.55
         && v_cheby > -0.08
     {
-        return ([0.0, 1.0, 0.0], careful(0.02));
+        return ([0.0, 1.0, 0.0], careful(0.02, aggression));
     }
 
-    let v_creep = trim_creep_speed(cheby);
+    let v_creep = trim_creep_speed(cheby, aggression);
     let err_vx = ux * v_creep - vx;
     let err_vz = uz * v_creep - vz;
 
     let dist_scale = (cheby / CAREFUL_RANGE_M).clamp(0.10, 1.0);
     let rate_gate = (1.0 - (omega_py / OMEGA_HANDOFF_MAX).clamp(0.0, 1.0)).powi(2);
-    let lean_near = careful(TRIM_LEAN_NEAR_BASE);
-    let lean_far = careful(TRIM_LEAN_CAP_BASE);
+    let lean_near = careful(TRIM_LEAN_NEAR_BASE, aggression);
+    let lean_far = careful(TRIM_LEAN_CAP_BASE, aggression);
     let lean_cap =
         (lean_near + (lean_far - lean_near) * dist_scale * dist_scale) * rate_gate;
 
-    let k_vel = careful(0.38 + 0.12 * dist_scale);
-    let k_pos = careful(0.008 * dist_scale);
+    let k_vel = careful(0.38 + 0.12 * dist_scale, aggression);
+    let k_pos = careful(0.008 * dist_scale, aggression);
     let a_req_x = k_pos * ux * cheby + k_vel * err_vx;
     let a_req_z = k_pos * uz * cheby + k_vel * err_vz;
     let a_lat = (a_req_x * a_req_x + a_req_z * a_req_z).sqrt();
     let lean = (a_lat / GRAVITY).atan().clamp(0.0, lean_cap);
 
-    let aim_scale = careful(0.06 + 0.14 * dist_scale);
+    let aim_scale = careful(0.06 + 0.14 * dist_scale, aggression);
     let v_ref = vh.max(0.6);
     let aim_x = aim_scale * (ux * 0.30 + err_vx / v_ref);
     let aim_z = aim_scale * (uz * 0.30 + err_vz / v_ref);
@@ -1734,6 +1769,7 @@ fn terminal_settle_aim(
     dt: f64,
     up_y: f64,
     omega_py: f64,
+    aggression: f64,
 ) -> TerminalSettleOutput {
     let (brake_w, new_latch) =
         terminal_brake_blend(v_cheby, vh, v_approach, cheby, terminal_brake_latched);
@@ -1770,12 +1806,14 @@ fn terminal_settle_aim(
                 max_thrust,
                 brake_mode,
                 brake_w,
+                aggression,
             );
             (d, lean)
         }
         TerminalSettlePhase::Upright => ([0.0, 1.0, 0.0], 0.0),
         TerminalSettlePhase::Trim => {
-            let (d, lean) = terminal_trim_aim(ux, uz, vx, vz, vh, cheby, v_cheby, omega_py);
+            let (d, lean) =
+                terminal_trim_aim(ux, uz, vx, vz, vh, cheby, v_cheby, omega_py, aggression);
             (d, lean)
         }
     };
@@ -1820,6 +1858,7 @@ fn transit_command(
     target_xz: [f64; 2],
     pos: [f64; 3],
     brake_latched: bool,
+    terminal_latched: bool,
     terminal_brake_latched: bool,
     terminal_settle_phase: TerminalSettlePhase,
     upright_stable_s: f64,
@@ -1839,9 +1878,9 @@ fn transit_command(
     let dz = target_xz[1] - pos[2];
     let range = (dx * dx + dz * dz).sqrt();
     let cheby = chebyshev_xz(pos, target_xz);
-    let near_handoff = range <= RANGE_TERMINAL_M || cheby <= HANDOFF_CHEBY_MAX_M + 20.0;
-    let lofted = pos[1] >= GATE_ALT_MIN
-        || (near_handoff && pos[1] >= GATE_ALT_MIN - 40.0);
+    let near_handoff = near_handoff_zone(terminal_latched, cheby);
+    let lofted = transit_lofted(pos[1], near_handoff);
+    let aggression = careful_aggression(range);
     let mu_long = long_range_weight(range);
 
     let vx = state.velocity[0];
@@ -1890,8 +1929,8 @@ fn transit_command(
     let v_cheby = chebyshev_closing_rate(pos, target_xz, state.velocity);
 
     let high_pad_pass = cheby <= HANDOFF_CHEBY_MAX_M && pos[1] > CRUISE_ALT_CAP + 20.0;
-    let terminal = lofted && range <= RANGE_TERMINAL_M && !high_pad_pass;
-    let range_eff = (range - RANGE_TERMINAL_M).max(0.0);
+    let terminal = lofted && terminal_latched && !high_pad_pass;
+    let range_eff = (range - CAREFUL_NEAR_M).max(0.0);
 
     let plan = (!terminal).then(|| {
         HorizontalBrakePlan::evaluate(
@@ -1911,7 +1950,8 @@ fn transit_command(
     } else {
         state.params.air_drag_k / mass.max(1e-6)
     };
-    let handoff_plan = if lofted && (terminal || brake_latched || cheby <= HANDOFF_CHEBY_MAX_M + 35.0)
+    let handoff_plan = if lofted
+        && (terminal || brake_latched || cheby <= TERMINAL_EXIT_CHEBY_M)
     {
         let lean_cmd = if brake_latched {
             LEAN_BRAKE_MAX
@@ -1945,9 +1985,9 @@ fn transit_command(
 
     let v_allow = if terminal {
         // Terminal == careful envelope: creep speed only.
-        trim_creep_speed(cheby.max(1.0))
-            .min(careful(0.06) * (range - 4.0).max(0.0))
-            .min(terminal_v_cap(cheby))
+        trim_creep_speed(cheby.max(1.0), aggression)
+            .min(careful(0.06, aggression) * (range - 4.0).max(0.0))
+            .min(terminal_v_cap(cheby, aggression))
             .clamp(0.0, VH_HANDOFF_MAX)
     } else {
         let p = plan.unwrap();
@@ -2006,6 +2046,7 @@ fn transit_command(
             dt,
             up_y,
             omega_py,
+            aggression,
         );
         terminal_settle_out = Some(out);
         (
@@ -2264,6 +2305,7 @@ fn attitude_toward(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fuzzy::CAREFUL_AGGRESSION_MIN;
     use crate::landing::TARGET_SUCCESS_HALF_M;
 
     #[test]
@@ -2736,6 +2778,7 @@ mod tests {
             state.params.max_thrust,
             LateralThrMode::VerticalNeutral,
             0.25,
+            careful_aggression(80.0),
         );
         assert!(
             lean < 0.40,
@@ -2776,6 +2819,7 @@ mod tests {
             state.params.max_thrust,
             LateralThrMode::VerticalNeutral,
             1.0,
+            careful_aggression(80.0),
         );
         assert!(
             lean > 0.55,
@@ -2913,6 +2957,7 @@ mod tests {
             1.0 / 120.0,
             world_up_in_body(&state.motor)[1],
             0.08,
+            careful_aggression(CAREFUL_NEAR_M),
         );
         assert_eq!(out.phase, TerminalSettlePhase::Upright);
         assert!(
@@ -2965,6 +3010,7 @@ mod tests {
             1.0 / 120.0,
             1.0,
             0.02,
+            careful_aggression(CAREFUL_NEAR_M),
         );
         assert_eq!(out.phase, TerminalSettlePhase::Trim);
         assert!(
@@ -3014,6 +3060,7 @@ mod tests {
             1.0 / 120.0,
             1.0,
             0.02,
+            careful_aggression(80.0),
         );
         assert_eq!(out.phase, TerminalSettlePhase::Trim);
         assert!(
@@ -3021,13 +3068,14 @@ mod tests {
             "trim should nudge toward pad, aim={:?}",
             out.desired_raw
         );
+        let agg = careful_aggression(80.0);
         assert!(
-            out.lean_max <= careful(TRIM_LEAN_CAP_BASE) + 1e-6,
+            out.lean_max <= careful(TRIM_LEAN_CAP_BASE, agg) + 1e-6,
             "trim lean must stay capped, lean={}",
             out.lean_max
         );
         assert!(
-            out.lean_max < careful(0.045),
+            out.lean_max < careful(0.045, agg),
             "near-pad trim must stay shallow, lean={}",
             out.lean_max
         );
@@ -3035,14 +3083,29 @@ mod tests {
 
     #[test]
     fn terminal_trim_creep_slower_than_handoff_speed() {
-        let v8 = trim_creep_speed(8.0);
-        let v30 = trim_creep_speed(30.0);
+        let agg_near = careful_aggression(CAREFUL_NEAR_M);
+        let agg_mid = careful_aggression(80.0);
+        let v8 = trim_creep_speed(8.0, agg_near);
+        let v30 = trim_creep_speed(30.0, agg_mid);
         assert!(v8 < 0.20, "near-pad creep too fast: {v8}");
-        assert!(v30 < 0.55, "careful-range creep too fast: {v30}");
+        assert!(v30 < VH_HANDOFF_MAX * 0.15, "careful-range creep too fast: {v30}");
         assert!(v8 < VH_HANDOFF_MAX * 0.08);
+        assert!(
+            trim_creep_speed(8.0, agg_near) < trim_creep_speed(8.0, agg_mid),
+            "closer range must creep slower at same cheby"
+        );
         assert_eq!(CAREFUL_RANGE_M, 100.0);
-        assert_eq!(RANGE_TERMINAL_M, CAREFUL_RANGE_M);
-        assert!((CAREFUL_AGGRESSION - 0.40).abs() < 1e-9);
+        assert!((careful_aggression(CAREFUL_NEAR_M) - CAREFUL_AGGRESSION_MIN).abs() < 1e-9);
+    }
+
+    #[test]
+    fn terminal_latch_hysteresis() {
+        assert!(!careful_terminal_latch(false, 120.0, 50.0, true, false, TERMINAL_EXIT_CHEBY_M));
+        assert!(careful_terminal_latch(false, 85.0, 50.0, true, false, TERMINAL_EXIT_CHEBY_M));
+        assert!(careful_terminal_latch(true, 120.0, 50.0, true, false, TERMINAL_EXIT_CHEBY_M));
+        assert!(!careful_terminal_latch(true, 150.0, 60.0, true, false, TERMINAL_EXIT_CHEBY_M));
+        assert!(careful_terminal_latch(true, 150.0, 30.0, true, false, TERMINAL_EXIT_CHEBY_M));
+        assert!(!careful_terminal_latch(false, 85.0, 50.0, true, true, TERMINAL_EXIT_CHEBY_M));
     }
 
     #[test]
