@@ -211,6 +211,8 @@ impl App {
         }
 
         let target_xz_f64 = [self.target_xz[0] as f64, self.target_xz[1] as f64];
+        let using_autopilot = !self.rocket.destroyed
+            && (self.target_landing.enabled || self.landing.enabled);
         let cmd = if self.rocket.destroyed {
             ControlCommand::default()
         } else if self.target_landing.enabled {
@@ -222,6 +224,11 @@ impl App {
             self.control.apply(&keys, dt as f64)
         };
         self.rocket.set_command(cmd);
+        // L/T drive throttle; keep the manual mapper in lockstep so leaving the
+        // mode resumes at the same throttle (no enter-time snapshot needed).
+        if using_autopilot {
+            self.control.command.throttle = cmd.throttle;
+        }
 
         self.accum += dt as f64;
         while self.accum >= FIXED_DT {
