@@ -190,15 +190,20 @@ X' = M X M~      (M~ は反転 reverse)
 
 ### T モード（目標着陸）
 
-1. **中距離 go / brake** — `cruise_brake_weight(δv, enter, exit)`
-   - `δv = v_approach − v_stop`（包絡に対する超過接近速度）。
-   - 旧ヒステリシス閾値の間をランプし、mid 帯で浅い aim に落とす。
-   - **aim 方向自体は離散**（go 自由ベクトル or 反速度ブレーキ）。ベクトル平均は
-     水平成分が打ち消し合うため使わない。ラッチ `brake_latched` が go↔brake チャタを抑止。
+1. **中距離 go / brake** — 物理予測停止距離 `d_stop = d_flip + d_burn`
+   - `a_prop = f·g·tan(θ_lean)`（垂直中立逆リーン、`f` は L と同じ計画余裕）。
+   - 二次抗力 `β = k/m`（Moon は `β=0`）。`d_burn = (1/2β) ln((a+βv²)/(a+βv_end²))`。
+   - 姿勢反転 `d_flip = v·t_flip`（現姿勢→逆リーン aim の角度から √-profile で `t_flip`）。
+   - **開始条件:** `range_eff ≤ d_stop`（ターミナル station-keep を除く）。幾何ヒステリシス
+     `BRAKE_RELEASE_MARGIN` で go↔brake チャタを抑止。オーバーシュート（`v_approach < 0`）も即 brake。
+   - **aim 方向は離散**（go 自由ベクトル or 反速度ブレーキ）。ベクトル平均はしない。
+   - go 側の目標接近速度は同じ式の逆算（`allowed_approach_speed`）— ハード速度キャップなし。
 
 2. **遠距離 airplane 巡航**（水平距離 ≳ 1.5 km）
-   - **優先順位:** フルスロットルでターゲット方向へ行く。高度はスロットルではなく
+   - **優先順位:** 予測停止距離の外側ではフルスロットルでターゲット方向へ行く。高度は
      **pitch / lean（エレベータ）** のみ。
+   - `range_eff ≤ d_stop` に入った瞬間、airplane も **同じ物理ゲート**で逆リーンへ譲る
+     （`is_long_range_cruise` は brake 中 false）。
    - `long_range_weight(range)`: 約 3–7 km の肩でロフト目標 520 m ↔ 800 m を連続ブレンド。
    - `long_range_hold_cos(alt, alt_tgt, vy, hover)`:
      - フル T では `a_y = g·(cos/hover − 1)`。平衡は `cos ≈ hover`（T/W≈3 なら ≈1/3）。

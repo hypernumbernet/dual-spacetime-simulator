@@ -1,23 +1,21 @@
 //! Target-pad autopilot (T key): loft, cruise to pad, terminal land.
 //!
 //! **Short / mid range:** burn–coast loft to ~500 m (apogee cut + optional
-//! upright straighten), then envelope cruise `v_stop = √(2 a r)` with reverse-
-//! lean brake hysteresis. No hard speed cap.
+//! upright straighten), then physics-predicted horizontal braking: reverse lean
+//! when `range_eff ≤ d_flip + d_burn` (thrust/mass, lean, drag, attitude lag).
+//! No hard speed cap.
 //!
-//! **Airplane range (≳ 1.5 km):** full throttle toward T; altitude is pitch only
-//! (`long_range_hold_cos` / `long_range_go_aim` — nose-up / **nose-down dive**).
-//! Hold ~800 m. Soft `long_range_weight` blends short-range loft; the hard range
-//! floor keeps airplane mode after a fast downrange close. Inside ~55 m: quiet
-//! station-keep → Descend via [`LandingAutopilot`].
+//! **Airplane range (≳ 1.5 km):** full throttle toward T while outside the
+//! predicted stop distance; altitude is pitch only (`long_range_hold_cos` /
+//! `long_range_go_aim`). Hold ~800 m. Same stop-distance gate hands off to
+//! reverse lean. Inside ~55 m: quiet station-keep → Descend via
+//! [`LandingAutopilot`].
 //!
 //! Attitude: PGA inverse sandwich (`motor_inverse_rotate_vector` /
 //! `world_up_in_body`), desired thrust `clamp_tilt`-ed into the lean cone.
 
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
-use crate::fuzzy::{
-    cruise_brake_weight, long_range_go_aim, long_range_hold_cos, long_range_weight,
-    LONG_CRUISE_ALT_M,
-};
+use crate::fuzzy::{long_range_go_aim, long_range_hold_cos, long_range_weight, LONG_CRUISE_ALT_M};
 use crate::landing::{
     axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_pad_square, saturate, LandingAutopilot,
     PAD_HALF_M,
@@ -69,22 +67,14 @@ const LEAN_LONG_MAX: f64 = 1.45;
 /// Flip-recover only when nearly inverted in airplane / deep-lean mode.
 /// Normal [`COS_TILT_AIM`] (0.30) would fight a legitimate nose-down dive.
 const COS_TILT_AIM_AIR: f64 = 0.10;
-/// Horizontal range (m) above which transit is airplane mode: full-T go +
-/// pitch elevator, no reverse-lean brake, no ballistic thr-cut / straighten.
+/// Horizontal range (m) above which transit prefers airplane mode: full-T go +
+/// pitch elevator while outside the predicted stop distance.
 const LONG_AIRPLANE_RANGE_M: f64 = 1500.0;
-/// Enter reverse-lean when `v_approach − v_stop` exceeds this (m/s).
-const BRAKE_LATCH_ENTER: f64 = 10.0;
-/// Hold reverse-lean until `v_approach − v_stop` falls below this (m/s).
-const BRAKE_LATCH_EXIT: f64 = -25.0;
-/// Horizontal deceleration assumed by the braking envelope (m/s²).
-/// Conservative vs peak g·tan(LEAN_CRUISE) so attitude-flip lag still fits
-/// inside the remaining range (starts reverse lean earlier).
-const A_DEC_H: f64 = 3.5;
-/// Stand-off subtracted from range in the envelope (m) so speed is already
-/// small when terminal descent arms.
-const V_APPROACH_OFF_M: f64 = 30.0;
-/// Attitude-reversal lag anticipation (s) folded into the envelope distance.
-const T_ATT_LAG_S: f64 = 2.0;
+/// Planning throttle fraction for horizontal brake accel (matches L-mode burn plan).
+const BRAKE_PLAN_FRAC: f64 = 0.95;
+/// Geometric hysteresis (m) when releasing latched reverse lean — must exceed
+/// hand-off cheby so go↔brake does not chatter at the pad edge.
+const BRAKE_RELEASE_MARGIN_M: f64 = HANDOFF_CHEBY_MAX_M;
 /// Downrange speed built during the ascent burn (m/s). Ballistic coast keeps
 /// whatever vh burnout leaves — cruise then accelerates freely on the envelope.
 const V_CLIMB_H_MAX: f64 = 28.0;
@@ -182,7 +172,7 @@ impl TargetLandingAutopilot {
         let dx = target_xz[0] - pos[0];
         let dz = target_xz[1] - pos[2];
         let range = (dx * dx + dz * dz).sqrt();
-        range >= LONG_AIRPLANE_RANGE_M
+        range >= LONG_AIRPLANE_RANGE_M && !self.brake_latched
     }
 
     pub fn update(
@@ -280,13 +270,128 @@ fn cruise_v_des_y(alt: f64, vy: f64) -> f64 {
     }
 }
 
-/// Braking-envelope max approach speed (m/s). **No hard cruise speed cap** —
-/// the rocket accelerates freely until this distance-limited stop speed.
+/// Horizontal thrust acceleration at planned brake throttle with vertical-neutral
+/// reverse lean (`a ≈ f·g·tan θ`).
 #[inline]
-fn envelope_v_stop(range: f64, v_approach: f64) -> f64 {
-    let range_eff =
-        (range - V_APPROACH_OFF_M - T_ATT_LAG_S * v_approach.max(0.0)).max(0.0);
-    (2.0 * A_DEC_H * range_eff).sqrt()
+fn horizontal_brake_prop_accel(lean_max: f64) -> f64 {
+    (BRAKE_PLAN_FRAC * GRAVITY * lean_max.tan()).max(0.5)
+}
+
+/// Braking distance along approach axis from `v` to `v_end` with propulsion `a_prop`
+/// and quadratic drag coefficient `β = k/m` (Earth drag helps deceleration).
+#[inline]
+fn horizontal_burn_distance(v: f64, v_end: f64, a_prop: f64, beta: f64) -> f64 {
+    let v = v.max(0.0);
+    let v_end = v_end.max(0.0).min(v);
+    if v <= v_end + 1e-6 || a_prop <= 1e-9 {
+        return 0.0;
+    }
+    if beta <= 1e-12 {
+        return (v * v - v_end * v_end) / (2.0 * a_prop);
+    }
+    let num = a_prop + beta * v * v;
+    let den = a_prop + beta * v_end * v_end;
+    if num <= den {
+        return 0.0;
+    }
+    (0.5 / beta) * (num / den).ln()
+}
+
+/// Angle (rad) from current body-up to the commanded reverse-lean brake axis.
+fn brake_flip_angle(state: &RocketState, ux: f64, uz: f64, vh: f64, lean_max: f64) -> f64 {
+    let desired_raw = if vh > 0.5 {
+        let s = vh.max(1.0);
+        let vx = state.velocity[0];
+        let vz = state.velocity[2];
+        [-vx / s, AIM_Y_BIAS, -vz / s]
+    } else {
+        [ux, AIM_Y_BIAS, uz]
+    };
+    let desired = clamp_tilt(desired_raw, lean_max);
+    let len = (desired[0] * desired[0] + desired[1] * desired[1] + desired[2] * desired[2]).sqrt();
+    if len <= 1e-9 {
+        return 0.0;
+    }
+    let d = motor_inverse_rotate_vector(
+        &state.motor,
+        [desired[0] / len, desired[1] / len, desired[2] / len],
+    );
+    let up_y = d[1].clamp(-1.0, 1.0);
+    let (_, angle) = axis_angle_from_cross([d[2], 0.0, -d[0]], up_y);
+    angle.max(0.0)
+}
+
+/// Conservative √-profile time to rotate into reverse lean (s).
+#[inline]
+fn brake_flip_time(angle: f64) -> f64 {
+    if angle <= 1e-6 {
+        return 0.0;
+    }
+    let t_sqrt = (2.0 * angle / ALPHA_PLAN).sqrt();
+    let t_linear = angle / OMEGA_MAX;
+    t_sqrt.max(t_linear)
+}
+
+/// Predicted horizontal stop distance (m): attitude flip coast + propulsive burn.
+#[inline]
+fn predicted_stop_distance(
+    v_approach: f64,
+    v_end: f64,
+    a_prop: f64,
+    beta: f64,
+    t_flip: f64,
+) -> f64 {
+    let v = v_approach.max(0.0);
+    v * t_flip + horizontal_burn_distance(v, v_end, a_prop, beta)
+}
+
+/// Max approach speed (m/s) that still fits in `range_eff` before braking.
+fn allowed_approach_speed(
+    range_eff: f64,
+    v_end: f64,
+    a_prop: f64,
+    beta: f64,
+    t_flip_base: f64,
+) -> f64 {
+    if range_eff <= 1e-6 {
+        return v_end;
+    }
+    let mut lo = v_end;
+    let mut hi = 500.0;
+    while predicted_stop_distance(hi, v_end, a_prop, beta, t_flip_base) < range_eff && hi < 800.0 {
+        hi *= 1.5;
+    }
+    for _ in 0..48 {
+        let mid = 0.5 * (lo + hi);
+        if predicted_stop_distance(mid, v_end, a_prop, beta, t_flip_base) <= range_eff {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// Physics brake gate with geometric latch hysteresis.
+fn update_brake_latch(
+    brake_latched: bool,
+    terminal: bool,
+    range_eff: f64,
+    d_stop: f64,
+    v_approach: f64,
+) -> bool {
+    if terminal {
+        return false;
+    }
+    let overshoot = v_approach < -1.5 && range_eff > 0.0;
+    if overshoot {
+        return true;
+    }
+    if brake_latched {
+        range_eff <= d_stop + BRAKE_RELEASE_MARGIN_M
+    } else {
+        range_eff <= d_stop
+    }
 }
 
 /// Full-T airplane aim: pitch elevator holds `alt_hold` while leaning to pad.
@@ -340,8 +445,8 @@ fn transit_command(
     let straighten_m = apogee_target - 180.0;
 
     let apogee = pos[1] + vy.max(0.0) * vy.max(0.0) / (2.0 * GRAVITY);
-    let long_airplane = range >= LONG_AIRPLANE_RANGE_M;
-    let burn_up = !lofted && (long_airplane || apogee < apogee_target);
+    let in_airplane_range = range >= LONG_AIRPLANE_RANGE_M;
+    let burn_up = !lofted && (in_airplane_range || apogee < apogee_target);
     // Powered-cruise weight: 1 at vy ≤ +3, 0 at vy ≥ +8 (ballistic coast).
     let cruise_w = if burn_up {
         0.0
@@ -356,18 +461,50 @@ fn transit_command(
     let v_approach = vx * ux + vz * uz;
 
     let terminal = lofted && range <= RANGE_TERMINAL_M;
+    let range_eff = (range - RANGE_TERMINAL_M).max(0.0);
 
-    let v_stop = envelope_v_stop(range, v_approach);
-    let v_cmd_h = if burn_up || ballistic {
-        v_stop.min(V_CLIMB_H_MAX)
-    } else if terminal {
-        (0.12 * (range - 6.0)).clamp(0.0, 10.0)
+    let beta = if state.moon_mode {
+        0.0
     } else {
-        v_stop
+        state.params.air_drag_k / mass.max(1e-6)
+    };
+    let a_prop = horizontal_brake_prop_accel(LEAN_CRUISE);
+    let flip_angle = brake_flip_angle(state, ux, uz, vh, LEAN_CRUISE);
+    let t_flip = brake_flip_time(flip_angle);
+    let wind_approach = 0.0; // future: wind dot approach axis
+    let v_closing = (v_approach - wind_approach).max(0.0);
+    let d_stop = predicted_stop_distance(
+        v_closing,
+        VH_HANDOFF_MAX,
+        a_prop,
+        beta,
+        t_flip,
+    );
+    let brake = update_brake_latch(brake_latched, terminal, range_eff, d_stop, v_approach);
+    let airplane_go = in_airplane_range && !brake;
+
+    let t_flip_go = brake_flip_time(brake_flip_angle(
+        state,
+        ux,
+        uz,
+        vh,
+        if in_airplane_range {
+            LEAN_LONG_MAX
+        } else {
+            LEAN_CRUISE
+        },
+    ));
+    let v_allow = if terminal {
+        (0.12 * (range - 6.0)).clamp(0.0, 10.0)
+    } else if burn_up || ballistic {
+        allowed_approach_speed(range_eff, VH_HANDOFF_MAX, a_prop, beta, t_flip_go)
+            .min(V_CLIMB_H_MAX)
+    } else {
+        allowed_approach_speed(range_eff, VH_HANDOFF_MAX, a_prop, beta, t_flip_go)
     };
 
-    let need_x = ux * v_cmd_h - vx;
-    let need_z = uz * v_cmd_h - vz;
+    let need_x = ux * v_allow - vx;
+    let need_z = uz * v_allow - vz;
 
     let far = lofted && cruise_w > 0.75 && !terminal && range > RANGE_FAR_M;
     let far_or_overshoot = far
@@ -377,27 +514,15 @@ fn transit_command(
             && range > RANGE_TERMINAL_M
             && v_approach < -1.5);
 
-    // Airplane range: always hold cruise altitude. Closer in: blend 520→800 m.
-    let alt_hold = if long_airplane {
+    // Airplane range: hold cruise altitude. Closer in: blend 520→800 m.
+    let alt_hold = if in_airplane_range {
         LONG_CRUISE_ALT_M
     } else {
         CRUISE_ALT_CAP + mu_long * (LONG_CRUISE_ALT_M - CRUISE_ALT_CAP)
     };
 
-    // No reverse-lean in airplane mode or over the pad (station-keeping).
-    let delta_v = v_approach - v_stop;
-    let overshoot = v_approach < -1.5 && range > RANGE_TERMINAL_M;
-    let mut brake = brake_latched;
-    if long_airplane || terminal {
-        brake = false;
-    } else if overshoot || delta_v > BRAKE_LATCH_ENTER {
-        brake = true;
-    } else if delta_v < BRAKE_LATCH_EXIT {
-        brake = false;
-    }
-
     // Aim regime (mutually exclusive by range / loft state).
-    let (desired_raw, lean_max, deep, force_full_thr) = if long_airplane {
+    let (desired_raw, lean_max, deep, force_full_thr) = if airplane_go {
         // Full-T go + pitch elevator (ascent and cruise share one law).
         airplane_hold_aim(ux, uz, pos[1], alt_hold, vy, hover)
     } else if burn_up {
@@ -421,18 +546,13 @@ fn transit_command(
             (0.08 + 0.025 * vh).clamp(0.10, 0.28)
         };
         ([k * need_x, AIM_Y_BIAS, k * need_z], lean, false, false)
-    } else if far_or_overshoot {
-        // Mid-range envelope: go free vector or latched reverse-brake.
+    } else if far_or_overshoot || (brake && !terminal) {
+        // Mid/long range: go free vector or latched reverse-brake (discrete aim).
         let s = vh.max(1.0);
         if brake {
             ([-vx / s, AIM_Y_BIAS, -vz / s], LEAN_CRUISE, true, false)
         } else {
-            let w_mid = cruise_brake_weight(delta_v, BRAKE_LATCH_ENTER, BRAKE_LATCH_EXIT);
-            if w_mid > 0.35 {
-                ([0.08 * need_x, AIM_Y_BIAS, 0.08 * need_z], LEAN_MID, false, false)
-            } else {
-                ([ux, AIM_Y_BIAS, uz], LEAN_CRUISE, true, false)
-            }
+            ([ux, AIM_Y_BIAS, uz], LEAN_CRUISE, true, false)
         }
     } else {
         // Ballistic / shallow mid: reverse only when latched.
@@ -450,7 +570,7 @@ fn transit_command(
     };
 
     // Upright straighten only on short-hop burn (airplane owns altitude by pitch).
-    let straighten = burn_up && !long_airplane && apogee >= straighten_m;
+    let straighten = burn_up && !in_airplane_range && apogee >= straighten_m;
     // Deep airplane lean must not be faded by cruise_w (half-open aim = sway).
     let aim_w = if burn_up || deep {
         1.0
@@ -623,15 +743,68 @@ mod tests {
     }
 
     #[test]
-    fn envelope_has_no_hard_speed_cap() {
-        // At 400 m remaining with low closing speed, stop speed exceeds the old 45 m/s cap.
-        let v = envelope_v_stop(400.0, 10.0);
+    fn vacuum_burn_distance_matches_kinematics() {
+        let a = horizontal_brake_prop_accel(LEAN_CRUISE);
+        let d = horizontal_burn_distance(40.0, VH_HANDOFF_MAX, a, 0.0);
+        let expected = (40.0 * 40.0 - VH_HANDOFF_MAX * VH_HANDOFF_MAX) / (2.0 * a);
+        assert!((d - expected).abs() < 1e-6, "d={d} expected={expected}");
+    }
+
+    #[test]
+    fn drag_shortens_burn_distance() {
+        let a = horizontal_brake_prop_accel(LEAN_CRUISE);
+        let beta = 0.001;
+        let d_vac = horizontal_burn_distance(60.0, VH_HANDOFF_MAX, a, 0.0);
+        let d_drag = horizontal_burn_distance(60.0, VH_HANDOFF_MAX, a, beta);
         assert!(
-            v > 45.0,
-            "envelope should allow >45 m/s at long range, got {v}"
+            d_drag < d_vac,
+            "drag should help braking: vac={d_vac} drag={d_drag}"
         );
-        let v_far = envelope_v_stop(800.0, 0.0);
-        assert!(v_far > v, "longer range must allow higher stop speed");
+    }
+
+    #[test]
+    fn lower_thrust_increases_stop_distance() {
+        let mut state = RocketState::at_altitude(500.0);
+        state.contacting = false;
+        state.velocity = [50.0, 0.0, 0.0];
+        state.params.max_thrust *= 0.5;
+        let a = horizontal_brake_prop_accel(LEAN_CRUISE);
+        let beta = state.params.air_drag_k / state.params.mass;
+        let d_hi = predicted_stop_distance(50.0, VH_HANDOFF_MAX, a, beta, 0.5);
+        let a_lo = horizontal_brake_prop_accel(LEAN_CRUISE) * 0.5;
+        let d_lo = predicted_stop_distance(50.0, VH_HANDOFF_MAX, a_lo, beta, 0.5);
+        assert!(d_lo > d_hi, "weaker thrust needs longer stop: hi={d_hi} lo={d_lo}");
+        let _ = state;
+    }
+
+    #[test]
+    fn allowed_speed_grows_with_range() {
+        let a = horizontal_brake_prop_accel(LEAN_CRUISE);
+        let v_near = allowed_approach_speed(200.0, VH_HANDOFF_MAX, a, 0.0, 0.5);
+        let v_far = allowed_approach_speed(800.0, VH_HANDOFF_MAX, a, 0.0, 0.5);
+        assert!(v_far > v_near, "v_near={v_near} v_far={v_far}");
+    }
+
+    #[test]
+    fn airplane_brakes_when_inside_predicted_stop() {
+        let mut state = RocketState::at_altitude(LONG_CRUISE_ALT_M);
+        state.contacting = false;
+        state.velocity = [90.0, 0.0, 0.0];
+        let mut ap = TargetLandingAutopilot::default();
+        ap.enabled = true;
+        // Fast close inside physics stop distance — must leave full-T airplane go.
+        let target = [600.0, 0.0];
+        let cmd = ap.update(&state, target, 1.0 / 120.0);
+        assert_eq!(ap.phase, TargetPhase::Cruise);
+        assert!(
+            !ap.is_long_range_cruise(state.position(), target),
+            "braking must drop airplane HUD flag"
+        );
+        assert!(
+            cmd.throttle < 0.92,
+            "expected brake throttle not full-T, thr={}",
+            cmd.throttle
+        );
     }
 
     #[test]
@@ -657,11 +830,10 @@ mod tests {
     fn far_cruise_brakes_when_overspeed() {
         let mut state = RocketState::at_altitude(500.0);
         state.contacting = false;
-        // Closing very fast at short remaining range → above envelope.
+        // Closing very fast at short remaining range → inside predicted stop distance.
         state.velocity = [80.0, 0.0, 0.0];
         let mut ap = TargetLandingAutopilot::default();
         ap.enabled = true;
-        // Pad only 120 m ahead: v_stop ≈ √(2·5.5·(120-25-1.5·80)) ≈ small.
         let cmd = ap.update(&state, [120.0, 0.0], 1.0 / 120.0);
         assert_eq!(ap.phase, TargetPhase::Cruise);
         assert!(
