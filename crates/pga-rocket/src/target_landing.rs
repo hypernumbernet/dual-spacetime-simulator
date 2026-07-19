@@ -36,8 +36,9 @@ pub const TARGET_PAD_HALF_M: f64 = PAD_HALF_M;
 /// Max Chebyshev offset (m) to arm Descend — must already be over the pad
 /// (lander will not walk in near the ground).
 const HANDOFF_CHEBY_MAX_M: f64 = 22.0;
-/// Max horizontal speed (m/s) when arming Descend.
-const VH_HANDOFF_MAX: f64 = 9.0;
+/// Max horizontal speed (m/s) when arming Descend. Keep low so the lander is
+/// not handed a lateral sprint into the upright commit.
+const VH_HANDOFF_MAX: f64 = 6.5;
 /// Max pitch/yaw rate (rad/s) when arming Descend.
 const OMEGA_HANDOFF_MAX: f64 = 0.12;
 /// Min body-up · world-up when arming (~0.32 rad tilt).

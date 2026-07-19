@@ -45,10 +45,11 @@ const LEAN_MAX: f64 = 1.0;
 const LEAN_PAD_EXTRA_MAX: f64 = 0.35;
 /// Bang brake only fights real descent; slower falls belong to the soft law.
 const V_BRAKE_MIN: f64 = 1.5;
-/// Do not settle onto the pad while drifting faster than this (m/s); hover and
-/// bleed the drift first. Touching down fast sideways bounces into a tip-over;
-/// slower skids are safely eaten by foot friction.
+/// Free-field (L): do not settle while drifting faster than this (m/s).
 const VH_TOUCH: f64 = 3.5;
+/// T-pad (T): stricter settle gate — residual horizontal speed is the main
+/// post-touchdown tip-over driver on the painted square.
+const VH_TOUCH_PAD: f64 = 2.0;
 /// Soft touchdown target speed (m/s, positive = descent).
 const V_TOUCH: f64 = 0.55;
 /// Foot height where we switch from hard brake to soft pad control (m).
@@ -80,16 +81,18 @@ const CENTER_SEEK_MIN_H: f64 = 45.0;
 const CENTER_TOL_M: f64 = 15.0;
 /// Max lean while high and seeking the pad (rad).
 const LEAN_SEEK_MAX: f64 = 0.28;
-/// Max lean near the pad for residual vh only (rad) — never position walk-in.
-const LEAN_TERMINAL_VH: f64 = 0.12;
+/// Max lean near the pad for residual vh kill (rad) — never position walk-in.
+/// Enough to null a few m/s while soft-touch holds; not so deep it drifts off-pad.
+const LEAN_TERMINAL_VH: f64 = 0.18;
 /// Position / velocity mix for high-altitude pad seek.
 const K_POS_TARGET: f64 = 0.03;
 const K_VEL_TARGET: f64 = 0.55;
 
-/// On-pad complete thresholds (looser than free-field L-mode lock).
+/// On-pad complete thresholds (looser than free-field L-mode lock on tilt/rate,
+/// but strict on residual horizontal speed so complete does not cut thrust mid-skid).
 const TILT_PAD_DONE: f64 = 0.18;
 const OMEGA_PAD_DONE: f64 = 0.22;
-const VH_PAD_DONE: f64 = 2.5;
+const VH_PAD_DONE: f64 = 1.5;
 
 /// Automatic landing autopilot toggled with `L`.
 #[derive(Clone, Debug)]
@@ -140,9 +143,9 @@ impl LandingAutopilot {
             kp_attitude: 2.6,
             kd_attitude: 3.4,
             kd_roll: 2.4,
-            max_lat_tilt: 0.10,
+            max_lat_tilt: 0.11,
             k_h: 0.42,
-            v_max_descent: 2.2,
+            v_max_descent: 2.0,
             kv_descent: 0.34,
             omega_max: 2.0,
             ..Self::default()
@@ -227,6 +230,8 @@ impl LandingAutopilot {
         let seeking_center =
             has_pad && !state.contacting && h > CENTER_SEEK_MIN_H && cheby > CENTER_TOL_M;
         let terminal_commit = has_pad && !state.contacting && h <= CENTER_SEEK_MIN_H;
+        // Stricter horizontal settle when landing on a marked pad.
+        let vh_touch = if has_pad { VH_TOUCH_PAD } else { VH_TOUCH };
 
         // While tilted the feet are not the lowest structure; run the burn
         // envelope on the true lowest hull point so an inverted fall brakes early.
@@ -235,7 +240,7 @@ impl LandingAutopilot {
 
         // Desired body +Y: flip / pad settle / low quiet T-pad → world-up;
         // else lean cone + optional high-altitude pad seek.
-        let (axis, angle) = if tilt > TILT_AIM || pad_settle || (terminal_commit && vh < VH_TOUCH)
+        let (axis, angle) = if tilt > TILT_AIM || pad_settle || (terminal_commit && vh < vh_touch)
         {
             axis_angle_from_cross([up_body[2], 0.0, -up_body[0]], up_y)
         } else {
@@ -252,14 +257,19 @@ impl LandingAutopilot {
                 terminal_commit,
                 has_pad,
             );
-            // Quiet high T-pad once centered: pure upright (no lean chase).
+            let vx = state.velocity[0];
+            let vz = state.velocity[2];
+            // Quiet high T-pad once centered: pure upright.
+            // Near-pad with residual vh: vertical-dominant anti-velocity (no pos PD).
             let desired = if has_pad && !seeking_center && !terminal_commit && vh < 2.5 {
                 [0.0, 1.0, 0.0]
+            } else if terminal_commit && vh >= vh_touch {
+                clamp_tilt([-vx, 1.0, -vz], lat_tilt)
             } else {
                 desired_thrust_axis_world(
-                    state.velocity[0],
+                    vx,
                     state.velocity[1],
-                    state.velocity[2],
+                    vz,
                     h,
                     self.k_lat,
                     lat_tilt,
@@ -387,7 +397,7 @@ impl LandingAutopilot {
         let soft_regime =
             up_y >= UPY_SOFT && (state.contacting || h < H_TERMINAL || !use_coast_burn);
 
-        let throttle = if state.contacting && vh > VH_TOUCH {
+        let throttle = if state.contacting && vh > vh_touch {
             // Skidding on the pad: thrust while tilted becomes a rocket sled.
             // Keep weight on the feet and let Coulomb friction stop the slide.
             hover_cmd * 0.55
@@ -401,6 +411,7 @@ impl LandingAutopilot {
                 self.k_h,
                 self.v_max_descent,
                 self.kv_descent,
+                vh_touch,
             )
             .max(t_auth)
         } else {
@@ -429,9 +440,12 @@ impl LandingAutopilot {
             } else {
                 0.0
             };
-            // Lateral authority only while high-seeking (same band as position PD).
+            // Lateral thrust authority for high pad-seek, or near-pad drift kill
+            // while soft schedule is not yet active (still above soft regime).
             let t_drift = if seeking_center && vh > 4.0 && up_y >= UPY_AUTH {
                 (0.10 + 0.025 * vh).min(0.35)
+            } else if terminal_commit && vh > vh_touch && up_y >= UPY_AUTH {
+                (hover_cmd * 0.90).min(0.55)
             } else {
                 0.0
             };
@@ -524,8 +538,9 @@ fn soft_touch_throttle(
     k_h: f64,
     v_max: f64,
     kv: f64,
+    vh_touch: f64,
 ) -> f64 {
-    let v_tgt = if vh > VH_TOUCH && !contacting {
+    let v_tgt = if vh > vh_touch && !contacting {
         // Still drifting: hold off the pad and bleed residual lateral speed.
         if h < 1.2 { 0.35 } else { 0.0 }
     } else if h < 1.0 {
@@ -534,11 +549,11 @@ fn soft_touch_throttle(
         -v_max.min(k_h * h.sqrt())
     };
     let mut t = hover_cmd + kv * (v_tgt - vy);
-    if h < 2.0 && !contacting && vh <= VH_TOUCH {
+    if h < 2.0 && !contacting && vh <= vh_touch {
         t -= 0.04;
     }
     // Never loft back up once committed to the soft approach.
-    if vy > 0.15 && vh <= VH_TOUCH {
+    if vy > 0.15 && vh <= vh_touch {
         t = t.min(hover_cmd * 0.85);
     }
     t
@@ -565,7 +580,7 @@ fn lat_tilt_allowance(
     }
     if terminal_commit {
         // Residual lateral speed only — never chase pad center.
-        return (max_lat_tilt * 0.5 + 0.02 * vh).min(LEAN_TERMINAL_VH);
+        return (0.08 + 0.03 * vh).min(LEAN_TERMINAL_VH);
     }
     if h > H_TERMINAL + 2.0 {
         let nominal = if has_pad {
@@ -577,6 +592,7 @@ fn lat_tilt_allowance(
         return brake_safe_lean(nominal, v_down, h_env, a_lift);
     }
     if h > 1.0 && vy > -1.5 && vh > VH_TOUCH {
+        // Free-field near-pad drift kill (L-mode).
         max_lat_tilt + (LAT_TILT_GAIN * vh).min(LEAN_PAD_EXTRA_MAX)
     } else {
         max_lat_tilt
