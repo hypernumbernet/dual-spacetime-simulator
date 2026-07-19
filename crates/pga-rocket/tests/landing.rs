@@ -49,8 +49,8 @@ fn run_landing_impulse(mut state: RocketState, steps: usize) -> (RocketState, La
 #[test]
 fn autopilot_uprights_tilted_hover() {
     let mut state = RocketState::at_altitude(60.0);
-    // Attitude-only check: disable air drag so hover recovery is not slowed by aero.
-    state.air_drag_enabled = false;
+    // Attitude-only check: Moon mode (no drag) so hover recovery is not slowed by aero.
+    state.moon_mode = true;
     state.motor = motor_from_pose(0.0, 60.0, 0.0, 0.35, 0.0, 0.0);
     state.contacting = false;
 

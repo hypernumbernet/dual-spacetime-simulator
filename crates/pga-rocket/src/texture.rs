@@ -60,6 +60,38 @@ pub fn generate_grass_pixels() -> Vec<u8> {
     px
 }
 
+/// Generates a 16×16 RGBA8 lunar regolith tile (gray dust + sparse crater flecks).
+pub fn generate_moon_pixels() -> Vec<u8> {
+    let regolith = [0.55, 0.54, 0.50];
+    let mut px = vec![0u8; (GRASS_TILE_PX * GRASS_TILE_PX * 4) as usize];
+    for y in 0..GRASS_TILE_PX {
+        for x in 0..GRASS_TILE_PX {
+            let d = jitter(x, y, 21, 0.09);
+            // Sparse darker crater / rock flecks.
+            let crater = if (h(x, y, 29) & 15) == 0 {
+                -0.14
+            } else if (h(x, y, 31) & 31) == 0 {
+                -0.07
+            } else {
+                0.0
+            };
+            // Occasional brighter ejecta highlight.
+            let bright = if (h(x, y, 37) & 63) == 0 { 0.08 } else { 0.0 };
+            let rgb = [
+                (regolith[0] + d + crater + bright).clamp(0.0, 1.0),
+                (regolith[1] + d + crater + bright * 0.95).clamp(0.0, 1.0),
+                (regolith[2] + d + crater * 0.9 + bright * 0.85).clamp(0.0, 1.0),
+            ];
+            let i = ((y * GRASS_TILE_PX + x) * 4) as usize;
+            px[i] = (rgb[0] * 255.0) as u8;
+            px[i + 1] = (rgb[1] * 255.0) as u8;
+            px[i + 2] = (rgb[2] * 255.0) as u8;
+            px[i + 3] = 255;
+        }
+    }
+    px
+}
+
 /// Generates a 16×16 RGBA8 concrete / paved tile with subtle mortar grid lines.
 pub fn generate_paved_pixels() -> Vec<u8> {
     let base = [0.52, 0.52, 0.50];
@@ -95,6 +127,11 @@ pub fn create_grass_texture(vb: &VulkanBase, allocator: &Mutex<Allocator>) -> Te
 /// Uploads the paved / concrete tile with a REPEAT + NEAREST sampler.
 pub fn create_paved_texture(vb: &VulkanBase, allocator: &Mutex<Allocator>) -> Texture {
     upload_rgba8_tile(vb, allocator, &generate_paved_pixels(), "paved")
+}
+
+/// Uploads the lunar regolith tile with a REPEAT + NEAREST sampler.
+pub fn create_moon_texture(vb: &VulkanBase, allocator: &Mutex<Allocator>) -> Texture {
+    upload_rgba8_tile(vb, allocator, &generate_moon_pixels(), "moon")
 }
 
 fn upload_rgba8_tile(

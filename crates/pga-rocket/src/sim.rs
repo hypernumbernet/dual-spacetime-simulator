@@ -236,8 +236,8 @@ pub struct RocketState {
     pub explosion_origin: [f64; 3],
     /// Peak normal impact speed (m/s) recorded at destruction.
     pub last_impact_speed: f64,
-    /// When true, apply quadratic air drag from ground-relative CoM velocity.
-    pub air_drag_enabled: bool,
+    /// When true (Moon mode), skip air drag. Default false ⇒ Earth atmosphere on.
+    pub moon_mode: bool,
 }
 
 impl Default for RocketState {
@@ -265,7 +265,7 @@ impl RocketState {
             explosion_age: 0.0,
             explosion_origin: [0.0, com_y, 0.0],
             last_impact_speed: 0.0,
-            air_drag_enabled: true,
+            moon_mode: false,
         }
     }
 
@@ -419,7 +419,8 @@ impl RocketState {
         let mut body_torque = prop.torque;
 
         // --- Air drag from ground-relative CoM velocity: F = −k |v| v ---
-        if self.air_drag_enabled {
+        // Moon mode is vacuum: no drag. Earth (default) uses quadratic air drag.
+        if !self.moon_mode {
             let k = self.params.air_drag_k.max(0.0);
             if k > 0.0 {
                 let vx = self.velocity[0];

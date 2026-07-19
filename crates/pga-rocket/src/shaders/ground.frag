@@ -6,6 +6,7 @@ layout(location = 2) in vec3 v_world;
 
 layout(set = 0, binding = 0) uniform sampler2D grass;
 layout(set = 0, binding = 1) uniform sampler2D paved;
+layout(set = 0, binding = 2) uniform sampler2D moon;
 
 // Push layout (128 bytes, shared with VS). Unused .w slots carry pad target.
 //   camera_pos.w  = target pad world X
@@ -14,6 +15,7 @@ layout(set = 0, binding = 1) uniform sampler2D paved;
 //   fog_params.y  = half_extent_world
 //   fog_params.z  = grass meters-per-tile
 //   fog_params.w  = paved meters-per-tile
+//   ground_origin.y = moon mode (1 = lunar regolith, 0 = grass)
 //   ground_origin.w = target pad world Z
 layout(push_constant) uniform PC {
     mat4 view_proj;
@@ -89,6 +91,14 @@ void main() {
         if ((on_home && home_h_mark(xz)) || (on_target && target_t_mark(xz, target))) {
             lit = MARK_COLOR;
         }
+    } else if (pc.ground_origin.y > 0.5) {
+        // Moon mode: gray regolith tile + dusty large-scale variation (no green meadow).
+        vec3 moon_col = texture(moon, v_uv).rgb;
+        float dust = 0.90 + 0.14 * vnoise(xz * 0.035);
+        float shade = 0.92 + 0.12 * vnoise(xz * 0.14 + 9.0);
+        // Sparse larger dark patches read as distant crater fields.
+        float crater_field = 1.0 - 0.12 * step(0.88, vnoise(xz * 0.012 + 3.0));
+        lit = moon_col * dust * shade * crater_field;
     } else {
         vec3 grass_col = texture(grass, v_uv).rgb;
         // Broad meadow patches so the field is not a flat repeating stamp.

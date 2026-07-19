@@ -12,8 +12,8 @@ const DT: f64 = 1.0 / 120.0;
 #[test]
 fn freefall_increases_downward_velocity_and_loses_altitude() {
     let mut s = RocketState::at_altitude(100.0);
-    // Pure gravity: disable air drag so Δv ≈ −g t holds tightly.
-    s.air_drag_enabled = false;
+    // Pure gravity: Moon mode disables air drag so Δv ≈ −g t holds tightly.
+    s.moon_mode = true;
     s.set_command(ControlCommand {
         throttle: 0.0,
         ..Default::default()
@@ -531,7 +531,7 @@ fn direct_high_speed_impact_triggers_explosion() {
 #[test]
 fn air_drag_off_keeps_horizontal_speed() {
     let mut s = RocketState::at_altitude(200.0);
-    s.air_drag_enabled = false;
+    s.moon_mode = true;
     s.velocity = [40.0, 0.0, 0.0];
     s.set_command(ControlCommand::default());
     let vx0 = s.velocity[0];
@@ -548,7 +548,7 @@ fn air_drag_off_keeps_horizontal_speed() {
 #[test]
 fn air_drag_on_slows_ground_speed() {
     let mut s = RocketState::at_altitude(500.0);
-    assert!(s.air_drag_enabled, "air drag should default to on");
+    assert!(!s.moon_mode, "Earth default: Moon mode off ⇒ air drag on");
     // Realistic k is small: use high speed and several seconds to see clear decay.
     s.velocity = [120.0, 0.0, 0.0];
     s.set_command(ControlCommand::default());
@@ -578,7 +578,7 @@ fn air_drag_on_slows_ground_speed() {
 fn air_drag_stronger_at_higher_ground_speed() {
     // One step of quadratic drag: |Δv| ≈ (k/m) |v|² dt, so higher speed loses more speed.
     let mut slow = RocketState::at_altitude(500.0);
-    slow.air_drag_enabled = true;
+    slow.moon_mode = false;
     slow.velocity = [40.0, 0.0, 0.0];
     slow.set_command(ControlCommand::default());
     let slow_vx0 = slow.velocity[0];
@@ -586,7 +586,7 @@ fn air_drag_stronger_at_higher_ground_speed() {
     let slow_loss = slow_vx0 - slow.velocity[0];
 
     let mut fast = RocketState::at_altitude(500.0);
-    fast.air_drag_enabled = true;
+    fast.moon_mode = false;
     fast.velocity = [120.0, 0.0, 0.0];
     fast.set_command(ControlCommand::default());
     let fast_vx0 = fast.velocity[0];

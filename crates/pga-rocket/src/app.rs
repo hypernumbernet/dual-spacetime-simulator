@@ -198,9 +198,9 @@ impl App {
         }
 
         if keys.reset {
-            let air_drag_enabled = self.rocket.air_drag_enabled;
+            let moon_mode = self.rocket.moon_mode;
             self.rocket = RocketState::resting_on_pad();
-            self.rocket.air_drag_enabled = air_drag_enabled;
+            self.rocket.moon_mode = moon_mode;
             self.control = ControlMapper::default();
             self.landing.disable();
             self.target_landing.disable();
@@ -308,6 +308,7 @@ impl App {
         renderer.sync_rocket(&self.rocket, eye);
         renderer.set_hud(hud);
 
+        let moon_mode = self.rocket.moon_mode;
         let draw_result = renderer.draw(
             vb,
             vp,
@@ -316,6 +317,7 @@ impl App {
             target_xz,
             SKY_COLOR,
             content.left_inset_px,
+            moon_mode,
             gui,
         );
         // Free egui textures even when the swapchain is out of date.

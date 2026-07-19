@@ -10,7 +10,8 @@ layout(push_constant) uniform PC {
     vec4 camera_pos;  // xyz = eye; w = target pad X (FS only)
     vec4 fog_color;   // rgb sky/horizon tint; a = plane_scale
     vec4 fog_params;  // x = edge_fog_start, y = half_extent_world, z = grass_mpt, w = paved_mpt
-    vec4 ground_origin; // x/z = plane recenter; y = 0; w = target pad Z (FS only)
+    // x/z = plane recenter; y = moon mode flag (FS only, not world height); w = target Z
+    vec4 ground_origin;
 } pc;
 
 layout(location = 0) out vec2 v_uv;
@@ -20,8 +21,9 @@ layout(location = 2) out vec3 v_world;
 void main() {
     // Scale local XZ so the disk grows with altitude; .w on fog_color carries scale.
     float scale = max(pc.fog_color.a, 0.001);
+    // Ground always sits on y = 0; moon flag lives in ground_origin.y for the FS only.
     vec3 world = vec3(in_pos.x * scale, in_pos.y, in_pos.z * scale)
-        + vec3(pc.ground_origin.x, pc.ground_origin.y, pc.ground_origin.z);
+        + vec3(pc.ground_origin.x, 0.0, pc.ground_origin.z);
     gl_Position = pc.view_proj * vec4(world, 1.0);
     // World-space tiling so the grass pattern is continuous as the plane recenters.
     float mpt = max(pc.fog_params.z, 0.001);

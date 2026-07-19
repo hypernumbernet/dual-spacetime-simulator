@@ -50,7 +50,7 @@ pub fn draw_params_panel(
         .exact_width(PANEL_WIDTH)
         .resizable(false)
         .show(ctx, |ui| {
-            ui.checkbox(&mut rocket.air_drag_enabled, "空気抵抗");
+            ui.checkbox(&mut rocket.moon_mode, "Moon mode");
             ui.heading("PGA Rocket");
             ui.separator();
 

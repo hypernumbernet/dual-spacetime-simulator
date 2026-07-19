@@ -8,7 +8,7 @@ use crate::mesh::{
     grass_ground_mesh, ground_half_extent_for_eye_height, ground_plane_scale, rocket_mesh,
 };
 use crate::sim::RocketState;
-use crate::texture::{Texture, create_grass_texture, create_paved_texture};
+use crate::texture::{Texture, create_grass_texture, create_moon_texture, create_paved_texture};
 use ash::vk;
 use glam::{Mat4, Vec3};
 use gpu_allocator::vulkan::Allocator;
@@ -39,6 +39,7 @@ struct MeshPush {
 /// - `camera_pos.w` = target pad world X
 /// - `fog_color.a` = plane_scale (VS grows the local mesh at high altitude)
 /// - `fog_params` = edge_fog_start, half_extent_world, grass_mpt, paved_mpt
+/// - `ground_origin.y` = moon mode (1 = lunar, 0 = grass)
 /// - `ground_origin.w` = target pad world Z
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -70,9 +71,10 @@ pub struct Renderer {
     ground_pipeline: vk::Pipeline,
     grass: Texture,
     paved: Texture,
+    moon: Texture,
     desc_set_layout: vk::DescriptorSetLayout,
     desc_pool: vk::DescriptorPool,
-    /// Grass (binding 0) + paved (binding 1) for the single ground plane.
+    /// Grass (0) + paved (1) + moon (2) for the single ground plane.
     desc_set: vk::DescriptorSet,
     ground: Option<GpuMesh>,
     /// World XZ of the random landing target (painted in ground.frag).
@@ -125,9 +127,10 @@ impl Renderer {
         let tri_pipeline = create_mesh_pipeline(&device, render_pass, mesh_layout);
         let fx_pipeline = create_fx_pipeline(&device, render_pass, mesh_layout);
 
-        // Grass + paved textures and ground pipeline.
+        // Grass + paved + moon textures and ground pipeline.
         let grass = create_grass_texture(vb, &allocator);
         let paved = create_paved_texture(vb, &allocator);
+        let moon = create_moon_texture(vb, &allocator);
 
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
@@ -140,6 +143,11 @@ impl Renderer {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(2)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let dsl_ci = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         let desc_set_layout =
@@ -147,7 +155,7 @@ impl Renderer {
 
         let pool_size = vk::DescriptorPoolSize {
             ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            descriptor_count: 2,
+            descriptor_count: 3,
         };
         let pool_sizes = [pool_size];
         let pool_ci = vk::DescriptorPoolCreateInfo::default()
@@ -171,6 +179,11 @@ impl Renderer {
             image_view: paved.image.view,
             image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         }];
+        let moon_info = [vk::DescriptorImageInfo {
+            sampler: moon.sampler,
+            image_view: moon.image.view,
+            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        }];
         let writes = [
             vk::WriteDescriptorSet::default()
                 .dst_set(desc_set)
@@ -182,6 +195,11 @@ impl Renderer {
                 .dst_binding(1)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(&paved_info),
+            vk::WriteDescriptorSet::default()
+                .dst_set(desc_set)
+                .dst_binding(2)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&moon_info),
         ];
         unsafe { device.update_descriptor_sets(&writes, &[]) };
 
@@ -212,6 +230,7 @@ impl Renderer {
             ground_pipeline,
             grass,
             paved,
+            moon,
             desc_set_layout,
             desc_pool,
             desc_set,
@@ -385,6 +404,7 @@ impl Renderer {
         target_xz: [f32; 2],
         clear: [f32; 4],
         left_inset_px: f32,
+        moon_mode: bool,
         gui: &mut Gui,
     ) -> Result<(), vk::Result> {
         vb.wait_for_fence();
@@ -449,10 +469,10 @@ impl Renderer {
                     GRASS_METERS_PER_TILE,
                     PAD_METERS_PER_TILE,
                 ],
-                // x/z snap the grass plane; .w = target pad Z (FS only).
+                // x/z snap the terrain plane; .y = moon mode; .w = target pad Z.
                 ground_origin: [
                     ground_center_xz[0],
-                    0.0,
+                    if moon_mode { 1.0 } else { 0.0 },
                     ground_center_xz[1],
                     target_xz[1],
                 ],
@@ -543,6 +563,7 @@ impl Drop for Renderer {
         }
         self.grass.destroy(&self.device, &self.allocator);
         self.paved.destroy(&self.device, &self.allocator);
+        self.moon.destroy(&self.device, &self.allocator);
         unsafe {
             self.device.destroy_pipeline(self.tri_pipeline, None);
             self.device.destroy_pipeline(self.fx_pipeline, None);
