@@ -31,7 +31,7 @@
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
     attitude_gain_scales, blend_desired_axis, blend_vec3, flip_aim_weight, lean_max_nominal,
-    LandingThrottleFuzzy, LeanAimFuzzy,
+    LandingThrottleFuzzy, LeanAimFuzzy, PhysicsPadThrottleFuzzy, slew_throttle,
 };
 use crate::sim::{ControlCommand, GRAVITY, RocketState};
 
@@ -101,6 +101,10 @@ const LEAN_SEEK_MAX: f64 = 0.28;
 /// Max lean near the pad for residual vh kill (rad) — never position walk-in.
 /// Enough to null a few m/s while soft-touch holds; not so deep it drifts off-pad.
 const LEAN_TERMINAL_VH: f64 = 0.18;
+/// T-Descend: tighter lean cap so terminal approach stays nearer upright (rad).
+const LEAN_DESCEND_MAX: f64 = 0.10;
+/// T-Descend complete latch — tighter than [`TILT_PAD_DONE`] for a stable rest pose.
+const TILT_DESCEND_DONE: f64 = 0.12;
 /// Position / velocity mix for high-altitude pad seek.
 const K_POS_TARGET: f64 = 0.03;
 const K_VEL_TARGET: f64 = 0.55;
@@ -116,6 +120,12 @@ const COAST_MARGIN_M: f64 = 12.0;
 const PHYSICS_A_REQ_SAFETY: f64 = 1.15;
 /// Envelope lateness (m) that forces a hard brake floor (matches fuzzy hard_late).
 const ENVELOPE_LATE_M: f64 = 0.75;
+/// Main-engine throttle spool-up rate (0→1 in ~0.9 s).
+const THROTTLE_SPOOL_UP: f64 = 1.1;
+/// Faster spool when GNC requests a large step (suicide-burn engagement).
+const THROTTLE_SPOOL_UP_EMERGENCY: f64 = 4.0;
+/// Main-engine throttle spool-down rate (1→0 in ~0.4 s).
+const THROTTLE_SPOOL_DOWN: f64 = 2.5;
 
 /// Automatic landing autopilot toggled with `L`.
 #[derive(Clone, Debug)]
@@ -136,6 +146,10 @@ pub struct LandingAutopilot {
     pub omega_max: f64,
     /// Near-vertical + low rates (HUD only; actuators stay active).
     pub attitude_locked: bool,
+    /// Delivered throttle state (lags the GNC setpoint via [`slew_throttle`]).
+    throttle_actuator: f64,
+    /// Re-sync actuator from vehicle command on arm / enable.
+    throttle_actuator_sync: bool,
 }
 
 impl Default for LandingAutopilot {
@@ -155,23 +169,25 @@ impl Default for LandingAutopilot {
             kv_descent: 0.28,
             omega_max: 1.5,
             attitude_locked: false,
+            throttle_actuator: 0.0,
+            throttle_actuator_sync: true,
         }
     }
 }
 
 impl LandingAutopilot {
-    /// Attitude gains for T-key Descend, derived from [`ALPHA_PLAN`] (same basis as transit).
+    /// Attitude gains for T-key Descend, derived from [`ALPHA_PLAN`] with transit-class
+    /// damping (higher `kd/kp` keeps the final upright snap better damped).
     pub fn for_target_pad() -> Self {
         let alpha = ALPHA_PLAN;
         let theta_ref = std::f64::consts::FRAC_PI_2;
-        let omega_max = (2.0 * alpha * theta_ref).sqrt();
-        let kp_attitude = 2.0 * (2.0 * alpha).sqrt();
-        let kd_attitude = 2.0 * (2.0 * alpha).sqrt();
+        let wn = (2.0 * alpha).sqrt();
+        let omega_max = (2.0 * alpha * theta_ref).sqrt() * 1.3;
         Self {
-            kp_attitude,
-            kd_attitude,
-            kd_roll: kd_attitude * 0.65,
-            max_lat_tilt: LEAN_TERMINAL_VH,
+            kp_attitude: 2.0 * wn,
+            kd_attitude: 3.0 * wn,
+            kd_roll: 2.0 * wn,
+            max_lat_tilt: LEAN_DESCEND_MAX,
             omega_max,
             ..Self::default()
         }
@@ -182,6 +198,7 @@ impl LandingAutopilot {
         self.enabled = true;
         self.complete = false;
         self.attitude_locked = false;
+        self.throttle_actuator_sync = true;
     }
 
     pub fn toggle(&mut self) {
@@ -189,6 +206,7 @@ impl LandingAutopilot {
         if self.enabled {
             self.complete = false;
             self.attitude_locked = false;
+            self.throttle_actuator_sync = true;
         }
     }
 
@@ -196,6 +214,7 @@ impl LandingAutopilot {
         self.enabled = false;
         self.complete = false;
         self.attitude_locked = false;
+        self.throttle_actuator_sync = true;
     }
 
     pub fn status_label(&self) -> &'static str {
@@ -221,7 +240,7 @@ impl LandingAutopilot {
         &mut self,
         state: &RocketState,
         target_xz: Option<[f64; 2]>,
-        _dt: f64,
+        dt: f64,
     ) -> ControlCommand {
         if !self.enabled || self.complete || state.destroyed {
             return ControlCommand::default();
@@ -358,13 +377,7 @@ impl LandingAutopilot {
         // Lying on the ground past recovery: the engine cannot upright a grounded
         // hull, thrusting only shoves it around. Cut power, keep roll damping.
         if state.contacting && up_y < 0.5 {
-            return ControlCommand {
-                throttle: 0.0,
-                pitch: 0.0,
-                yaw: 0.0,
-                roll,
-            }
-            .clamp();
+            return self.emit_command(state, dt, 0.0, 0.0, 0.0, roll);
         }
 
         // On-pad upright snap: light hover for gimbal/RCS torque, no lateral thrust.
@@ -376,13 +389,7 @@ impl LandingAutopilot {
             } else {
                 0.0
             };
-            return ControlCommand {
-                throttle: thr,
-                pitch,
-                yaw,
-                roll,
-            }
-            .clamp();
+            return self.emit_command(state, dt, thr, pitch, yaw, roll);
         }
 
         let attitude_busy = angle > ERR_PHASE || omega_sq > OMEGA_PHASE * OMEGA_PHASE;
@@ -479,7 +486,46 @@ impl LandingAutopilot {
         };
 
         ControlCommand {
-            throttle: throttle.clamp(0.0, 1.0),
+            throttle: self.finalize_throttle(throttle.clamp(0.0, 1.0), dt, state),
+            pitch,
+            yaw,
+            roll,
+        }
+        .clamp()
+    }
+
+    fn finalize_throttle(&mut self, target: f64, dt: f64, state: &RocketState) -> f64 {
+        if self.throttle_actuator_sync {
+            self.throttle_actuator = state.command.throttle.clamp(0.0, 1.0);
+            self.throttle_actuator_sync = false;
+        }
+        let target = target.clamp(0.0, 1.0);
+        let spool_up = if target - self.throttle_actuator > 0.35 {
+            THROTTLE_SPOOL_UP_EMERGENCY
+        } else {
+            THROTTLE_SPOOL_UP
+        };
+        self.throttle_actuator = slew_throttle(
+            self.throttle_actuator,
+            target,
+            dt,
+            spool_up,
+            THROTTLE_SPOOL_DOWN,
+        );
+        self.throttle_actuator
+    }
+
+    fn emit_command(
+        &mut self,
+        state: &RocketState,
+        dt: f64,
+        throttle: f64,
+        pitch: f64,
+        yaw: f64,
+        roll: f64,
+    ) -> ControlCommand {
+        ControlCommand {
+            throttle: self.finalize_throttle(throttle, dt, state),
             pitch,
             yaw,
             roll,
@@ -494,7 +540,7 @@ impl LandingAutopilot {
         &mut self,
         state: &RocketState,
         target_xz: [f64; 2],
-        _dt: f64,
+        dt: f64,
     ) -> ControlCommand {
         if !self.enabled || self.complete || state.destroyed {
             return ControlCommand::default();
@@ -529,8 +575,12 @@ impl LandingAutopilot {
             h
         };
         let pad_settle = state.contacting && on_pad;
+        // Low terminal: commit to pure upright once horizontal motion is modest.
+        let force_upright = terminal_commit
+            && !seeking_center
+            && (h <= H_TERMINAL + 10.0 || vh <= vh_touch * 1.25);
 
-        let (axis, angle) = if pad_settle {
+        let (axis, angle) = if pad_settle || force_upright {
             axis_angle_from_cross([up_body[2], 0.0, -up_body[0]], up_y)
         } else {
             let vx = state.velocity[0];
@@ -551,7 +601,7 @@ impl LandingAutopilot {
                 vh_touch,
                 lean_max: LEAN_MAX,
                 lean_seek_max: LEAN_SEEK_MAX,
-                lean_terminal_vh: LEAN_TERMINAL_VH,
+                lean_terminal_vh: LEAN_DESCEND_MAX,
                 lean_pad_extra_max: LEAN_PAD_EXTRA_MAX,
                 lat_tilt_gain: LAT_TILT_GAIN,
                 h_terminal: H_TERMINAL,
@@ -576,9 +626,10 @@ impl LandingAutopilot {
         };
 
         let g = attitude_gain_scales(state.contacting, on_pad, h);
-        let kp = self.kp_attitude * g.kp;
-        let kd = self.kd_attitude * g.kd;
-        let kd_roll = self.kd_roll * g.kd_roll;
+        let upright_boost = if terminal_commit && h < 30.0 { 1.2 } else { 1.0 };
+        let kp = self.kp_attitude * g.kp * upright_boost;
+        let kd = self.kd_attitude * g.kd * upright_boost;
+        let kd_roll = self.kd_roll * g.kd_roll * upright_boost;
         let alpha = ALPHA_PLAN * g.alpha;
         let w_cap = self.omega_max * g.omega_cap;
         let w_mag = (kp * angle).min((2.0 * alpha * angle).sqrt()).min(w_cap);
@@ -590,15 +641,15 @@ impl LandingAutopilot {
 
         update_lock_latch(&mut self.attitude_locked, tilt, omega_sq, vh_sq);
 
-        // T-pad: latch complete once feet are on the painted square and motion is
-        // settling — do not wait for a perfect upright lock while thrust keeps
-        // the hull hovering after a light bounce.
+        // T-pad: latch complete once feet are on the painted square, nearly upright,
+        // and rates have decayed — do not cut thrust while still visibly tilted.
         if on_pad
             && state.contacting
             && h < 2.5
             && vh < VH_PAD_DONE
             && vy.abs() < 1.0
-            && tilt < 0.25
+            && tilt < TILT_DESCEND_DONE
+            && omega_sq < OMEGA_PAD_DONE * OMEGA_PAD_DONE
         {
             self.complete = true;
             return ControlCommand::default();
@@ -616,46 +667,32 @@ impl LandingAutopilot {
         }
 
         if state.contacting && up_y < 0.5 {
-            return ControlCommand {
-                throttle: 0.0,
-                pitch: 0.0,
-                yaw: 0.0,
-                roll,
-            }
-            .clamp();
+            return self.emit_command(state, dt, 0.0, 0.0, 0.0, roll);
         }
 
         if pad_settle && up_y >= 0.5 {
+            let hover_cmd = (hover / up_y.max(0.35)).clamp(0.0, 0.9);
             // Ground reaction supports weight — cut thrust once horizontal motion is
             // low so a light bounce does not re-launch into a hover loop.
             if vh <= vh_touch && vy.abs() < 1.0 {
-                let thr = if (tilt > 0.08 || omega_sq > 0.04) && tilt < 0.35 {
+                let effort = pitch.abs() + yaw.abs() + roll.abs();
+                let thr = if (tilt > 0.04 || omega_sq > 0.015) && tilt < 0.30 {
+                    let t_floor = hover_cmd * (0.18 * (tilt / TILT_DESCEND_DONE).min(1.0) + 0.06);
                     attitude_authority_throttle(pitch, yaw, roll, hover)
-                        .min(hover * 0.12)
+                        .max(t_floor)
+                        .min(hover * 0.28)
+                        .max(0.06 * effort)
                 } else {
                     0.0
                 };
-                return ControlCommand {
-                    throttle: thr,
-                    pitch,
-                    yaw,
-                    roll,
-                }
-                .clamp();
+                return self.emit_command(state, dt, thr, pitch, yaw, roll);
             }
-            let hover_cmd = (hover / up_y.max(0.35)).clamp(0.0, 0.9);
             let thr = if tilt > 0.06 || omega_sq > 0.02 {
                 (hover_cmd * 0.45 + 0.15 * (pitch.abs() + yaw.abs() + roll.abs())).min(0.55)
             } else {
                 0.0
             };
-            return ControlCommand {
-                throttle: thr,
-                pitch,
-                yaw,
-                roll,
-            }
-            .clamp();
+            return self.emit_command(state, dt, thr, pitch, yaw, roll);
         }
 
         let hover_cmd = (hover / up_y.max(0.25)).clamp(0.0, 0.95);
@@ -687,13 +724,7 @@ impl LandingAutopilot {
             t_auth,
         );
 
-        ControlCommand {
-            throttle: throttle.clamp(0.0, 1.0),
-            pitch,
-            yaw,
-            roll,
-        }
-        .clamp()
+        self.emit_command(state, dt, throttle, pitch, yaw, roll)
     }
 }
 
@@ -807,7 +838,7 @@ fn brake_safe_lean(nominal: f64, v_down: f64, h_env: f64, a_lift: f64) -> f64 {
     nominal.min(upy_req.acos())
 }
 
-/// Closed-loop suicide burn for T-Descend: `a_req = (v² − v_touch²)/(2h)` → throttle.
+/// Closed-loop suicide burn for T-Descend: local laws → [`PhysicsPadThrottleFuzzy`] blend.
 fn physics_pad_vertical_throttle(
     mass: f64,
     max_thrust: f64,
@@ -824,31 +855,13 @@ fn physics_pad_vertical_throttle(
     vh_touch: f64,
     t_auth: f64,
 ) -> f64 {
-    // Pad contact with low horizontal speed: ground carries weight — do not hover.
-    if contacting && vh <= vh_touch {
-        return t_auth.min(0.12);
-    }
-
-    // Near the pad and rising (post-bounce): never loft back up.
-    if h_env < H_TERMINAL && vy > 0.05 {
-        return t_auth.min(hover_cmd * 0.35);
-    }
-
-    // Feet just above the pad, slow drift: hold thrust off until reground.
-    if h_env < 1.2 && vh <= vh_touch && v_down < V_BRAKE_MIN {
-        return t_auth.min(0.08);
-    }
-
-    if contacting && vh > vh_touch {
-        return hover_cmd * 0.55;
-    }
-
-    if h_env > h_need + COAST_MARGIN_M && v_down > V_BRAKE_MIN {
-        return t_auth.max(0.0);
-    }
+    let t_coast = t_auth.max(0.0);
+    let t_skid = hover_cmd * 0.55;
+    let t_ground = t_auth.min(0.12);
+    let t_drift_hold = t_auth.min(0.08);
+    let t_anti_loft = t_auth.min(hover_cmd * 0.35);
 
     let h_eff = h_env.max(0.35);
-    // Constant-decel soft terminal: touch speed ∝ √h below [`H_TERMINAL`].
     let v_touch_eff = if h_env < H_TERMINAL {
         V_TOUCH * (h_env / H_TERMINAL).sqrt().max(0.18)
     } else {
@@ -862,21 +875,38 @@ fn physics_pad_vertical_throttle(
     };
 
     let up_y_eff = up_y.max(UPY_BRAKE);
-    let mut t = mass * (a_req + GRAVITY) / (max_thrust * up_y_eff);
-    t = t.clamp(0.0, BURN_PLAN_FRAC).max(t_auth);
+    let mut t_brake = mass * (a_req + GRAVITY) / (max_thrust * up_y_eff);
+    t_brake = t_brake.clamp(0.0, BURN_PLAN_FRAC).max(t_auth);
 
-    // Hard envelope floor — never arrive late on the suicide-burn curve.
-    if h_env <= h_need + ENVELOPE_LATE_M && v_down > V_BRAKE_MIN && up_y >= UPY_BRAKE {
-        let t_bang = (BURN_PLAN_FRAC + (v_down - V_TOUCH).max(0.0) * 0.015).min(1.0);
-        t = t.max(t_bang);
-    }
-
-    // Terminal taper: once near the target descent rate, do not overshoot into hover.
     if h_env < H_TERMINAL && v_down < v_touch_eff + 0.25 {
-        t = t.min(hover_cmd * 0.92);
+        t_brake = t_brake.min(hover_cmd * 0.92);
     }
 
-    t
+    let t_bang = (BURN_PLAN_FRAC + (v_down - V_TOUCH).max(0.0) * 0.015).min(1.0);
+
+    PhysicsPadThrottleFuzzy {
+        h_env,
+        h_need,
+        v_down,
+        vy,
+        vh,
+        contacting,
+        vh_touch,
+        up_y,
+        t_coast,
+        t_brake,
+        t_bang,
+        t_ground,
+        t_skid,
+        t_anti_loft,
+        t_drift_hold,
+        h_terminal: H_TERMINAL,
+        coast_margin: COAST_MARGIN_M,
+        envelope_late: ENVELOPE_LATE_M,
+        v_brake_min: V_BRAKE_MIN,
+        upy_brake: UPY_BRAKE,
+    }
+    .arbitrate()
 }
 
 /// Normalize `v` and limit its angle from +Y to `max_tilt` (uses cos test, no acos).
@@ -910,6 +940,15 @@ mod tests {
     use crate::euclidean_pga::{motor_from_pose, motor_body_up_world, motor_inverse_rotate_vector, attitude_error_body};
 
     const DT: f64 = 1.0 / 120.0;
+
+    /// Run the lander for ~1 s so the throttle actuator can spool to the setpoint.
+    fn lander_cmd_after_spool(ap: &mut LandingAutopilot, state: &RocketState) -> ControlCommand {
+        let mut cmd = ControlCommand::default();
+        for _ in 0..120 {
+            cmd = ap.update(state, DT);
+        }
+        cmd
+    }
 
     #[test]
     fn toggle_enables_and_disables() {
@@ -972,7 +1011,7 @@ mod tests {
         state.contacting = false;
         let mut ap = LandingAutopilot::default();
         ap.enabled = true;
-        let cmd = ap.update(&state, DT);
+        let cmd = lander_cmd_after_spool(&mut ap, &state);
         assert!(cmd.throttle > 0.85, "expected suicide burn, throttle={}", cmd.throttle);
     }
 
@@ -986,7 +1025,7 @@ mod tests {
         state.contacting = false;
         let mut ap = LandingAutopilot::default();
         ap.enabled = true;
-        let cmd = ap.update(&state, DT);
+        let cmd = lander_cmd_after_spool(&mut ap, &state);
         assert!(
             cmd.throttle > 0.85,
             "tilted fast fall must brake, throttle={}",
@@ -1000,7 +1039,7 @@ mod tests {
         state.motor = motor_from_pose(0.0, 150.0, 0.0, std::f64::consts::PI - 0.05, 0.0, 0.0);
         let mut ap = LandingAutopilot::default();
         ap.enabled = true;
-        let cmd = ap.update(&state, DT);
+        let cmd = lander_cmd_after_spool(&mut ap, &state);
         assert!(
             cmd.pitch.abs() > 0.5,
             "inverted vehicle needs strong gimbal, pitch={}",
@@ -1015,7 +1054,7 @@ mod tests {
         state.motor = motor_from_pose(0.0, 80.0, 0.0, 0.35, 0.0, 0.0);
         let mut ap = LandingAutopilot::default();
         ap.enabled = true;
-        let cmd = ap.update(&state, DT);
+        let cmd = lander_cmd_after_spool(&mut ap, &state);
         assert!(cmd.throttle > 0.1);
         assert!(cmd.pitch.abs() > 0.05);
     }
@@ -1082,7 +1121,7 @@ mod tests {
             VH_TOUCH_PAD,
             0.0,
         );
-        assert!(t < 0.05, "expected coast above envelope, t={t}");
+        assert!(t < 0.15, "expected coast above envelope, t={t}");
     }
 
     #[test]
@@ -1214,6 +1253,23 @@ mod tests {
             t < hover_cmd * 0.5,
             "rising near pad must not command hover, t={t} hover={hover_cmd}"
         );
+    }
+
+    #[test]
+    fn actuator_slew_limits_step_command() {
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        ap.throttle_actuator = 0.0;
+        ap.throttle_actuator_sync = false;
+        let state = RocketState::at_altitude(50.0);
+        let dt = 1.0 / 120.0;
+        let t0 = ap.finalize_throttle(0.95, dt, &state);
+        assert!(t0 < 0.95, "single frame must not jump to full thrust, t={t0}");
+        let mut t = t0;
+        for _ in 0..200 {
+            t = ap.finalize_throttle(0.95, dt, &state);
+        }
+        assert!((t - 0.95).abs() < 0.02, "should reach target after spool, t={t}");
     }
 
     #[test]

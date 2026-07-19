@@ -188,6 +188,141 @@ impl LandingThrottleFuzzy {
     }
 }
 
+// --- T-Descend physics vertical (regime blend + actuator) ---------------------
+
+/// Fuzzy blend for [`crate::landing::physics_pad_vertical_throttle`]: smooths
+/// coast ↔ brake ↔ ground-cut transitions instead of hard `if` steps.
+#[derive(Clone, Copy, Debug)]
+pub struct PhysicsPadThrottleFuzzy {
+    pub h_env: f64,
+    pub h_need: f64,
+    pub v_down: f64,
+    pub vy: f64,
+    pub vh: f64,
+    pub contacting: bool,
+    pub vh_touch: f64,
+    pub up_y: f64,
+    pub t_coast: f64,
+    pub t_brake: f64,
+    pub t_bang: f64,
+    pub t_ground: f64,
+    pub t_skid: f64,
+    pub t_anti_loft: f64,
+    pub t_drift_hold: f64,
+    pub h_terminal: f64,
+    pub coast_margin: f64,
+    pub envelope_late: f64,
+    pub v_brake_min: f64,
+    pub upy_brake: f64,
+}
+
+impl PhysicsPadThrottleFuzzy {
+    /// Membership-weighted vertical setpoint in [0, 1].
+    pub fn arbitrate(self) -> f64 {
+        let PhysicsPadThrottleFuzzy {
+            h_env,
+            h_need,
+            v_down,
+            vy,
+            vh,
+            contacting,
+            vh_touch,
+            up_y,
+            t_coast,
+            t_brake,
+            t_bang,
+            t_ground,
+            t_skid,
+            t_anti_loft,
+            t_drift_hold,
+            h_terminal,
+            coast_margin,
+            envelope_late,
+            v_brake_min,
+            upy_brake,
+        } = self;
+
+        // Coast vs closed-loop brake: shoulder on Δh above the envelope + descent rate.
+        let dh = h_env - h_need;
+        let mu_coast = and(
+            ramp(dh, coast_margin - 4.0, coast_margin + 6.0),
+            ramp(v_down, v_brake_min - 1.0, v_brake_min + 0.5),
+        );
+        let mu_brake = ramp_down(dh, coast_margin - 6.0, coast_margin + 4.0);
+        let mut t = defuzz_weighted(
+            &[(mu_coast, t_coast), (mu_brake, t_brake)],
+            t_brake,
+        );
+
+        // Pad skid: contacting with residual horizontal speed.
+        let mu_skid = if contacting {
+            ramp(vh, vh_touch - 0.4, vh_touch + 1.2)
+        } else {
+            0.0
+        };
+        if mu_skid > 1e-6 {
+            t = defuzz_weighted(&[(mu_skid, t_skid), (1.0 - mu_skid, t)], t);
+        }
+
+        // Ground support: weight on feet — taper thrust off (smooth shoulder on vh).
+        let mu_ground = if contacting {
+            ramp_down(vh, vh_touch + 0.6, vh_touch - 0.4)
+        } else {
+            0.0
+        };
+        if mu_ground > 1e-6 {
+            t = defuzz_weighted(&[(mu_ground, t_ground), (1.0 - mu_ground, t)], t);
+        }
+
+        // Post-bounce anti-loft near the pad.
+        let mu_loft = if h_env < h_terminal {
+            ramp(vy, -0.02, 0.30)
+        } else {
+            0.0
+        };
+        if mu_loft > 1e-6 {
+            t = defuzz_weighted(&[(mu_loft, t_anti_loft), (1.0 - mu_loft, t)], t);
+        }
+
+        // Feet just above pad, slow drift: hold thrust off until reground.
+        let mu_drift = if !contacting && h_env < 1.2 && vh <= vh_touch {
+            ramp_down(v_down, v_brake_min, 0.4)
+        } else {
+            0.0
+        };
+        if mu_drift > 1e-6 {
+            t = defuzz_weighted(&[(mu_drift, t_drift_hold), (1.0 - mu_drift, t)], t);
+        }
+
+        // Hard safety floor when late on the envelope (same doctrine as L-mode fuzzy).
+        let hard_late =
+            h_env <= h_need + envelope_late && v_down > v_brake_min && up_y >= upy_brake;
+        if hard_late {
+            let mu_late = ramp(h_need + envelope_late + 1.5 - h_env, -2.0, 1.0);
+            t = t.max(mu_late * t_bang + (1.0 - mu_late) * t.min(t_bang));
+            t = t.max(t_bang);
+        }
+
+        t.clamp(0.0, 1.0)
+    }
+}
+
+/// Asymmetric main-engine throttle slew (fraction per second).
+///
+/// Pump-fed stages spool up slower than they throttle down; this models the
+/// commanded-throttle → delivered-thrust lag without changing the GNC setpoint law.
+#[inline]
+pub fn slew_throttle(current: f64, target: f64, dt: f64, spool_up: f64, spool_down: f64) -> f64 {
+    let dt = dt.max(0.0);
+    let target = target.clamp(0.0, 1.0);
+    let current = current.clamp(0.0, 1.0);
+    if target > current {
+        (current + spool_up * dt).min(target)
+    } else {
+        (current - spool_down * dt).max(target)
+    }
+}
+
 // --- Attitude gain scheduling (continuous pad / free field) -------------------
 
 /// Multipliers on base attitude gains / √-profile parameters.
@@ -659,6 +794,52 @@ mod tests {
             (thr - 0.42).abs() < 0.08,
             "near pad should track soft channel, thr={thr}"
         );
+    }
+
+    #[test]
+    fn physics_pad_coast_brake_shoulder_is_continuous() {
+        let base = PhysicsPadThrottleFuzzy {
+            h_env: 50.0,
+            h_need: 30.0,
+            v_down: 6.0,
+            vy: -6.0,
+            vh: 0.0,
+            contacting: false,
+            vh_touch: 2.0,
+            up_y: 1.0,
+            t_coast: 0.0,
+            t_brake: 0.85,
+            t_bang: 0.95,
+            t_ground: 0.05,
+            t_skid: 0.4,
+            t_anti_loft: 0.1,
+            t_drift_hold: 0.05,
+            h_terminal: 4.5,
+            coast_margin: 12.0,
+            envelope_late: 0.75,
+            v_brake_min: 1.5,
+            upy_brake: 0.25,
+        };
+        let t_coast = base.arbitrate();
+        let mut b = base;
+        b.h_env = 44.0;
+        let t_mid = b.arbitrate();
+        b.h_env = 38.0;
+        let t_brake = b.arbitrate();
+        assert!(t_coast < 0.15, "high above envelope should coast, t={t_coast}");
+        assert!(t_brake > 0.5, "on envelope should brake, t={t_brake}");
+        assert!(
+            t_mid > t_coast && t_mid < t_brake + 0.05,
+            "should ramp between coast and brake, mid={t_mid}"
+        );
+    }
+
+    #[test]
+    fn slew_throttle_respects_asymmetric_rates() {
+        let up = slew_throttle(0.0, 1.0, 0.1, 1.0, 3.0);
+        assert!((up - 0.1).abs() < 1e-9);
+        let down = slew_throttle(1.0, 0.0, 0.1, 1.0, 3.0);
+        assert!((down - 0.7).abs() < 1e-9);
     }
 
     #[test]

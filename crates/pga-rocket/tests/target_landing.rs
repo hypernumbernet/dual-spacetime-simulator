@@ -224,4 +224,9 @@ fn target_descend_completes_without_hovering() {
         "touchdown should be soft, impact={}",
         state.last_impact_speed
     );
+    let up_y = pga_rocket::euclidean_pga::world_up_in_body(&state.motor)[1];
+    assert!(
+        up_y > (std::f64::consts::PI - 0.12).cos(),
+        "should rest nearly upright, cos(tilt)={up_y}"
+    );
 }

@@ -216,9 +216,11 @@ X' = M X M~      (M~ は反転 reverse)
 
 3. **ターミナル Descend（パッド上・hand-off 後）**
    - 垂直: 物理閉ループ自殺バーン — `a_req = clamp((v² − v_touch²)/(2h), 0, a_brake)`、
-     `t = m(a_req + g)/(T_max·up_y)`。包絡より十分上はコースト、包絡上／遅刻は
-     `a_req` 飽和で bang、接地直前は `v_down → v_touch` でホバー相当。√h の
-     `k_h` / `kv` チューニングは使わない（L モードのみ）。
+     `t = m(a_req + g)/(T_max·up_y)`。コースト／ブレーキ／接地カットは
+     [`PhysicsPadThrottleFuzzy`](src/fuzzy.rs) で肩付きブレンド（離散 step なし）。
+     包絡遅刻の hard floor のみ離散のまま。
+   - **エンジンアクチュエータ:** GNC セットポイントを [`slew_throttle`](src/fuzzy.rs)
+     で非対称スプール（上 ~0.9 s、下 ~0.4 s の 0↔1）してから sim に渡す（L/T 共通）。
    - 姿勢: 既存の lean aim + √-profile PD。ゲインは [`ALPHA_PLAN`](src/landing.rs)
      から導出（`for_target_pad`）。mid-range 包絡が残差 `vh` の大半を既に落とす。
 
