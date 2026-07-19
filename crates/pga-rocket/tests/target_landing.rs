@@ -3,8 +3,9 @@
 use pga_rocket::euclidean_pga::motor_from_pose;
 use pga_rocket::sim::{RocketState, step_rocket};
 use pga_rocket::target_landing::{
-    inside_target_pad, CLIMB_ALT_M, TARGET_PAD_HALF_M, TargetLandingAutopilot, TargetPhase,
+    inside_target_pad, CLIMB_ALT_M, TargetLandingAutopilot, TargetPhase,
 };
+use pga_rocket::TARGET_SUCCESS_HALF_M;
 
 const DT: f64 = 1.0 / 120.0;
 
@@ -66,7 +67,7 @@ fn low_altitude_climbs_above_500m_and_lands_on_target() {
     let p = state.position();
     assert!(
         inside_target_pad(p, target),
-        "should land inside target pad square (±{TARGET_PAD_HALF_M} m), pos=({:.1},{:.1})",
+        "should land inside target success box (±{TARGET_SUCCESS_HALF_M} m), pos=({:.1},{:.1})",
         p[0],
         p[2]
     );
@@ -130,7 +131,7 @@ fn high_altitude_skips_climb_label_and_lands() {
     assert_eq!(ap.phase, TargetPhase::Cruise);
 
     let mut max_alt = state.altitude();
-    for _ in 0..(5 * 60 * 120) {
+    for _ in 0..(8 * 60 * 120) {
         if state.destroyed || ap.complete {
             break;
         }
@@ -151,7 +152,7 @@ fn high_altitude_skips_climb_label_and_lands() {
     let p = state.position();
     assert!(
         inside_target_pad(p, target),
-        "should land inside target pad square, pos=({:.1},{:.1})",
+        "should land inside target success box, pos=({:.1},{:.1})",
         p[0],
         p[2]
     );

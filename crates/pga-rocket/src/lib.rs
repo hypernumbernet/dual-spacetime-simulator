@@ -20,6 +20,7 @@ pub use fuzzy::{LONG_CRUISE_ALT_M as LONG_RANGE_CRUISE_ALT_M, LONG_RANGE_M};
 pub use target_landing::{
     inside_target_pad, TargetLandingAutopilot, TargetPhase, CLIMB_ALT_M, TARGET_PAD_HALF_M,
 };
+pub use landing::TARGET_SUCCESS_HALF_M;
 pub use sim::{
     BodyWrench, ContactKind, ContactProbe, ControlCommand, RocketParams, RocketState, ThrusterSample,
     body_wrench_at, cross, engine_wrench, gimbal_rotor, ground_contact_probes, propulsive_wrench,

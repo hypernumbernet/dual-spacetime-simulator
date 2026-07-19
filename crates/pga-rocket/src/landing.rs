@@ -90,24 +90,26 @@ const UPY_AUTH: f64 = 0.5;
 const UPY_SOFT: f64 = 0.6;
 /// Target / launch pad half-extent (m) — matches `mesh::TARGET_PAD_HALF_EXTENT`.
 pub(crate) const PAD_HALF_M: f64 = 30.0;
+/// T-mode landing success half-extent (m) — narrower than the painted pad.
+pub const TARGET_SUCCESS_HALF_M: f64 = 12.0;
 
 // --- T-pad guidance (high seek, low commit) ---------------------------------
 /// Foot height (m) below which position-seek is off (upright + soft-touch only).
 const CENTER_SEEK_MIN_H: f64 = 45.0;
-/// Drop position-seek once Chebyshev offset is within this (m).
+/// Drop position-seek once Chebyshev offset is within this (m) — L-mode pad target.
 const CENTER_TOL_M: f64 = 15.0;
+/// T-Descend: drop high-altitude seek once inside this Chebyshev offset (m).
+pub(crate) const TARGET_CENTER_TOL_M: f64 = 8.0;
 /// Max lean while high and seeking the pad (rad).
-const LEAN_SEEK_MAX: f64 = 0.28;
+const LEAN_SEEK_MAX: f64 = 0.35;
 /// Max lean near the pad for residual vh kill (rad) — never position walk-in.
 /// Enough to null a few m/s while soft-touch holds; not so deep it drifts off-pad.
 const LEAN_TERMINAL_VH: f64 = 0.18;
-/// T-Descend: tighter lean cap so terminal approach stays nearer upright (rad).
-const LEAN_DESCEND_MAX: f64 = 0.10;
 /// T-Descend complete latch — tighter than [`TILT_PAD_DONE`] for a stable rest pose.
 const TILT_DESCEND_DONE: f64 = 0.12;
 /// Position / velocity mix for high-altitude pad seek.
-const K_POS_TARGET: f64 = 0.03;
-const K_VEL_TARGET: f64 = 0.55;
+const K_POS_TARGET: f64 = 0.038;
+const K_VEL_TARGET: f64 = 0.58;
 
 /// On-pad complete thresholds (looser than free-field L-mode lock on tilt/rate,
 /// but strict on residual horizontal speed so complete does not cut thrust mid-skid).
@@ -187,7 +189,7 @@ impl LandingAutopilot {
             kp_attitude: 2.0 * wn,
             kd_attitude: 3.0 * wn,
             kd_roll: 2.0 * wn,
-            max_lat_tilt: LEAN_DESCEND_MAX,
+            max_lat_tilt: LEAN_TERMINAL_VH,
             omega_max,
             ..Self::default()
         }
@@ -201,6 +203,16 @@ impl LandingAutopilot {
         // Hand-off from transit: don't inherit cruise thrust into Descend.
         self.throttle_actuator = 0.0;
         self.throttle_actuator_sync = false;
+    }
+
+    /// Arm from T transit hand-off — inherit cruise throttle to avoid a
+    /// zero-thrust drop that excites lateral sway at high altitude.
+    pub fn arm_from_transit(&mut self, state: &RocketState) {
+        self.enabled = true;
+        self.complete = false;
+        self.attitude_locked = false;
+        self.throttle_actuator = state.command.throttle.clamp(0.0, 1.0);
+        self.throttle_actuator_sync = true;
     }
 
     pub fn toggle(&mut self) {
@@ -565,9 +577,11 @@ impl LandingAutopilot {
         let vy = state.velocity[1];
         let v_down = (-vy).max(0.0);
         let pos = state.position();
-        let on_pad = on_pad_square(pos, target_xz);
+        let on_pad = on_target_success_square(pos, target_xz);
         let cheby = chebyshev_xz(pos, target_xz);
-        let seeking_center = !state.contacting && h > CENTER_SEEK_MIN_H && cheby > CENTER_TOL_M;
+        let seeking_center = !state.contacting
+            && h > CENTER_SEEK_MIN_H
+            && cheby > TARGET_CENTER_TOL_M;
         let terminal_commit = !state.contacting && h <= CENTER_SEEK_MIN_H;
         let vh_touch = VH_TOUCH_PAD;
 
@@ -603,7 +617,7 @@ impl LandingAutopilot {
                 vh_touch,
                 lean_max: LEAN_MAX,
                 lean_seek_max: LEAN_SEEK_MAX,
-                lean_terminal_vh: LEAN_DESCEND_MAX,
+                lean_terminal_vh: LEAN_TERMINAL_VH,
                 lean_pad_extra_max: LEAN_PAD_EXTRA_MAX,
                 lat_tilt_gain: LAT_TILT_GAIN,
                 h_terminal: H_TERMINAL,
@@ -747,6 +761,12 @@ fn update_lock_latch(locked: &mut bool, tilt: f64, omega_sq: f64, vh_sq: f64) {
 #[inline]
 pub(crate) fn on_pad_square(pos: [f64; 3], target_xz: [f64; 2]) -> bool {
     chebyshev_xz(pos, target_xz) <= PAD_HALF_M
+}
+
+/// T-mode success: Chebyshev offset inside the inner landing box (painted pad is wider).
+#[inline]
+pub(crate) fn on_target_success_square(pos: [f64; 3], target_xz: [f64; 2]) -> bool {
+    chebyshev_xz(pos, target_xz) <= TARGET_SUCCESS_HALF_M
 }
 
 /// Chebyshev (∞-norm) horizontal offset from the pad center (m).

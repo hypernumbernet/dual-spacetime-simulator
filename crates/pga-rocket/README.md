@@ -191,8 +191,9 @@ X' = M X M~      (M~ は反転 reverse)
 ### T モード（目標着陸）
 
 1. **中距離 go / brake** — 物理予測停止距離 `d_stop = d_flip + d_burn`
-   - `a_prop = f·g·tan(θ_lean)`（垂直中立逆リーン、`f` は L と同じ計画余裕）。
+   - `a_lat = g·tan(θ)`（垂直中立逆リーン）または full-T 時 `(T/m)·thr·sin(θ)`。
    - 二次抗力 `β = k/m`（Moon は `β=0`）。`d_burn = (1/2β) ln((a+βv²)/(a+βv_end²))`。
+   - 減速時間 `t_decel` も同型の閉形式（`a_eff` 近似は廃止）。
    - 姿勢反転 `d_flip = v·t_flip`（現姿勢→逆リーン aim の角度から √-profile で `t_flip`）。
    - **開始条件:** `range_eff ≤ d_stop`（ターミナル station-keep を除く）。幾何ヒステリシス
      `BRAKE_RELEASE_MARGIN` で go↔brake チャタを抑止。オーバーシュート（`v_approach < 0`）も即 brake。
@@ -215,15 +216,16 @@ X' = M X M~      (M~ は反転 reverse)
      落ちず、airplane 法を維持する。
 
 2.5. **ターミナル settle（Cruise→Descend 手渡し前、`range ≤ 55 m`）**
-   - **アーム条件は離散 AND のまま**（高度 ≥480 m、Chebyshev ≤22 m、`vh` ≤6.5 m/s、
+   - **アーム条件は離散 AND のまま**（高度 ≥480 m、Chebyshev ≤10 m、`vh` ≤4.0 m/s、
      `ω_py` ≤0.12 rad/s、`up_y` ≥0.95）。安全ゲート自体はソフト化しない。
    - その手前の settle 制御は [`HandoffSettlePlan`](src/target_landing.rs) で
      **クリアまでの残り時間**を物理予測:
      - `t_att`: 現 tilt → hand-off tilt（√-profile 反転時間 + レート減速）
-     - `t_vh`: 残 `vh` → `VH_HANDOFF_MAX`（`a_lat ≈ f·g·tan(θ_lean)`、抗力込み）
+     - `t_vh`: 残 `vh` → `VH_HANDOFF_MAX`（`a_lat ≈ g·tan(θ_lean)`、抗力込み）
      - `t_pos`: Chebyshev 残差 → `HANDOFF_CHEBY_MAX`（**Chebyshev 接近率**
      `v_cheby` —  diverging 時は減速＋反転時間を加算）
      - `t_settle = max(t_att, t_vh, t_pos)` — 大きいほど lean / aim ゲインを上げる。
+   - lean 上限は固定 `LEAN_MID`/`LEAN_CRUISE` ではなく **物理逆算 + `LEAN_BRAKE_MAX` ソフト天井**。
    - `t_att` 支配時は aim を直立寄りにし、**スロットルを hover/cos 付近まで上げて
      ジンバルトルクを優先**（深リーン中の 0.35–0.55 上限は撤廃）。
    - `t_settle ≈ 0`（閾値目前）だけ静かな lean に戻し、go↔brake チャタを抑える。
@@ -237,8 +239,13 @@ X' = M X M~      (M~ は反転 reverse)
      包絡遅刻の hard floor のみ離散のまま。
    - **エンジンアクチュエータ:** GNC セットポイントを [`slew_throttle`](src/fuzzy.rs)
      で非対称スプール（上 ~0.9 s、下 ~0.4 s の 0↔1）してから sim に渡す（L/T 共通）。
-   - 姿勢: 既存の lean aim + √-profile PD。ゲインは [`ALPHA_PLAN`](src/landing.rs)
-     から導出（`for_target_pad`）。mid-range 包絡が残差 `vh` の大半を既に落とす。
+   - 姿勢: lean aim + √-profile PD + **`brake_safe_lean`**（`LEAN_TERMINAL_VH=0.18`）。
+     固定 0.10 rad キャップは廃止。mid-range 包絡が残差 `vh` の大半を既に落とす。
+
+4. **成功判定（T モード）**
+   - **描画パッド:** 半辺 30 m（`TARGET_PAD_HALF_M`、mesh / shader と同期）。
+   - **着陸成功:** 内側の Chebyshev 箱 半辺 **12 m**（`TARGET_SUCCESS_HALF_M`）。
+   - Descend の高高度 seek 打ち切り: Chebyshev ≤ **8 m**（`TARGET_CENTER_TOL_M`）。
 
 ### 設計上の教訓（要約）
 

@@ -18,8 +18,8 @@
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{long_range_go_aim, long_range_hold_cos, long_range_weight, LONG_CRUISE_ALT_M};
 use crate::landing::{
-    axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_pad_square, saturate, LandingAutopilot,
-    PAD_HALF_M,
+    axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_target_success_square, saturate,
+    LandingAutopilot, PAD_HALF_M,
 };
 use crate::sim::{ControlCommand, GRAVITY, RocketState};
 
@@ -27,28 +27,31 @@ use crate::sim::{ControlCommand, GRAVITY, RocketState};
 pub const CLIMB_ALT_M: f64 = 500.0;
 /// Soft floor for “about 500 m”: hand-off / no-climb once CoM is at least this high.
 const GATE_ALT_MIN: f64 = 480.0;
-/// Target pad half-extent (m) — same painted square as the mesh pad.
+/// Painted target pad half-extent (m) — matches the mesh / shader pad mark.
 pub const TARGET_PAD_HALF_M: f64 = PAD_HALF_M;
 
 // --- Hand-off into terminal lander -------------------------------------------
 /// Max Chebyshev offset (m) to arm Descend — must already be over the pad
 /// (lander will not walk in near the ground).
-const HANDOFF_CHEBY_MAX_M: f64 = 22.0;
+const HANDOFF_CHEBY_MAX_M: f64 = 10.0;
 /// Max horizontal speed (m/s) when arming Descend. Keep low so the lander is
 /// not handed a lateral sprint into the upright commit.
-const VH_HANDOFF_MAX: f64 = 6.5;
+const VH_HANDOFF_MAX: f64 = 4.0;
 /// Max pitch/yaw rate (rad/s) when arming Descend.
 const OMEGA_HANDOFF_MAX: f64 = 0.12;
 /// Min body-up · world-up when arming (~0.32 rad tilt).
 const COS_TILT_HANDOFF: f64 = 0.95;
+/// Hand-off AND gates must hold this long (s) before arming Descend — kills
+/// one-frame chatter at the pad edge.
+const HANDOFF_SETTLE_MIN_S: f64 = 0.40;
 
 // --- Transit lean / envelope -------------------------------------------------
 /// Lean cap during the full-throttle ascent burn (rad).
 const LEAN_BURN_MAX: f64 = 0.30;
-/// Far-cruise lean cap (rad, ~46°). Below flip gate; stable high-alt transit.
-const LEAN_CRUISE: f64 = 0.80;
-/// Mid-range lean while still on the envelope but closer in (rad).
-const LEAN_MID: f64 = 0.45;
+/// Soft ceiling for non-airplane reverse-brake lean (rad).
+const LEAN_BRAKE_MAX: f64 = 0.90;
+/// Conservative lean for stop-distance planning only (≈ prior cruise plan).
+const LEAN_BRAKE_PLAN: f64 = 0.80;
 /// Range (m) where deep airplane cruise takes over.
 const RANGE_FAR_M: f64 = 80.0;
 /// Range (m) for near-pad station-keeping before hand-off.
@@ -71,12 +74,6 @@ const COS_TILT_AIM_AIR: f64 = 0.10;
 /// Horizontal range (m) above which transit prefers airplane mode: full-T go +
 /// pitch elevator while outside the predicted stop distance.
 const LONG_AIRPLANE_RANGE_M: f64 = 1500.0;
-/// Planning throttle fraction for horizontal brake accel (matches L-mode burn plan).
-const BRAKE_PLAN_FRAC: f64 = 0.95;
-/// `tan(LEAN_CRUISE)` — precomputed so hot path avoids a transcendentals call.
-const TAN_LEAN_CRUISE: f64 = 0.9630205290256505;
-/// Horizontal propulsive decel at [`LEAN_CRUISE`] reverse lean (m/s²).
-const A_PROP_CRUISE: f64 = BRAKE_PLAN_FRAC * GRAVITY * TAN_LEAN_CRUISE;
 /// Geometric hysteresis (m) when releasing latched reverse lean — must exceed
 /// hand-off cheby so go↔brake does not chatter at the pad edge.
 const BRAKE_RELEASE_MARGIN_M: f64 = HANDOFF_CHEBY_MAX_M;
@@ -89,7 +86,7 @@ const OMEGA_MAX: f64 = 1.15;
 const KP_ATT: f64 = 2.0;
 const KD_ATT: f64 = 3.0;
 const KD_ROLL: f64 = 2.0;
-/// Flip only when past the commanded cruise lean (well beyond LEAN_CRUISE).
+/// Flip only when past the commanded lean cone (near-inverted), not mid-recovery.
 const COS_TILT_AIM: f64 = 0.30; // ~72.5°
 /// Pitch/yaw rate (rad/s) above which attitude is pure rate-kill.
 const OMEGA_RATE_KILL: f64 = 0.80;
@@ -120,6 +117,10 @@ pub struct TargetLandingAutopilot {
     lander: LandingAutopilot,
     /// Latched reverse-lean brake (hysteresis) — kills go↔brake sway.
     brake_latched: bool,
+    /// Terminal-pad brake blend latch (separate from mid-range [`brake_latched`]).
+    terminal_brake_latched: bool,
+    /// Seconds the hand-off AND gates have been continuously satisfied.
+    handoff_settle_s: f64,
 }
 
 impl Default for TargetLandingAutopilot {
@@ -130,6 +131,8 @@ impl Default for TargetLandingAutopilot {
             phase: TargetPhase::Climb,
             lander: LandingAutopilot::for_target_pad(),
             brake_latched: false,
+            terminal_brake_latched: false,
+            handoff_settle_s: 0.0,
         }
     }
 }
@@ -141,6 +144,8 @@ impl TargetLandingAutopilot {
             self.complete = false;
             self.phase = TargetPhase::Climb;
             self.brake_latched = false;
+            self.terminal_brake_latched = false;
+            self.handoff_settle_s = 0.0;
             self.lander.disable();
         } else {
             self.lander.disable();
@@ -152,6 +157,8 @@ impl TargetLandingAutopilot {
         self.complete = false;
         self.phase = TargetPhase::Climb;
         self.brake_latched = false;
+        self.terminal_brake_latched = false;
+        self.handoff_settle_s = 0.0;
         self.lander.disable();
     }
 
@@ -224,26 +231,44 @@ impl TargetLandingAutopilot {
             .sqrt();
         let om = state.omega;
         let om_pitch_yaw_sq = om[0] * om[0] + om[2] * om[2];
-        if self.phase != TargetPhase::Descend
+        let v_cheby_handoff = chebyshev_closing_rate(pos, target_xz, state.velocity);
+        let handoff_ready = self.phase != TargetPhase::Descend
             && alt >= GATE_ALT_MIN
             && cheby <= HANDOFF_CHEBY_MAX_M
             && vh <= VH_HANDOFF_MAX
+            && v_cheby_handoff > -0.25
+            && (cheby <= HANDOFF_CHEBY_MAX_M * 0.60
+                || (v_cheby_handoff > 0.22 && vh <= VH_HANDOFF_MAX * 0.70))
             && om_pitch_yaw_sq <= OMEGA_HANDOFF_MAX * OMEGA_HANDOFF_MAX
-            && world_up_in_body(&state.motor)[1] >= COS_TILT_HANDOFF
-        {
+            && world_up_in_body(&state.motor)[1] >= COS_TILT_HANDOFF;
+        if handoff_ready {
+            self.handoff_settle_s += dt;
+        } else {
+            self.handoff_settle_s = 0.0;
+        }
+        if handoff_ready && self.handoff_settle_s >= HANDOFF_SETTLE_MIN_S {
             self.phase = TargetPhase::Descend;
-            self.lander.arm();
+            self.lander.arm_from_transit(state);
+            self.terminal_brake_latched = false;
+            self.handoff_settle_s = 0.0;
         }
 
         match self.phase {
             TargetPhase::Climb | TargetPhase::Cruise => {
-                let (cmd, brake) =
-                    transit_command(state, target_xz, pos, self.brake_latched);
+                let (cmd, brake, terminal_brake) = transit_command(
+                    state,
+                    target_xz,
+                    pos,
+                    self.brake_latched,
+                    self.terminal_brake_latched,
+                );
                 self.brake_latched = brake;
+                self.terminal_brake_latched = terminal_brake;
                 cmd
             }
             TargetPhase::Descend => {
                 self.brake_latched = false;
+                self.terminal_brake_latched = false;
                 let cmd = self.lander.update_target_descend(state, target_xz, dt);
                 self.complete = self.lander.complete;
                 cmd
@@ -252,10 +277,20 @@ impl TargetLandingAutopilot {
     }
 }
 
-/// True when CoM XZ lies inside the target pad square.
+/// True when CoM XZ lies inside the T-mode success box (inner target, not painted pad).
 #[inline]
 pub fn inside_target_pad(pos: [f64; 3], target_xz: [f64; 2]) -> bool {
-    on_pad_square(pos, target_xz)
+    on_target_success_square(pos, target_xz)
+}
+
+/// Throttle regime for lateral propulsion planning.
+#[derive(Clone, Copy, Debug)]
+enum LateralThrMode {
+    /// Vertical-neutral reverse lean: `a_lat ≈ g·tan(θ)`.
+    VerticalNeutral,
+    /// Full-T go/brake: `a_lat = (T/m)·thr·sin(θ)`.
+    #[allow(dead_code)]
+    FullThrottle,
 }
 
 /// Kill residual climb rate only (never command positive vy once lofted).
@@ -300,6 +335,7 @@ impl HorizontalBrakePlan {
     fn evaluate(
         state: &RocketState,
         mass: f64,
+        max_thrust: f64,
         ux: f64,
         uz: f64,
         vh: f64,
@@ -312,17 +348,23 @@ impl HorizontalBrakePlan {
         } else {
             state.params.air_drag_k / mass.max(1e-6)
         };
-        let a_prop = A_PROP_CRUISE;
+        let brake_lean = LEAN_BRAKE_PLAN;
+        let a_prop = lateral_accel_for_lean(
+            brake_lean,
+            LateralThrMode::VerticalNeutral,
+            mass,
+            max_thrust,
+        );
         let v_end = VH_HANDOFF_MAX;
         let v_closing = (v_approach - wind_approach).max(0.0);
-        let flip_brake = brake_flip_angle(state, ux, uz, vh, LEAN_CRUISE);
+        let flip_brake = brake_flip_angle(state, ux, uz, vh, brake_lean);
         let t_flip_brake = brake_flip_time(flip_brake);
         let go_lean = if in_airplane_range {
             LEAN_LONG_MAX
         } else {
-            LEAN_CRUISE
+            LEAN_BRAKE_PLAN
         };
-        let t_flip_go = if (go_lean - LEAN_CRUISE).abs() < 1e-9 {
+        let t_flip_go = if (go_lean - brake_lean).abs() < 1e-9 {
             t_flip_brake
         } else {
             brake_flip_time(brake_flip_angle(state, ux, uz, vh, go_lean))
@@ -470,7 +512,12 @@ impl HandoffSettlePlan {
         let omega_py = (om[0] * om[0] + om[2] * om[2]).sqrt();
         let t_att = predicted_attitude_handoff_time(up_y, omega_py);
 
-        let a_lat = lateral_accel_for_lean(lean_cmd);
+        let a_lat = lateral_accel_for_lean(
+            lean_cmd,
+            LateralThrMode::VerticalNeutral,
+            state.params.mass,
+            state.params.max_thrust,
+        );
         let t_vh = if vh <= VH_HANDOFF_MAX {
             0.0
         } else {
@@ -495,18 +542,44 @@ impl HandoffSettlePlan {
     }
 }
 
-/// Horizontal propulsive accel (m/s²) at `lean` rad with the burn plan fraction.
+/// Horizontal propulsive accel (m/s²) at `lean` rad for the given throttle regime.
 #[inline]
-fn lateral_accel_for_lean(lean: f64) -> f64 {
-    (BRAKE_PLAN_FRAC * GRAVITY * lean.tan()).max(0.15)
+fn lateral_accel_for_lean(
+    lean: f64,
+    mode: LateralThrMode,
+    mass: f64,
+    max_thrust: f64,
+) -> f64 {
+    let lean = lean.max(0.0);
+    match mode {
+        LateralThrMode::VerticalNeutral => (GRAVITY * lean.tan()).max(0.15),
+        LateralThrMode::FullThrottle => {
+            (THR_FULL * max_thrust / mass.max(1e-6) * lean.sin()).max(0.15)
+        }
+    }
 }
 
-/// Lean (rad) needed for lateral accel `a_req` at the burn plan fraction.
+/// Lean (rad) needed for lateral accel `a_req` under the given throttle regime.
 #[inline]
-fn lean_for_lateral_accel(a_req: f64) -> f64 {
-    (a_req / (BRAKE_PLAN_FRAC * GRAVITY))
-        .atan()
-        .clamp(0.06, LEAN_CRUISE)
+fn lean_for_lateral_accel(
+    a_req: f64,
+    mode: LateralThrMode,
+    mass: f64,
+    max_thrust: f64,
+    lean_cap: f64,
+) -> f64 {
+    let a = a_req.max(0.0);
+    if a <= 1e-9 {
+        return 0.06;
+    }
+    let lean = match mode {
+        LateralThrMode::VerticalNeutral => (a / GRAVITY).atan(),
+        LateralThrMode::FullThrottle => {
+            let am = THR_FULL * max_thrust / mass.max(1e-6);
+            (a / am).asin()
+        }
+    };
+    lean.clamp(0.06, lean_cap)
 }
 
 /// Signed rate (m/s) at which Chebyshev pad offset is shrinking (negative ⇒ diverging).
@@ -579,10 +652,11 @@ fn predicted_decel_time(v: f64, v_end: f64, a_prop: f64, beta: f64) -> f64 {
     if beta <= 1e-12 {
         return dv / a_prop;
     }
-    // Monotone bisection on burn distance = v·t + d_burn(v,t) … use integrated form:
-    // approximate with effective accel a_eff = a_prop + beta·v·v_end (conservative).
-    let a_eff = (a_prop + beta * v * v_end).max(a_prop);
-    dv / a_eff
+    // ∫ dv/(a + βv²) from v_end to v
+    let scale = (a_prop * beta).sqrt();
+    let atan_hi = (v * beta / a_prop).sqrt().atan();
+    let atan_lo = (v_end * beta / a_prop).sqrt().atan();
+    ((atan_hi - atan_lo) / scale).max(0.0)
 }
 
 /// Time (s) to close a Chebyshev gap `delta` (m) with closing speed and lateral accel.
@@ -623,6 +697,141 @@ fn update_brake_latch(
     }
 }
 
+/// Continuous brake blend for terminal pad settle (0 = seek, 1 = full reverse).
+/// Returns `(weight, latched)` with hysteresis so go↔brake does not chatter.
+fn terminal_brake_blend(
+    v_cheby: f64,
+    vh: f64,
+    v_approach: f64,
+    cheby: f64,
+    latched: bool,
+) -> (f64, bool) {
+    let mut score = 0.0_f64;
+    if v_cheby < 0.0 {
+        score += (-v_cheby / 2.5).min(1.0);
+    }
+    if v_approach < 0.0 {
+        score += (-v_approach / 2.0).min(0.8);
+    }
+    if cheby <= HANDOFF_CHEBY_MAX_M && vh > VH_HANDOFF_MAX * 0.82 {
+        score += ((vh - VH_HANDOFF_MAX * 0.82) / VH_HANDOFF_MAX).min(1.0);
+    }
+    score = score.clamp(0.0, 1.5);
+
+    if latched {
+        let release = score < 0.15 && v_cheby > 0.05 && vh < VH_HANDOFF_MAX * 0.80;
+        let w = if release {
+            (score / 0.15 * 0.2).clamp(0.0, 0.2)
+        } else {
+            (0.30 + 0.70 * score.min(1.0)).clamp(0.30, 1.0)
+        };
+        (w, !release)
+    } else {
+        let w = if score > 0.08 {
+            (0.15 + 0.85 * (score / 1.0).min(1.0)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let engage = w > 0.55;
+        (w, engage)
+    }
+}
+
+/// Continuous damped settle toward the hand-off box (no discrete go/brake modes).
+fn terminal_settle_aim(
+    hp: HandoffSettlePlan,
+    ux: f64,
+    uz: f64,
+    need_x: f64,
+    need_z: f64,
+    vx: f64,
+    vz: f64,
+    vh: f64,
+    cheby: f64,
+    v_cheby: f64,
+    v_approach: f64,
+    mass: f64,
+    max_thrust: f64,
+    brake_mode: LateralThrMode,
+    terminal_brake_latched: bool,
+) -> ([f64; 3], f64, bool) {
+    let pos_urgency = (hp.t_pos / 3.0).clamp(0.0, 1.0);
+    let vh_urgency = (hp.t_vh / 3.0).clamp(0.0, 1.0);
+    let settle_urgency = pos_urgency.max(vh_urgency);
+    let quiet = hp.cleared() || hp.t_settle < 0.35;
+
+    let (brake_w, new_latch) =
+        terminal_brake_blend(v_cheby, vh, v_approach, cheby, terminal_brake_latched);
+
+    // Shrink gains inside the hand-off box to avoid limit cycles at the edge.
+    let inside_frac = ((HANDOFF_CHEBY_MAX_M - cheby) / HANDOFF_CHEBY_MAX_M).clamp(0.0, 1.0);
+    let gain_scale = 0.40 + 0.60 * (1.0 - inside_frac);
+
+    let (k_pos, k_vel) = if quiet {
+        (0.07 + 0.08 * pos_urgency, 0.40 + 0.20 * pos_urgency)
+    } else if cheby > HANDOFF_CHEBY_MAX_M {
+        (
+            (0.14 + 0.28 * settle_urgency).clamp(0.14, 0.38),
+            (0.55 + 0.32 * settle_urgency).clamp(0.55, 0.72),
+        )
+    } else {
+        (
+            (0.10 + 0.22 * settle_urgency).clamp(0.10, 0.28),
+            (0.50 + 0.28 * settle_urgency).clamp(0.50, 0.65),
+        )
+    };
+
+    let dir_bias = if cheby <= HANDOFF_CHEBY_MAX_M {
+        0.18 + 0.12 * inside_frac
+    } else {
+        0.32 + 0.08 * (1.0 - (cheby - HANDOFF_CHEBY_MAX_M).min(30.0) / 30.0)
+    };
+
+    let v_ref = vh.max(1.5);
+    let mut aim_x = dir_bias * ux + gain_scale * (k_pos * need_x - k_vel * vx / v_ref);
+    let mut aim_z = dir_bias * uz + gain_scale * (k_pos * need_z - k_vel * vz / v_ref);
+
+    // Blend toward velocity-opposing aim (continuous, not a hard mode switch).
+    let s = vh.max(0.9);
+    aim_x = (1.0 - brake_w) * aim_x + brake_w * (-vx / s);
+    aim_z = (1.0 - brake_w) * aim_z + brake_w * (-vz / s);
+
+    // Upright bias while attitude settle dominates (replaces att_dominant branch).
+    let att_blend = if hp.t_att > 0.15 {
+        (hp.t_att / 2.5).clamp(0.0, 0.55) * (1.0 - brake_w * 0.6)
+    } else {
+        0.0
+    };
+    aim_x *= 1.0 - att_blend * 0.85;
+    aim_z *= 1.0 - att_blend * 0.85;
+
+    let a_req_x = gain_scale * (k_pos * need_x - k_vel * vx) + brake_w * 0.55 * (-vx);
+    let a_req_z = gain_scale * (k_pos * need_z - k_vel * vz) + brake_w * 0.55 * (-vz);
+    let a_lat = (a_req_x * a_req_x + a_req_z * a_req_z).sqrt();
+    let overshoot_boost = if v_cheby < -0.3 {
+        (-v_cheby).min(vh) * 0.35 + 0.3
+    } else {
+        0.0
+    };
+
+    let lean_cap = if cheby <= HANDOFF_CHEBY_MAX_M {
+        (0.07 + 0.014 * cheby).clamp(0.06, 0.20)
+    } else {
+        (0.10 + 0.022 * (cheby - HANDOFF_CHEBY_MAX_M).min(25.0) + 0.18 * settle_urgency)
+            .clamp(0.10, LEAN_BRAKE_MAX * 0.65)
+    };
+
+    let lean = lean_for_lateral_accel(
+        a_lat.max(overshoot_boost),
+        brake_mode,
+        mass,
+        max_thrust,
+        lean_cap,
+    );
+
+    ([aim_x, AIM_Y_BIAS, aim_z], lean, new_latch)
+}
+
 /// Full-T airplane aim: pitch elevator holds `alt_hold` while leaning to pad.
 #[inline]
 fn airplane_hold_aim(
@@ -646,13 +855,14 @@ fn airplane_hold_aim(
 ///
 /// Short range: burn until ballistic apogee clears the loft, optional upright
 /// straighten, then envelope go/brake. Airplane range: full T + pitch elevator
-/// (see [`airplane_hold_aim`]). Returns `(command, updated_brake_latch)`.
+/// (see [`airplane_hold_aim`]). Returns `(command, updated_brake_latch, terminal_brake_latch)`.
 fn transit_command(
     state: &RocketState,
     target_xz: [f64; 2],
     pos: [f64; 3],
     brake_latched: bool,
-) -> (ControlCommand, bool) {
+    terminal_brake_latched: bool,
+) -> (ControlCommand, bool, bool) {
     let dx = target_xz[0] - pos[0];
     let dz = target_xz[1] - pos[2];
     let range = (dx * dx + dz * dz).sqrt();
@@ -668,7 +878,15 @@ fn transit_command(
     let vh = (vx * vx + vz * vz).sqrt();
 
     let mass = state.params.mass;
-    let hover = mass * GRAVITY / state.params.max_thrust;
+    let max_thrust = state.params.max_thrust;
+    let hover = mass * GRAVITY / max_thrust;
+    let brake_mode = LateralThrMode::VerticalNeutral;
+    let a_brake_max = lateral_accel_for_lean(
+        LEAN_BRAKE_PLAN,
+        brake_mode,
+        mass,
+        max_thrust,
+    );
 
     // Short-hop loft apogee (blends toward cruise alt with mu_long). Airplane
     // mode ignores this and stays powered until the altitude gate.
@@ -702,6 +920,7 @@ fn transit_command(
         HorizontalBrakePlan::evaluate(
             state,
             mass,
+            max_thrust,
             ux,
             uz,
             vh,
@@ -717,13 +936,24 @@ fn transit_command(
     };
     let handoff_plan = if lofted && (terminal || brake_latched || cheby <= HANDOFF_CHEBY_MAX_M + 35.0)
     {
+        let lean_cmd = if brake_latched {
+            LEAN_BRAKE_MAX
+        } else {
+            lean_for_lateral_accel(
+                a_brake_max * 0.65,
+                brake_mode,
+                mass,
+                max_thrust,
+                LEAN_BRAKE_MAX,
+            )
+        };
         Some(HandoffSettlePlan::evaluate(
             state,
             pos,
             target_xz,
             vh,
             v_cheby,
-            if brake_latched { LEAN_CRUISE } else { LEAN_MID },
+            lean_cmd,
             beta,
         ))
     } else {
@@ -741,12 +971,21 @@ fn transit_command(
         let delta = (cheby - HANDOFF_CHEBY_MAX_M).max(0.0);
         let t_flip = brake_flip_time(0.15);
         let v_phys = if delta > 0.5 {
-            allowed_approach_speed(delta, 0.0, A_PROP_CRUISE, beta, t_flip)
+            allowed_approach_speed(delta, 0.0, a_brake_max, beta, t_flip)
         } else {
             VH_HANDOFF_MAX * 0.45
         };
+        let outside_handoff = cheby > HANDOFF_CHEBY_MAX_M + 1.0;
+        let v_cap = if cheby > HANDOFF_CHEBY_MAX_M + 8.0 {
+            (0.20 * (cheby - HANDOFF_CHEBY_MAX_M).max(1.0) + 1.0).min(VH_HANDOFF_MAX * 0.60)
+        } else if outside_handoff {
+            2.5_f64
+        } else {
+            VH_HANDOFF_MAX * 0.75
+        };
         v_phys
             .min(0.10 * (range - 4.0).max(0.0))
+            .min(v_cap)
             .clamp(0.0, VH_HANDOFF_MAX)
     } else {
         let p = plan.unwrap();
@@ -783,9 +1022,10 @@ fn transit_command(
     };
 
     // Aim regime (mutually exclusive by range / loft state).
-    let (desired_raw, lean_max, deep, force_full_thr) = if airplane_go {
+    let (desired_raw, lean_max, deep, force_full_thr, terminal_brake_out) = if airplane_go {
         // Full-T go + pitch elevator (ascent and cruise share one law).
-        airplane_hold_aim(ux, uz, pos[1], alt_hold, vy, hover)
+        let (d, l, de, f) = airplane_hold_aim(ux, uz, pos[1], alt_hold, vy, hover);
+        (d, l, de, f, terminal_brake_latched)
     } else if burn_up {
         // Short/mid ascent: modest lean, then upright straighten for coast.
         let lean = LEAN_BURN_MAX + mu_long * (0.90 - LEAN_BURN_MAX);
@@ -796,103 +1036,80 @@ fn transit_command(
             lean.min(LEAN_LONG_MAX),
             mu_long > 0.35,
             false,
+            terminal_brake_latched,
         )
     } else if terminal {
-        // Physics settle: pad-seek when outside cheby box; brake only when over
-        // the box but too fast (keep lean moderate so up_y can reach hand-off).
         let hp = handoff_plan.unwrap();
-        let pos_urgency = (hp.t_pos / 3.0).clamp(0.0, 1.0);
-        let vh_urgency = (hp.t_vh / 3.0).clamp(0.0, 1.0);
-        let settle_urgency = pos_urgency.max(vh_urgency);
-        let quiet = hp.cleared() || hp.t_settle < 0.35;
-        let delta = (cheby - HANDOFF_CHEBY_MAX_M).max(0.0);
-        let a_stop = if delta > 1.0 {
-            (vh * vh / (2.0 * delta) + 0.35).min(A_PROP_CRUISE * 1.15)
-        } else if vh > VH_HANDOFF_MAX {
-            ((vh - VH_HANDOFF_MAX).powi(2) / 4.0 + 0.5).min(A_PROP_CRUISE)
-        } else {
-            0.0
-        };
-        let lean_phys = lean_for_lateral_accel(
-            a_stop.max(if v_cheby < -0.5 { (-v_cheby).min(vh) * 0.45 + 0.5 } else { 0.0 }),
+        let (desired_raw, lean, new_terminal_brake) = terminal_settle_aim(
+            hp,
+            ux,
+            uz,
+            need_x,
+            need_z,
+            vx,
+            vz,
+            vh,
+            cheby,
+            v_cheby,
+            v_approach,
+            mass,
+            max_thrust,
+            brake_mode,
+            terminal_brake_latched,
         );
-        let outside_box = cheby > HANDOFF_CHEBY_MAX_M;
-        let need_brake = !outside_box
-            && (vh > VH_HANDOFF_MAX * 0.90 || v_approach < -1.0 || v_cheby < -1.0);
-        let att_dominant =
-            hp.t_att > 0.25 && hp.t_att >= hp.t_vh && hp.t_pos < 1.0 && !need_brake && !outside_box;
-        if outside_box {
-            let k = if quiet {
-                0.12 + 0.15 * pos_urgency
-            } else {
-                (0.22 + 0.50 * settle_urgency).clamp(0.22, 0.58)
-            };
-            let lean = lean_phys
-                .max((0.10 + 0.030 * vh + 0.25 * settle_urgency).clamp(0.10, LEAN_MID));
-            (
-                [ux * 0.40 + k * need_x, AIM_Y_BIAS, uz * 0.40 + k * need_z],
-                lean,
-                false,
-                false,
-            )
-        } else if need_brake {
-            let s = vh.max(1.0);
-            (
-                [-vx / s, AIM_Y_BIAS, -vz / s],
-                lean_phys.max(0.12).min(LEAN_MID),
-                true,
-                false,
-            )
-        } else if att_dominant {
-            let blend = (0.12 + 0.45 * (hp.t_att / 3.0).clamp(0.0, 1.0)).clamp(0.0, 1.0);
-            let pos_k = (0.08 + 0.22 * pos_urgency) * (1.0 - 0.35 * blend);
-            (
-                [
-                    pos_k * need_x,
-                    AIM_Y_BIAS * (1.0 - blend) + blend,
-                    pos_k * need_z,
-                ],
-                (0.06 + 0.12 * blend).clamp(0.06, 0.22),
-                false,
-                false,
-            )
-        } else {
-            let k = if quiet {
-                0.10 + 0.12 * pos_urgency
-            } else {
-                (0.15 + 0.35 * settle_urgency).clamp(0.15, 0.45)
-            };
-            let lean = if quiet {
-                (0.06 + 0.018 * vh + 0.08 * pos_urgency).clamp(0.06, 0.20)
-            } else {
-                lean_phys.max((0.08 + 0.025 * vh + 0.15 * settle_urgency).clamp(0.08, LEAN_MID))
-            };
-            (
-                [ux * 0.30 + k * need_x, AIM_Y_BIAS, uz * 0.30 + k * need_z],
-                lean,
-                false,
-                false,
-            )
-        }
+        (desired_raw, lean, false, false, new_terminal_brake)
     } else if far_or_overshoot {
         // Mid/long range: discrete go or reverse-brake aim.
         let s = vh.max(1.0);
+        let brake_lean = lean_for_lateral_accel(
+            a_brake_max * 0.85,
+            brake_mode,
+            mass,
+            max_thrust,
+            LEAN_BRAKE_MAX,
+        );
         if brake {
-            ([-vx / s, AIM_Y_BIAS, -vz / s], LEAN_CRUISE, true, false)
+            (
+                [-vx / s, AIM_Y_BIAS, -vz / s],
+                brake_lean,
+                true,
+                false,
+                terminal_brake_latched,
+            )
         } else {
-            ([ux, AIM_Y_BIAS, uz], LEAN_CRUISE, true, false)
+            (
+                [ux, AIM_Y_BIAS, uz],
+                brake_lean,
+                true,
+                false,
+                terminal_brake_latched,
+            )
         }
     } else {
         // Ballistic / shallow mid: reverse only when latched.
         let s = vh.max(1.0);
+        let cruise_lean = lean_for_lateral_accel(
+            a_brake_max * 0.55,
+            brake_mode,
+            mass,
+            max_thrust,
+            LEAN_BRAKE_MAX,
+        );
         if brake && lofted && !terminal {
-            ([-vx / s, AIM_Y_BIAS, -vz / s], LEAN_MID, false, false)
+            (
+                [-vx / s, AIM_Y_BIAS, -vz / s],
+                cruise_lean,
+                false,
+                false,
+                terminal_brake_latched,
+            )
         } else {
             (
                 [ux + 0.05 * need_x, AIM_Y_BIAS, uz + 0.05 * need_z],
-                LEAN_MID,
+                cruise_lean,
                 false,
                 false,
+                terminal_brake_latched,
             )
         }
     };
@@ -945,12 +1162,6 @@ fn transit_command(
 
     let effort = pitch.abs() + yaw.abs() + 0.35 * roll.abs();
     let hp = handoff_plan;
-    let att_priority = hp
-        .map(|p| p.t_att >= p.t_vh.max(p.t_pos) && p.t_att > 0.25)
-        .unwrap_or(false);
-    let pos_priority = hp
-        .map(|p| p.t_pos >= p.t_att && p.t_pos > 0.2 || p.t_vh > 0.2)
-        .unwrap_or(false);
     if force_full_thr {
         // Do not demote airplane full-T to hover/cos — pitch owns altitude.
         throttle = THR_FULL;
@@ -958,15 +1169,23 @@ fn transit_command(
         // Reverse lean: vertical-neutral hover/cos + modest effort torque.
         let t_neutral = hover_cmd;
         throttle = (t_neutral + 0.06 * effort).clamp(t_neutral * 0.94, t_neutral + 0.05);
-    } else if terminal && att_priority {
-        throttle = throttle
-            .max(hover_cmd * 0.92)
-            .max(0.35 + 0.25 * effort)
-            .min(0.92);
-    } else if terminal && pos_priority {
-        // Pad seek while leaned: stay near hover/cos so lateral thrust does not loft.
+    } else if terminal {
+        let p = hp.unwrap();
+        let quiet = p.cleared() || p.t_settle < 0.35;
+        let att_blend = (p.t_att / 2.5).clamp(0.0, 0.55);
+        let motion_blend = (p.t_pos.max(p.t_vh) / 3.5).clamp(0.0, 0.45);
         let t_neutral = hover_cmd;
-        throttle = throttle.clamp(t_neutral * 0.88, (t_neutral + 0.08).min(0.82));
+        let t_quiet = (t_neutral * 0.92).clamp(t_neutral * 0.88, t_neutral + 0.04);
+        let t_att = (t_neutral * (0.90 + 0.06 * att_blend) + 0.18 * att_blend * effort)
+            .clamp(t_neutral * 0.88, 0.90);
+        let t_motion = (t_neutral * (0.94 - 0.06 * motion_blend))
+            .clamp(t_neutral * 0.86, t_neutral + 0.05);
+        let t_target = (1.0 - att_blend) * t_motion + att_blend * t_att;
+        throttle = if quiet {
+            throttle.clamp(t_quiet, t_quiet + 0.03)
+        } else {
+            throttle.clamp(t_target * 0.92, (t_target + 0.08).min(0.85))
+        };
     } else if ballistic || burn_up {
         throttle = throttle.max((0.9 * (effort - 0.15).max(0.0)).min(0.35));
     } else if effort > 0.04 {
@@ -983,7 +1202,7 @@ fn transit_command(
         roll,
     }
     .clamp();
-    (cmd, brake)
+    (cmd, brake, terminal_brake_out)
 }
 
 /// Attitude PD toward a world-frame desired body +Y via PGA inverse transport.
@@ -1028,6 +1247,7 @@ fn attitude_toward(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::landing::TARGET_SUCCESS_HALF_M;
 
     #[test]
     fn toggle_enables_and_disables() {
@@ -1070,11 +1290,43 @@ mod tests {
     #[test]
     fn pad_square_uses_chebyshev_half_extent() {
         assert!(inside_target_pad([500.0, 10.0, 0.0], [500.0, 0.0]));
-        assert!(inside_target_pad([500.0 + TARGET_PAD_HALF_M, 0.0, 0.0], [500.0, 0.0]));
-        assert!(!inside_target_pad(
-            [500.0 + TARGET_PAD_HALF_M + 0.1, 0.0, 0.0],
+        assert!(inside_target_pad(
+            [500.0 + TARGET_SUCCESS_HALF_M, 0.0, 0.0],
             [500.0, 0.0]
         ));
+        assert!(!inside_target_pad(
+            [500.0 + TARGET_SUCCESS_HALF_M + 0.1, 0.0, 0.0],
+            [500.0, 0.0]
+        ));
+        // Painted pad is wider than the success box.
+        assert!(
+            TARGET_PAD_HALF_M > TARGET_SUCCESS_HALF_M,
+            "visual pad should exceed success box"
+        );
+    }
+
+    #[test]
+    fn vertical_neutral_lateral_accel_matches_tan() {
+        let mass = 1000.0;
+        let max_thrust = mass * GRAVITY * 3.0;
+        let lean = 0.5;
+        let a = lateral_accel_for_lean(
+            lean,
+            LateralThrMode::VerticalNeutral,
+            mass,
+            max_thrust,
+        );
+        assert!((a - GRAVITY * lean.tan()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn full_throttle_lateral_accel_matches_plant() {
+        let mass = 1000.0;
+        let max_thrust = mass * GRAVITY * 3.0;
+        let lean = 0.5;
+        let a = lateral_accel_for_lean(lean, LateralThrMode::FullThrottle, mass, max_thrust);
+        let expected = THR_FULL * max_thrust / mass * lean.sin();
+        assert!((a - expected).abs() < 1e-9);
     }
 
     #[test]
@@ -1085,22 +1337,32 @@ mod tests {
     }
 
     #[test]
-    fn a_prop_cruise_matches_tan_formula() {
-        let a = BRAKE_PLAN_FRAC * GRAVITY * TAN_LEAN_CRUISE;
-        assert!((a - A_PROP_CRUISE).abs() < 1e-9);
-    }
-
-    #[test]
     fn vacuum_burn_distance_matches_kinematics() {
-        let d = horizontal_burn_distance(40.0, VH_HANDOFF_MAX, A_PROP_CRUISE, 0.0);
-        let expected = (40.0 * 40.0 - VH_HANDOFF_MAX * VH_HANDOFF_MAX) / (2.0 * A_PROP_CRUISE);
+        let mass = 1000.0;
+        let max_thrust = mass * GRAVITY * 3.0;
+        let a = lateral_accel_for_lean(
+            LEAN_BRAKE_MAX,
+            LateralThrMode::VerticalNeutral,
+            mass,
+            max_thrust,
+        );
+        let d = horizontal_burn_distance(40.0, VH_HANDOFF_MAX, a, 0.0);
+        let expected = (40.0 * 40.0 - VH_HANDOFF_MAX * VH_HANDOFF_MAX) / (2.0 * a);
         assert!((d - expected).abs() < 1e-6, "d={d} expected={expected}");
     }
 
     #[test]
     fn drag_shortens_burn_distance() {
-        let d_vac = horizontal_burn_distance(60.0, VH_HANDOFF_MAX, A_PROP_CRUISE, 0.0);
-        let d_drag = horizontal_burn_distance(60.0, VH_HANDOFF_MAX, A_PROP_CRUISE, 0.001);
+        let mass = 1000.0;
+        let max_thrust = mass * GRAVITY * 3.0;
+        let a = lateral_accel_for_lean(
+            LEAN_BRAKE_MAX,
+            LateralThrMode::VerticalNeutral,
+            mass,
+            max_thrust,
+        );
+        let d_vac = horizontal_burn_distance(60.0, VH_HANDOFF_MAX, a, 0.0);
+        let d_drag = horizontal_burn_distance(60.0, VH_HANDOFF_MAX, a, 0.001);
         assert!(
             d_drag < d_vac,
             "drag should help braking: vac={d_vac} drag={d_drag}"
@@ -1112,18 +1374,38 @@ mod tests {
         let mut state = RocketState::at_altitude(500.0);
         state.contacting = false;
         state.velocity = [50.0, 0.0, 0.0];
+        let mass = state.params.mass;
+        let max_thrust = state.params.max_thrust;
+        let a_hi = lateral_accel_for_lean(
+            LEAN_BRAKE_MAX,
+            LateralThrMode::FullThrottle,
+            mass,
+            max_thrust,
+        );
         state.params.max_thrust *= 0.5;
         let beta = state.params.air_drag_k / state.params.mass;
-        let d_hi = predicted_stop_distance(50.0, VH_HANDOFF_MAX, A_PROP_CRUISE, beta, 0.5);
-        let a_lo = A_PROP_CRUISE * 0.5;
+        let a_lo = lateral_accel_for_lean(
+            LEAN_BRAKE_MAX,
+            LateralThrMode::FullThrottle,
+            state.params.mass,
+            state.params.max_thrust,
+        );
+        let d_hi = predicted_stop_distance(50.0, VH_HANDOFF_MAX, a_hi, beta, 0.5);
         let d_lo = predicted_stop_distance(50.0, VH_HANDOFF_MAX, a_lo, beta, 0.5);
         assert!(d_lo > d_hi, "weaker thrust needs longer stop: hi={d_hi} lo={d_lo}");
-        let _ = state;
+        assert!(a_lo < a_hi, "full-T lateral accel should scale with thrust");
     }
 
     #[test]
     fn allowed_speed_inverts_stop_distance_vacuum() {
-        let a = A_PROP_CRUISE;
+        let mass = 1000.0;
+        let max_thrust = mass * GRAVITY * 3.0;
+        let a = lateral_accel_for_lean(
+            LEAN_BRAKE_MAX,
+            LateralThrMode::VerticalNeutral,
+            mass,
+            max_thrust,
+        );
         let t = 0.5;
         let range = 400.0;
         let v = allowed_approach_speed(range, VH_HANDOFF_MAX, a, 0.0, t);
@@ -1136,9 +1418,29 @@ mod tests {
 
     #[test]
     fn allowed_speed_grows_with_range() {
-        let v_near = allowed_approach_speed(200.0, VH_HANDOFF_MAX, A_PROP_CRUISE, 0.0, 0.5);
-        let v_far = allowed_approach_speed(800.0, VH_HANDOFF_MAX, A_PROP_CRUISE, 0.0, 0.5);
+        let mass = 1000.0;
+        let max_thrust = mass * GRAVITY * 3.0;
+        let a = lateral_accel_for_lean(
+            LEAN_BRAKE_MAX,
+            LateralThrMode::VerticalNeutral,
+            mass,
+            max_thrust,
+        );
+        let v_near = allowed_approach_speed(200.0, VH_HANDOFF_MAX, a, 0.0, 0.5);
+        let v_far = allowed_approach_speed(800.0, VH_HANDOFF_MAX, a, 0.0, 0.5);
         assert!(v_far > v_near, "v_near={v_near} v_far={v_far}");
+    }
+
+    #[test]
+    fn predicted_decel_time_drag_matches_integral() {
+        let a = 8.0;
+        let beta = 0.001;
+        let v = 30.0;
+        let v_end = 6.5;
+        let t = predicted_decel_time(v, v_end, a, beta);
+        let scale = (a * beta).sqrt();
+        let expected = ((v * beta / a).sqrt().atan() - (v_end * beta / a).sqrt().atan()) / scale;
+        assert!((t - expected).abs() < 1e-9, "t={t} expected={expected}");
     }
 
     #[test]
@@ -1243,7 +1545,7 @@ mod tests {
             [500.0, 0.0],
             2.0,
             v_cheby,
-            LEAN_MID,
+            LEAN_BRAKE_MAX,
             0.0,
         );
         assert!(
@@ -1267,7 +1569,7 @@ mod tests {
             [500.0, 0.0],
             2.0,
             v_cheby,
-            LEAN_MID,
+            LEAN_BRAKE_MAX,
             0.0,
         );
         assert!(
@@ -1291,7 +1593,7 @@ mod tests {
             [500.0, 0.0],
             20.0,
             v_cheby,
-            LEAN_MID,
+            LEAN_BRAKE_MAX,
             0.0,
         );
         assert!(
@@ -1316,7 +1618,7 @@ mod tests {
             [500.0, 0.0],
             6.0,
             v_cheby,
-            LEAN_MID,
+            LEAN_BRAKE_MAX,
             0.0,
         );
         assert!(
