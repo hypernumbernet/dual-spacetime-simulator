@@ -541,9 +541,15 @@ pub fn blend_desired_axis(f: &LeanAimFuzzy) -> [f64; 3] {
     // Mild descent + modest vh: bias free-field toward upright (wobble kill).
     let mu_hoverish = and(ramp_down(f.v_down, 1.5, 4.0), ramp_down(f.vh, 2.0, 5.0));
 
-    // Pad quiet cruise (high, centered): upright.
+    // Pad quiet cruise (high, centered): upright — except during a committed
+    // descent, where riding out even walking-pace drift moves the touchdown
+    // ~1 m per m/s·s; let the anti-velocity axis trim it while thrust flows.
+    // Gated on v_down so low-altitude hover keeps the pure-upright pendulum
+    // protection.
     let w_upright_pad = if f.has_pad && !f.seeking_center && !f.terminal_commit {
-        mu_quiet
+        let mu_desc = ramp(f.v_down, 2.0, 6.0);
+        let mu_drifting = ramp(f.vh, 0.15, 0.45);
+        mu_quiet * (1.0 - 0.85 * and(mu_desc, mu_drifting))
     } else {
         0.0
     };

@@ -61,10 +61,10 @@ const OMEGA_TRIM_ENTER: f64 = OMEGA_HANDOFF_MAX * 0.50;
 /// Inside this Chebyshev (m) with quiet vh, Trim holds upright (no chase).
 const TRIM_DEADZONE_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M * 0.60;
 // Unscaled bases; runtime values multiply by distance-dependent aggression.
-const TRIM_LEAN_CAP_BASE: f64 = 0.055;
-const TRIM_LEAN_NEAR_BASE: f64 = 0.025;
-const TRIM_V_CREEP_PER_M_BASE: f64 = 0.12;
-const TRIM_V_CREEP_MAX_BASE: f64 = 1.80;
+const TRIM_LEAN_CAP_BASE: f64 = 0.075;
+const TRIM_LEAN_NEAR_BASE: f64 = 0.032;
+const TRIM_V_CREEP_PER_M_BASE: f64 = 0.16;
+const TRIM_V_CREEP_MAX_BASE: f64 = 4.00;
 const TRIM_V_CREEP_MIN_BASE: f64 = 1.0;
 const CAREFUL_BRAKE_LEAN_SOFT_BASE: f64 = 0.22;
 
@@ -142,16 +142,16 @@ fn cheby_near_pad_blend(cheby: f64, pad_near: f64, outer: f64) -> f64 {
 /// Continuous creep-speed cap vs Chebyshev offset (closer → slower).
 #[inline]
 fn cheby_creep_cap(cheby: f64) -> f64 {
-    let pad_near = (0.25 + 0.08 * cheby).min(1.20);
-    let outer = 1.20 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 0.65;
+    let pad_near = (0.35 + 0.10 * cheby).min(1.60);
+    let outer = 2.80 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 0.80;
     cheby_near_pad_blend(cheby, pad_near, outer)
 }
 
 /// Continuous speed ceiling base vs Chebyshev offset (closer → slower).
 #[inline]
 fn cheby_v_cap_base(cheby: f64) -> f64 {
-    let pad_near = (0.30 + 0.09 * cheby).min(1.40);
-    let outer = 1.40 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 0.50;
+    let pad_near = (0.40 + 0.12 * cheby).min(1.80);
+    let outer = 3.00 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 0.60;
     cheby_near_pad_blend(cheby, pad_near, outer)
 }
 
@@ -374,8 +374,11 @@ impl TargetLandingAutopilot {
             && cheby <= HANDOFF_CHEBY_MAX_M
             && vh <= VH_HANDOFF_MAX
             && v_cheby_handoff > -0.25
-            && (cheby <= HANDOFF_CHEBY_MAX_M * 0.60
-                || (v_cheby_handoff > 0.12 && vh <= VH_HANDOFF_MAX * 0.30))
+            // Drift budget: hand-off drift persists through the ~10 s free
+            // fall (the lander's burn then trims it), so end miss ≈
+            // cheby − vh·10. Both branches bound vh to keep the miss small.
+            && ((cheby <= HANDOFF_CHEBY_MAX_M * 0.60 && vh <= VH_HANDOFF_MAX * 0.15)
+                || (v_cheby_handoff > 0.12 && vh <= VH_HANDOFF_MAX * 0.20))
             && om_pitch_yaw_sq <= OMEGA_HANDOFF_MAX * OMEGA_HANDOFF_MAX
             && world_up_in_body(&state.motor)[1] >= COS_TILT_HANDOFF;
         if handoff_ready {
@@ -525,14 +528,21 @@ fn kill_climb_vy(vy: f64) -> f64 {
 
 /// Vertical rate target for lofted cruise / far burn (altitude-hold).
 /// Never commands climb; above [`CRUISE_ALT_CAP`] asks for a gentle sink.
+/// `terminal`: inside the settle envelope, keep sinking through the hand-off
+/// band toward the loft gate so the descent visibly begins during the final
+/// centering instead of hovering at the cap until Descend arms.
 #[inline]
-fn cruise_v_des_y(alt: f64, vy: f64) -> f64 {
+fn cruise_v_des_y(alt: f64, vy: f64, terminal: bool) -> f64 {
     let sink = if alt > CRUISE_ALT_CAP {
         // Bleed excess altitude while translating (~1–8 m/s sink; deep only
         // when returning from long-range cruise altitude). Gain sets the
         // bleed time constant (~12 s) — at 0.04 the tail alone took ~50 s
         // and the HUD sat in "cruise" sinking centimeters per frame.
         (-0.08 * (alt - CRUISE_ALT_CAP)).clamp(-8.0, -0.8)
+    } else if terminal {
+        // 0 at GATE_ALT_MIN+10 → −0.8 at the cap; asymptotes ~10 m above the
+        // 480 m loft gate so a tracking undershoot cannot re-fire the climb.
+        -0.8 * ramp(alt, GATE_ALT_MIN + 10.0, CRUISE_ALT_CAP)
     } else {
         0.0
     };
@@ -1733,9 +1743,11 @@ fn terminal_trim_aim(
     omega_py: f64,
     aggression: f64,
 ) -> ([f64; 3], f64) {
-    // Quiet and already in the hand-off box: hold upright.
+    // Quiet and already in the hand-off box: hold upright. Must sit below the
+    // centered arm branch's vh bound — holding upright at a higher vh would
+    // freeze the deceleration right where arming needs it quiet.
     if cheby <= TRIM_DEADZONE_CHEBY_M
-        && vh <= VH_HANDOFF_MAX * 0.55
+        && vh <= VH_HANDOFF_MAX * 0.12
         && v_cheby > -0.08
     {
         return ([0.0, 1.0, 0.0], careful(0.02, aggression));
@@ -2012,7 +2024,7 @@ fn transit_command(
     let v_allow = if terminal {
         // Terminal == careful envelope: creep speed only.
         trim_creep_speed(cheby.max(1.0), aggression)
-            .min(careful(0.10, aggression) * (range - 4.0).max(0.0))
+            .min(careful(0.20, aggression) * (range - 4.0).max(0.0))
             .min(terminal_v_cap(cheby, aggression))
             .clamp(0.0, VH_HANDOFF_MAX)
     } else {
@@ -2204,7 +2216,7 @@ fn transit_command(
             vy
         };
         let v_des_y = if lofted {
-            cruise_v_des_y(pos[1], vy)
+            cruise_v_des_y(pos[1], vy, terminal)
         } else {
             kill_climb_vy(vy)
         };
@@ -2752,8 +2764,10 @@ mod tests {
         ap.enabled = true;
         let cmd = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
         assert_eq!(ap.phase, TargetPhase::Cruise);
+        // Lower bound leaves room for the terminal-approach sink bias
+        // (cruise_v_des_y with terminal=true trims ~0.05 off hover).
         assert!(
-            cmd.throttle > 0.32,
+            cmd.throttle > 0.26,
             "terminal brake should keep torque headroom, thr={}",
             cmd.throttle
         );
@@ -3138,7 +3152,7 @@ mod tests {
         let v8 = trim_creep_speed(8.0, agg_near);
         let v30 = trim_creep_speed(30.0, agg_mid);
         assert!(v8 < 0.60, "near-pad creep too fast: {v8}");
-        assert!(v30 < VH_HANDOFF_MAX * 0.30, "careful-range creep too fast: {v30}");
+        assert!(v30 < VH_HANDOFF_MAX * 0.50, "careful-range creep too fast: {v30}");
         assert!(v8 < VH_HANDOFF_MAX * 0.15);
         // Closing-branch hand-off gate must be satisfiable while creeping in
         // the 6–10 m band (see `handoff_ready`), or arming stalls at the rim.
