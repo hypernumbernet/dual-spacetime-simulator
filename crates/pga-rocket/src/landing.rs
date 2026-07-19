@@ -10,6 +10,10 @@
 //!   envelope, brake hard on it, soft-touch near the pad. The envelope brake is
 //!   always live (never gated behind attitude recovery), so a fast fall brakes even
 //!   while still tilted, as long as thrust has a useful upward component.
+//!
+//! With a pad target ([`LandingAutopilot::update_with_target`]): mild position PD
+//! only while high; near the ground the lander commits upright (no last-metre
+//! walk-in). Survival success is the painted pad square.
 
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::sim::{ControlCommand, GRAVITY, RocketState};
@@ -68,11 +72,20 @@ const UPY_AUTH: f64 = 0.5;
 const UPY_SOFT: f64 = 0.6;
 /// Target / launch pad half-extent (m) — matches `mesh::TARGET_PAD_HALF_EXTENT`.
 pub(crate) const PAD_HALF_M: f64 = 30.0;
+
+// --- T-pad guidance (high seek, low commit) ---------------------------------
+/// Foot height (m) below which position-seek is off (upright + soft-touch only).
+const CENTER_SEEK_MIN_H: f64 = 45.0;
 /// Drop position-seek once Chebyshev offset is within this (m).
 const CENTER_TOL_M: f64 = 15.0;
-/// Foot height (m) below which T-pad position-seek is **off** — only upright +
-/// soft touch / residual-vh trim. Corrections must finish higher up.
-const CENTER_SEEK_MIN_H: f64 = 45.0;
+/// Max lean while high and seeking the pad (rad).
+const LEAN_SEEK_MAX: f64 = 0.28;
+/// Max lean near the pad for residual vh only (rad) — never position walk-in.
+const LEAN_TERMINAL_VH: f64 = 0.12;
+/// Position / velocity mix for high-altitude pad seek.
+const K_POS_TARGET: f64 = 0.03;
+const K_VEL_TARGET: f64 = 0.55;
+
 /// On-pad complete thresholds (looser than free-field L-mode lock).
 const TILT_PAD_DONE: f64 = 0.18;
 const OMEGA_PAD_DONE: f64 = 0.22;
@@ -121,13 +134,12 @@ impl Default for LandingAutopilot {
 }
 
 impl LandingAutopilot {
-    /// Snappier gains for T-key pad landings (upright settle; no near-pad walk-in).
+    /// Snappier attitude settle for T-key pad landings (no near-pad walk-in).
     pub fn for_target_pad() -> Self {
         Self {
             kp_attitude: 2.6,
             kd_attitude: 3.4,
             kd_roll: 2.4,
-            k_lat: 0.022,
             max_lat_tilt: 0.10,
             k_h: 0.42,
             v_max_descent: 2.2,
@@ -208,80 +220,40 @@ impl LandingAutopilot {
         let vy = state.velocity[1];
         let v_down = (-vy).max(0.0);
         let pos = state.position();
-        // Inside the painted square (Chebyshev) — survival success region.
         let on_pad = target_xz.is_some_and(|t| on_pad_square(pos, t));
         let cheby = target_xz.map_or(0.0, |t| chebyshev_xz(pos, t));
-        // Position-seek only high up; freeze position bias near the pad.
-        let seeking_center = target_xz.is_some()
-            && !state.contacting
-            && h > CENTER_SEEK_MIN_H
-            && cheby > CENTER_TOL_M;
-        // Low T-pad: no position PD. Quiet → pure upright; fast drift → vh-kill only.
-        let terminal_commit = target_xz.is_some() && !state.contacting && h <= CENTER_SEEK_MIN_H;
+        let has_pad = target_xz.is_some();
+        // High + off-center → mild position PD. Low → upright commit (no walk-in).
+        let seeking_center =
+            has_pad && !state.contacting && h > CENTER_SEEK_MIN_H && cheby > CENTER_TOL_M;
+        let terminal_commit = has_pad && !state.contacting && h <= CENTER_SEEK_MIN_H;
 
         // While tilted the feet are not the lowest structure; run the burn
         // envelope on the true lowest hull point so an inverted fall brakes early.
         let h_env = if tilt > TILT_PROBE { state.lowest_probe_y() } else { h };
-
-        // Once feet are down on the T-pad square, only upright + rate kill matter.
         let pad_settle = state.contacting && on_pad;
 
-        // Desired body +Y as a shortest-arc axis/angle in the body frame.
-        // High tilt: aim world-up (flip first). Near upright: velocity-kill / target aim.
-        let (axis, angle) = if tilt > TILT_AIM || pad_settle || (terminal_commit && vh < VH_TOUCH) {
-            // Flip recovery, pad settle, or low quiet T-pad: world-up only.
+        // Desired body +Y: flip / pad settle / low quiet T-pad → world-up;
+        // else lean cone + optional high-altitude pad seek.
+        let (axis, angle) = if tilt > TILT_AIM || pad_settle || (terminal_commit && vh < VH_TOUCH)
+        {
             axis_angle_from_cross([up_body[2], 0.0, -up_body[0]], up_y)
         } else {
-            // Allowed lean cone about world-up (all lean policy lives here):
-            // - altitude in hand: deeper anti-velocity lean kills drift fast, but
-            //   never past the attitude whose vertical thrust share still brakes
-            //   the current fall inside the remaining altitude;
-            // - T-pad high center-seek: modest lean, brake-safe capped;
-            // - low T-pad: tiny vh-kill only (no position walk-in);
-            // - free-field: small trim cone.
-            let lat_tilt = if seeking_center {
-                let a_req = if v_down > V_TOUCH {
-                    1.15 * (v_down * v_down - V_TOUCH * V_TOUCH)
-                        / (2.0 * (h_env - H_BURN_MARGIN - T_REACT * v_down).max(1.0))
-                } else {
-                    0.0
-                };
-                let upy_req = ((a_req + GRAVITY) / a_lift).clamp(0.0, 0.98);
-                // Conservative high-altitude cone — stability over bullseye.
-                let err_lean = (0.08 + 0.004 * cheby + 0.025 * vh).min(0.28);
-                err_lean.min(upy_req.acos())
-            } else if terminal_commit {
-                // Near pad: residual lateral speed only — never chase pad center.
-                (self.max_lat_tilt * 0.5 + 0.02 * vh).min(0.12)
-            } else if h > H_TERMINAL + 2.0 {
-                let a_req = if v_down > V_TOUCH {
-                    1.15 * (v_down * v_down - V_TOUCH * V_TOUCH)
-                        / (2.0 * (h_env - H_BURN_MARGIN - T_REACT * v_down).max(1.0))
-                } else {
-                    0.0
-                };
-                let upy_req = ((a_req + GRAVITY) / a_lift).clamp(0.0, 0.98);
-                if target_xz.is_some() {
-                    // High but already inside center tol: modest anti-drift only.
-                    (0.10 + 0.03 * vh).min(0.28).min(upy_req.acos())
-                } else {
-                    (self.max_lat_tilt + LAT_TILT_GAIN * vh)
-                        .min(LEAN_MAX)
-                        .min(upy_req.acos())
-                }
-            } else if h > 1.0 && vy > -1.5 && vh > VH_TOUCH {
-                self.max_lat_tilt + (LAT_TILT_GAIN * vh).min(LEAN_PAD_EXTRA_MAX)
-            } else {
-                self.max_lat_tilt
-            };
-            // Position PD only while high and off-center; never near the pad.
-            let aim_target = if seeking_center { target_xz } else { None };
-            // Quiet high fall over a T-pad once centered: pure upright.
-            let desired = if target_xz.is_some()
-                && !seeking_center
-                && !terminal_commit
-                && vh < 2.5
-            {
+            let lat_tilt = lat_tilt_allowance(
+                self.max_lat_tilt,
+                h,
+                h_env,
+                vh,
+                vy,
+                v_down,
+                a_lift,
+                cheby,
+                seeking_center,
+                terminal_commit,
+                has_pad,
+            );
+            // Quiet high T-pad once centered: pure upright (no lean chase).
+            let desired = if has_pad && !seeking_center && !terminal_commit && vh < 2.5 {
                 [0.0, 1.0, 0.0]
             } else {
                 desired_thrust_axis_world(
@@ -293,7 +265,7 @@ impl LandingAutopilot {
                     lat_tilt,
                     pos[0],
                     pos[2],
-                    aim_target,
+                    if seeking_center { target_xz } else { None },
                 )
             };
             let d = motor_inverse_rotate_vector(&state.motor, desired);
@@ -420,7 +392,6 @@ impl LandingAutopilot {
             // Keep weight on the feet and let Coulomb friction stop the slide.
             hover_cmd * 0.55
         } else if soft_regime {
-            // No hover-for-center: commit the soft schedule and land.
             soft_touch_throttle(
                 hover_cmd,
                 h,
@@ -458,8 +429,7 @@ impl LandingAutopilot {
             } else {
                 0.0
             };
-            // T-pad drift kill only while still high (same band as position-seek).
-            // Near the pad we do not buy extra lateral thrust — upright commit.
+            // Lateral authority only while high-seeking (same band as position PD).
             let t_drift = if seeking_center && vh > 4.0 && up_y >= UPY_AUTH {
                 (0.10 + 0.025 * vh).min(0.35)
             } else {
@@ -556,8 +526,7 @@ fn soft_touch_throttle(
     kv: f64,
 ) -> f64 {
     let v_tgt = if vh > VH_TOUCH && !contacting {
-        // Still drifting: hold off the pad (climb gently if skimming it) and
-        // let residual lateral speed bleed before settling.
+        // Still drifting: hold off the pad and bleed residual lateral speed.
         if h < 1.2 { 0.35 } else { 0.0 }
     } else if h < 1.0 {
         -0.4
@@ -575,16 +544,63 @@ fn soft_touch_throttle(
     t
 }
 
-/// Position-hold gain when a pad target is set (1/s² scale after mixing with vel).
-/// Used only above [`CENTER_SEEK_MIN_H`]; mild so high-alt seek does not sway.
-const K_POS_TARGET: f64 = 0.03;
-/// Extra velocity damping toward a pad target (dimensionless mix with pos error).
-const K_VEL_TARGET: f64 = 0.55;
+/// Allowed lean cone about world-up. T-pad: high seek / low vh-only / free-field.
+fn lat_tilt_allowance(
+    max_lat_tilt: f64,
+    h: f64,
+    h_env: f64,
+    vh: f64,
+    vy: f64,
+    v_down: f64,
+    a_lift: f64,
+    cheby: f64,
+    seeking_center: bool,
+    terminal_commit: bool,
+    has_pad: bool,
+) -> f64 {
+    if seeking_center {
+        // Conservative high-altitude cone — stability over bullseye.
+        let nominal = (0.08 + 0.004 * cheby + 0.025 * vh).min(LEAN_SEEK_MAX);
+        return brake_safe_lean(nominal, v_down, h_env, a_lift);
+    }
+    if terminal_commit {
+        // Residual lateral speed only — never chase pad center.
+        return (max_lat_tilt * 0.5 + 0.02 * vh).min(LEAN_TERMINAL_VH);
+    }
+    if h > H_TERMINAL + 2.0 {
+        let nominal = if has_pad {
+            // High but already inside center tol: modest anti-drift.
+            (0.10 + 0.03 * vh).min(LEAN_SEEK_MAX)
+        } else {
+            (max_lat_tilt + LAT_TILT_GAIN * vh).min(LEAN_MAX)
+        };
+        return brake_safe_lean(nominal, v_down, h_env, a_lift);
+    }
+    if h > 1.0 && vy > -1.5 && vh > VH_TOUCH {
+        max_lat_tilt + (LAT_TILT_GAIN * vh).min(LEAN_PAD_EXTRA_MAX)
+    } else {
+        max_lat_tilt
+    }
+}
 
-/// Desired thrust axis inside the allowed lean cone `lat_tilt` (policy for the
-/// cone size lives in `update`). Near the pad or nearly at rest: upright with a
-/// small drift-kill trim (and optional pad position bias). Otherwise: anti-velocity
-/// for the braking burn, or position-PD lean when `target_xz` is set.
+/// Cap lean so the vertical thrust share can still brake the current fall.
+#[inline]
+fn brake_safe_lean(nominal: f64, v_down: f64, h_env: f64, a_lift: f64) -> f64 {
+    let a_req = if v_down > V_TOUCH {
+        1.15 * (v_down * v_down - V_TOUCH * V_TOUCH)
+            / (2.0 * (h_env - H_BURN_MARGIN - T_REACT * v_down).max(1.0))
+    } else {
+        0.0
+    };
+    let upy_req = ((a_req + GRAVITY) / a_lift).clamp(0.0, 0.98);
+    nominal.min(upy_req.acos())
+}
+
+/// Desired thrust axis inside the allowed lean cone `lat_tilt`.
+///
+/// - Free-field near rest / low: small drift-kill trim.
+/// - Free-field braking: anti-velocity.
+/// - Pad target (only passed while high-seeking): vertical-dominant position PD.
 fn desired_thrust_axis_world(
     vx: f64,
     vy: f64,
@@ -610,13 +626,7 @@ fn desired_thrust_axis_world(
         };
         let ax = pos_w * (K_POS_TARGET * ex - K_VEL_TARGET * vx);
         let az = pos_w * (K_POS_TARGET * ez - K_VEL_TARGET * vz);
-        if h < H_TERMINAL + 2.0 || speed_sq < 0.16 {
-            return clamp_tilt([ax - k_lat * vx, 1.0, az - k_lat * vz], lat_tilt);
-        }
-        // Damped station-keeping over the pad: `ax`/`az` already mix position
-        // error with strong velocity damping; keep the aim vertical-dominant.
-        // (An anti-velocity aim with a `v_down` vertical component made the
-        // early, slow part of the coasting descent swing like a pendulum.)
+        // Always vertical-dominant (avoids pendulum from anti-velocity + v_down).
         return clamp_tilt([ax, 1.0, az], lat_tilt);
     }
 

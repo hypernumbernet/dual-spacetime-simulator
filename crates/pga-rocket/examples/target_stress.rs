@@ -110,8 +110,8 @@ fn main() {
         let p = state.position();
         let on_target = inside_target_pad(p, sc.target);
         let center_err = (p[0] - sc.target[0]).abs().max((p[2] - sc.target[1]).abs());
-        // Survival: on-pad + complete. Soft center preference (≤ 30 m = pad half).
-        let ok = !state.destroyed && ap.complete && on_target && center_err <= 30.0;
+        // Survival: on-pad + complete (center err is reported for tuning only).
+        let ok = !state.destroyed && ap.complete && on_target;
         if !ok {
             fails += 1;
         }

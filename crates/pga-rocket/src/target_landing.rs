@@ -20,7 +20,8 @@
 
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::landing::{
-    axis_angle_from_cross, clamp_tilt, on_pad_square, saturate, LandingAutopilot, PAD_HALF_M,
+    axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_pad_square, saturate, LandingAutopilot,
+    PAD_HALF_M,
 };
 use crate::sim::{ControlCommand, GRAVITY, RocketState};
 
@@ -30,21 +31,29 @@ pub const CLIMB_ALT_M: f64 = 500.0;
 const GATE_ALT_MIN: f64 = 480.0;
 /// Target pad half-extent (m) — same painted square as the mesh pad.
 pub const TARGET_PAD_HALF_M: f64 = PAD_HALF_M;
-/// Max Chebyshev offset from pad center when arming terminal descent (m).
-/// Inside the painted square with margin — lander will not walk in near ground,
-/// so hand-off must already be over the pad.
+
+// --- Hand-off into terminal lander -------------------------------------------
+/// Max Chebyshev offset (m) to arm Descend — must already be over the pad
+/// (lander will not walk in near the ground).
 const HANDOFF_CHEBY_MAX_M: f64 = 22.0;
-/// Lean cap during the full-throttle ascent burn (rad): keeps the climb fast
-/// while still building downrange speed (3g·sin ≈ 8.7 m/s² lateral).
+/// Max horizontal speed (m/s) when arming Descend.
+const VH_HANDOFF_MAX: f64 = 9.0;
+/// Max pitch/yaw rate (rad/s) when arming Descend.
+const OMEGA_HANDOFF_MAX: f64 = 0.12;
+/// Min body-up · world-up when arming (~0.32 rad tilt).
+const COS_TILT_HANDOFF: f64 = 0.95;
+
+// --- Transit lean / envelope -------------------------------------------------
+/// Lean cap during the full-throttle ascent burn (rad).
 const LEAN_BURN_MAX: f64 = 0.30;
-/// Airplane-style cruise lean (rad, ~46°). Tighter than the old ~54° cap so
-/// high-alt transit stays stable, still enough for ~500–800 m downrange.
-/// Must stay below the flip gate ([`COS_TILT_AIM`]).
+/// Far-cruise lean cap (rad, ~46°). Below flip gate; stable high-alt transit.
 const LEAN_CRUISE: f64 = 0.80;
 /// Mid-range lean while still on the envelope but closer in (rad).
 const LEAN_MID: f64 = 0.45;
 /// Range (m) where deep airplane cruise takes over.
 const RANGE_FAR_M: f64 = 80.0;
+/// Range (m) for near-pad station-keeping before hand-off.
+const RANGE_TERMINAL_M: f64 = 55.0;
 /// Soft ceiling above the altitude gate (m). Once lofted, prefer a slight
 /// sink rather than riding thrust upward past this.
 const CRUISE_ALT_CAP: f64 = GATE_ALT_MIN + 40.0;
@@ -73,22 +82,13 @@ const T_ATT_LAG_S: f64 = 2.0;
 /// Downrange speed built during the ascent burn (m/s). Ballistic coast keeps
 /// whatever vh burnout leaves — cruise then accelerates freely on the envelope.
 const V_CLIMB_H_MAX: f64 = 28.0;
-/// Max drift allowed when arming terminal descent (m/s): a fast overflight
-/// must brake on the powered cruise leg first, not hand the lander a sprint.
-const VH_HANDOFF_MAX: f64 = 9.0;
-/// Attitude quiet gates for the hand-off (rad/s, cos(rad)). Arming mid-swing
-/// hands the lander a rotation its gentler √-profile cannot stop before the
-/// stack sails through upright into a pro-drift lean.
-const OMEGA_HANDOFF_MAX: f64 = 0.12;
-/// Quiet upright before hand-off (~0.32 rad). Terminal lander commits upright.
-const COS_TILT_HANDOFF: f64 = 0.95; // cos(~0.32)
 /// Attitude √-profile planning accel (rad/s²).
 const ALPHA_PLAN: f64 = 0.5;
 const OMEGA_MAX: f64 = 1.15;
 const KP_ATT: f64 = 2.0;
 const KD_ATT: f64 = 3.0;
 const KD_ROLL: f64 = 2.0;
-/// Flip only when past the commanded cruise lean (cos(LEAN_CRUISE)≈0.58).
+/// Flip only when past the commanded cruise lean (well beyond LEAN_CRUISE).
 const COS_TILT_AIM: f64 = 0.30; // ~72.5°
 /// Pitch/yaw rate (rad/s) above which attitude is pure rate-kill.
 const OMEGA_RATE_KILL: f64 = 0.80;
@@ -228,13 +228,6 @@ pub fn inside_target_pad(pos: [f64; 3], target_xz: [f64; 2]) -> bool {
     on_pad_square(pos, target_xz)
 }
 
-#[inline]
-fn chebyshev_xz(pos: [f64; 3], target_xz: [f64; 2]) -> f64 {
-    (pos[0] - target_xz[0])
-        .abs()
-        .max((pos[2] - target_xz[1]).abs())
-}
-
 /// Kill residual climb rate only (never command positive vy once lofted).
 #[inline]
 fn kill_climb_vy(vy: f64) -> f64 {
@@ -307,11 +300,11 @@ fn transit_command(state: &RocketState, target_xz: [f64; 2], pos: [f64; 3]) -> C
     let uz = dz * inv_range;
     let v_approach = vx * ux + vz * uz;
 
-    // Near-pad station keeping is gentle: quiet enough for hand-off.
-    let terminal = lofted && range <= 55.0;
+    // Near-pad station keeping: quiet enough for hand-off (no deep lean chase).
+    let terminal = lofted && range <= RANGE_TERMINAL_M;
 
     let v_stop = envelope_v_stop(range, v_approach);
-    // Climb burn only: modest horizontal build; free accel happens on cruise.
+    // Climb burn: modest horizontal build; free accel on cruise; creep near pad.
     let v_cmd_h = if burn_up || ballistic {
         v_stop.min(V_CLIMB_H_MAX)
     } else if terminal {
@@ -326,41 +319,34 @@ fn transit_command(state: &RocketState, target_xz: [f64; 2], pos: [f64; 3]) -> C
     // Far cruise: airplane lean along the free vector to T, or reverse-brake
     // when above the envelope. No velocity-PD flip — aim is direction-stable.
     let far = lofted && cruise_w > 0.75 && !terminal && range > RANGE_FAR_M;
-    // Allow reverse after overshoot a bit closer than RANGE_FAR_M.
-    let far_or_overshoot = far || (lofted && cruise_w > 0.75 && !terminal && range > 55.0 && v_approach < -1.5);
+    let far_or_overshoot = far
+        || (lofted
+            && cruise_w > 0.75
+            && !terminal
+            && range > RANGE_TERMINAL_M
+            && v_approach < -1.5);
 
     let (desired_raw, lean_max, deep) = if burn_up {
-        // Light downrange lean while lofting.
         ([0.14 * need_x, AIM_Y_BIAS, 0.14 * need_z], LEAN_BURN_MAX, false)
     } else if terminal {
-        // Quiet approach for hand-off: kill residual vh, do not chase pad centre
-        // with deep lean — the lander will not walk in near the ground.
+        // Blend toward upright as we enter the hand-off box (vh quiet).
         let settle = range <= HANDOFF_CHEBY_MAX_M && vh <= VH_HANDOFF_MAX + 3.0;
-        if settle {
-            (
-                [0.06 * need_x, AIM_Y_BIAS, 0.06 * need_z],
-                (0.05 + 0.015 * vh).clamp(0.06, 0.18),
-                false,
-            )
+        let k = if settle { 0.06 } else { 0.10 };
+        let lean = if settle {
+            (0.05 + 0.015 * vh).clamp(0.06, 0.18)
         } else {
-            (
-                [0.10 * need_x, AIM_Y_BIAS, 0.10 * need_z],
-                (0.08 + 0.025 * vh).clamp(0.10, 0.28),
-                false,
-            )
-        }
+            (0.08 + 0.025 * vh).clamp(0.10, 0.28)
+        };
+        ([k * need_x, AIM_Y_BIAS, k * need_z], lean, false)
     } else if far_or_overshoot {
         let braking = v_approach > v_stop + V_BRAKE_ENTER
-            || (v_approach < -1.5 && range > 55.0);
+            || (v_approach < -1.5 && range > RANGE_TERMINAL_M);
         if braking {
-            // Anti-velocity free vector (horizontal kill, hold altitude bias).
             let s = vh.max(1.0);
             ([-vx / s, AIM_Y_BIAS, -vz / s], LEAN_CRUISE, true)
         } else if v_approach > v_stop + V_BRAKE_EXIT {
-            // Hysteresis band: light hold, do not reverse yet.
             ([0.08 * need_x, AIM_Y_BIAS, 0.08 * need_z], LEAN_MID, false)
         } else {
-            // Free vector CoM → pad (XZ) + vertical bias: airplane go lean.
             ([ux, AIM_Y_BIAS, uz], LEAN_CRUISE, true)
         }
     } else {
