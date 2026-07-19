@@ -193,11 +193,20 @@ X' = M X M~      (M~ は反転 reverse)
 
 ### T モード（目標着陸）
 
-0. **Transit MPC（Climb / Cruise）** — 簡易 3DOF 前方ロールアウト + 候補サンプリング
+0. **Climb（480 m ゲート未満）** — 単純物理のフルスロットル上昇
+   - 常に `THR_FULL`。MPC・速度フィードバック lean・ブレーキラッチは使わない。
+   - 接地中および `CLIMB_CLEAR_ALT_M`（25 m）未満: 直立 `[0,1,0]`（`soft_att` で PD を穏やかに）。
+   - クリア後: 開ループ pitch program — smoothstep で lean を 0 → `LEAN_CLIMB_MAX`（遠距離は
+     `long_range_weight` で ~0.9 rad まで）に開き、パッド方向へ `clamp_tilt`。
+   - **Cruise 移行:** 高度 ≥480 m、near-handoff 440 m、または
+     `ballistic_apogee = h + vy²/(2g) ≥ CLIMB_ALT_M`（500 m）で即 Cruise へ（過剰ロフト防止）。
+
+0.5. **Transit MPC（Cruise）** — 簡易 3DOF 前方ロールアウト + 候補サンプリング
    - 状態: 位置・速度 + lean 1 次遅れ（`brake_flip_time` 相当）。推力は `(T/m)·thr·û`、
      二次抗力 `F=−k|v|v`、重力。Moon は `k=0`。
-   - 候補: `LoftGo` / `AirplaneHold` / `CruiseGo` / `Brake` / `Coast` / `SinkGo`。
-     遠距離 go 中は `AirplaneHold` と `Brake` のみ。2 フレームごとに再計画（receding horizon）。
+   - 候補: `CruiseGo` / `Brake` / `Coast` / `SinkGo` / `AirplaneHold`（低高度安全網として
+     `LoftGo` は MPC 内部のみ）。遠距離 go 中は `AirplaneHold` と `Brake` のみ。
+     2 フレームごとに再計画（receding horizon）。
    - コスト: 480 m ロフトゲート未達・過剰ロフト・残距離・オーバーシュート・ハンドオフ余裕・∫throttle dt。
    - 内ループは従来どおり姿勢 PD + throttle 整形。ターミナル settle / Descend 硬 AND は不変。
 
@@ -217,16 +226,15 @@ X' = M X M~      (M~ は反転 reverse)
    - `range_eff ≤ d_stop` に入った瞬間、airplane も **同じ物理ゲート**で逆リーンへ譲る
      （`is_long_range_cruise` は brake 中 false）。
    - 巡航高度目標は全距離 **`LONG_CRUISE_ALT_M` ≈ 520 m**（短距離 `CRUISE_ALT_CAP` と同帯）。
-   - `long_range_weight(range)`: 約 3–7 km の肩で **ロフト apogee 目標**を 530 m → 480 m
-     に連続ブレンド（`APOGEE_TARGET_M` ↔ `GATE_ALT_MIN`）。
+   - `long_range_weight(range)`: 約 3–7 km の肩で Climb pitch program の lean 上限を
+     短距離 ~0.30 rad → 長距離 ~0.9 rad に連続ブレンド。
    - `long_range_hold_cos(alt, alt_tgt, vy, hover)`:
      - フル T では `a_y = g·(cos/hover − 1)`。平衡は `cos ≈ hover`（T/W≈3 なら ≈1/3）。
      - 高度誤差・鉛直速度・**弾道予測アポジ**のメンバシップから `v_des` → `a_cmd` → `cos`。
      - **非対称:** 上昇は控えめ、過高度・通過上昇は強い dive（`cos` 下限 ≈ 0.12、
        機首下げを許容）。フリップ復帰ゲートも dive を邪魔しないよう低くする。
    - `long_range_go_aim(ux, uz, cos_up)`: 水平はパッド方向、鉛直は上記 `cos` の単位 aim。
-   - 距離フロアにより、高速で 3 km まで寄っても ballistic thr カット／直立ストレッチに
-     落ちず、airplane 法を維持する。
+   - 距離フロアにより、高速で 3 km まで寄っても airplane 法を維持する。
 
 2.5. **ターミナル settle（Cruise→Descend 手渡し前、~90–140 m 肩）**
    - **アーム条件は離散 AND のまま**（高度 ≥480 m、Chebyshev ≤10 m、`vh` ≤4.0 m/s、

@@ -1,10 +1,13 @@
 //! Target-pad autopilot (T key): loft, cruise to pad, terminal land.
 //!
-//! **Transit (Climb / Cruise — same controller, HUD phase split):** receding-horizon
-//! MPC over a simplified 3DOF rollout picks among loft, cruise, brake, coast, sink,
-//! and (when far) airplane-hold candidates every other frame. The predictor couples
-//! climb and translate (gravity + thrust + quadratic drag + lean lag). A parallel
-//! closed-form `d_stop` gate latches reverse-lean braking with geometric hysteresis.
+//! **Climb (below altitude gate):** full-throttle upright liftoff, then an open-loop
+//! pitch program that tilts toward the pad — no MPC, no velocity-feedback lean.
+//!
+//! **Cruise (gate cleared):** receding-horizon MPC over a simplified 3DOF rollout
+//! picks among cruise, brake, coast, sink, and (when far) airplane-hold candidates
+//! every other frame. The predictor couples translate (gravity + thrust + quadratic
+//! drag + lean lag). A parallel closed-form `d_stop` gate latches reverse-lean
+//! braking with geometric hysteresis.
 //!
 //! **Airplane range (horizontal ≳ 1.5 km):** full throttle toward T while outside
 //! `d_stop`; altitude is pitch only ([`long_range_hold_cos`] /
@@ -80,8 +83,12 @@ const TRIM_V_CREEP_MIN_BASE: f64 = 1.3;
 const CAREFUL_BRAKE_LEAN_SOFT_BASE: f64 = 0.22;
 
 // --- Transit lean / envelope -------------------------------------------------
-/// Lean cap during the full-throttle ascent burn (rad).
+/// Lean cap during the full-throttle ascent burn (rad) — MPC rollout / legacy label.
 const LEAN_BURN_MAX: f64 = 0.30;
+/// Altitude (m) before opening lateral lean — stay upright through liftoff.
+const CLIMB_CLEAR_ALT_M: f64 = 25.0;
+/// Max lean (rad) at the end of the climb pitch program (short range).
+const LEAN_CLIMB_MAX: f64 = 0.30;
 /// Soft ceiling for non-airplane reverse-brake lean (rad).
 const LEAN_BRAKE_MAX: f64 = 0.90;
 /// Conservative lean for stop-distance planning only (≈ prior cruise plan).
@@ -91,9 +98,6 @@ const RANGE_FAR_M: f64 = 80.0;
 /// Soft ceiling above the altitude gate (m). Once lofted, prefer a slight
 /// sink rather than riding thrust upward past this.
 const CRUISE_ALT_CAP: f64 = GATE_ALT_MIN + 40.0;
-/// Ballistic apogee the climb burn aims for (m). Cut thrust once the coast
-/// alone clears this, so the loft tops out just above [`CLIMB_ALT_M`].
-const APOGEE_TARGET_M: f64 = CLIMB_ALT_M + 30.0;
 /// Near-full throttle for climb burn and airplane cruise (gimbal authority
 /// scales with thrust — full T is also max attitude authority).
 const THR_FULL: f64 = 0.97;
@@ -137,10 +141,19 @@ fn near_handoff_zone(terminal_latched: bool, cheby: f64) -> bool {
     terminal_latched || cheby <= NEAR_HANDOFF_CHEBY_M
 }
 
-/// Loft gate cleared, or near-handoff with soft altitude floor.
+/// Ballistic apogee (m) if thrust cuts now at current altitude / vertical speed.
 #[inline]
-fn transit_lofted(alt: f64, near_handoff: bool) -> bool {
-    alt >= GATE_ALT_MIN || (near_handoff && alt >= GATE_ALT_MIN - 40.0)
+fn ballistic_apogee(alt: f64, vy: f64) -> f64 {
+    alt + vy.max(0.0).powi(2) / (2.0 * GRAVITY)
+}
+
+/// Loft gate cleared: at altitude, near-handoff soft floor, or ballistic apogee
+/// already reaches [`CLIMB_ALT_M`] (500 m target).
+#[inline]
+fn transit_lofted(alt: f64, vy: f64, near_handoff: bool) -> bool {
+    alt >= GATE_ALT_MIN
+        || (near_handoff && alt >= GATE_ALT_MIN - 40.0)
+        || ballistic_apogee(alt, vy) >= CLIMB_ALT_M
 }
 
 /// Blend pad-near curve with outer Chebyshev shoulder (creep / v-cap shared).
@@ -194,11 +207,9 @@ fn careful_brake_lean_cap(soft: f64, demand_shaped: f64, aggression: f64) -> f64
 }
 
 /// Guidance phase while the T-key autopilot is armed.
-///
-/// `Climb` and `Cruise` share the same transit controller; the split is HUD-only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetPhase {
-    /// Below the altitude gate — climbing **and** translating together.
+    /// Below the altitude gate — full-T upright liftoff + open-loop pitch program.
     Climb,
     /// Gate cleared — no climb command; finish the horizontal leg.
     Cruise,
@@ -317,7 +328,11 @@ impl TargetLandingAutopilot {
     /// HUD helper: airplane full-T + pitch-elevator cruise is active
     /// (range ≳ [`LONG_AIRPLANE_RANGE_M`], not brake-latched).
     pub fn is_long_range_cruise(&self, pos: [f64; 3], target_xz: [f64; 2]) -> bool {
-        if !self.enabled || self.complete || self.phase == TargetPhase::Descend {
+        if !self.enabled
+            || self.complete
+            || self.phase == TargetPhase::Descend
+            || self.phase == TargetPhase::Climb
+        {
             return false;
         }
         let dx = target_xz[0] - pos[0];
@@ -338,6 +353,7 @@ impl TargetLandingAutopilot {
 
         let pos = state.position();
         let alt = pos[1];
+        let vy = state.velocity[1];
         let cheby = chebyshev_xz(pos, target_xz);
         let dx = target_xz[0] - pos[0];
         let dz = target_xz[1] - pos[2];
@@ -349,22 +365,17 @@ impl TargetLandingAutopilot {
                 self.terminal_latched,
                 range,
                 cheby,
-                transit_lofted(alt, near_handoff),
+                transit_lofted(alt, vy, near_handoff),
                 TERMINAL_EXIT_CHEBY_M,
             );
             if was_terminal && !self.terminal_latched {
                 self.reset_terminal_settle();
             }
 
-            // HUD phase only — both use the same transit controller.
-            let near_handoff = near_handoff_zone(self.terminal_latched, cheby);
+            // Climb → Cruise once altitude or ballistic apogee clears the 500 m target.
             // Do not drop back to Climb (full-T re-loft) while settling over the pad.
-            let gate = if near_handoff {
-                GATE_ALT_MIN - 40.0
-            } else {
-                GATE_ALT_MIN
-            };
-            self.phase = if alt >= gate {
+            let near_handoff = near_handoff_zone(self.terminal_latched, cheby);
+            self.phase = if transit_lofted(alt, vy, near_handoff) {
                 TargetPhase::Cruise
             } else {
                 TargetPhase::Climb
@@ -411,7 +422,8 @@ impl TargetLandingAutopilot {
         }
 
         match self.phase {
-            TargetPhase::Climb | TargetPhase::Cruise => {
+            TargetPhase::Climb => climb_command(state, target_xz, pos),
+            TargetPhase::Cruise => {
                 let (cmd, brake, terminal_brake, settle_phase, upright_s, mpc_hold, mpc_counter) =
                     transit_command(
                         state,
@@ -1050,7 +1062,6 @@ fn candidate_params(
     mu_long: f64,
     in_airplane_range: bool,
     lofted: bool,
-    burn_up: bool,
     mass: f64,
     max_thrust: f64,
     a_brake_max: f64,
@@ -1059,7 +1070,7 @@ fn candidate_params(
     let s = vh.max(1.0);
     match candidate {
         TransitCandidate::LoftGo => {
-            if lofted && !burn_up {
+            if lofted {
                 return None;
             }
             let lean = LEAN_BURN_MAX + mu_long * (0.90 - LEAN_BURN_MAX);
@@ -1096,9 +1107,6 @@ fn candidate_params(
             })
         }
         TransitCandidate::CruiseGo => {
-            if burn_up {
-                return None;
-            }
             let go_lean = lean_for_lateral_accel(
                 a_brake_max * 0.35,
                 brake_mode,
@@ -1190,7 +1198,6 @@ fn transit_mpc_select(
     mu_long: f64,
     in_airplane_range: bool,
     lofted: bool,
-    burn_up: bool,
     ballistic: bool,
     brake_latched: bool,
     brake_now: bool,
@@ -1229,7 +1236,7 @@ fn transit_mpc_select(
         &[TransitCandidate::Brake]
     } else if airplane_go {
         &[TransitCandidate::AirplaneHold, TransitCandidate::Brake]
-    } else if !lofted || burn_up {
+    } else if !lofted {
         &[
             TransitCandidate::LoftGo,
             TransitCandidate::CruiseGo,
@@ -1274,7 +1281,6 @@ fn transit_mpc_select(
             mu_long,
             in_airplane_range,
             lofted,
-            burn_up,
             mass,
             max_thrust,
             a_brake_max,
@@ -1331,7 +1337,6 @@ fn transit_mpc_select(
         mu_long,
         in_airplane_range,
         lofted,
-        burn_up,
         mass,
         max_thrust,
         a_brake_max,
@@ -1896,13 +1901,55 @@ fn airplane_hold_aim(
     )
 }
 
-/// Transit guidance for Climb/Cruise: MPC selection, stop-distance brake latch,
+/// Hermite smoothstep on `[0, 1]`.
+#[inline]
+fn smoothstep01(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Climb-phase guidance: always full throttle, upright through liftoff, then an
+/// open-loop pitch program toward the pad (no MPC / velocity-feedback lean).
+fn climb_command(
+    state: &RocketState,
+    target_xz: [f64; 2],
+    pos: [f64; 3],
+) -> ControlCommand {
+    let dx = target_xz[0] - pos[0];
+    let dz = target_xz[1] - pos[2];
+    let range = (dx * dx + dz * dz).sqrt();
+    let alt = pos[1];
+
+    let desired = if state.contacting || alt < CLIMB_CLEAR_ALT_M || range < 1.0 {
+        [0.0, 1.0, 0.0]
+    } else {
+        let inv_range = 1.0 / range;
+        let ux = dx * inv_range;
+        let uz = dz * inv_range;
+        let mu_long = long_range_weight(range);
+        let lean_max = LEAN_CLIMB_MAX + mu_long * (0.90 - LEAN_CLIMB_MAX);
+        let u = smoothstep01(ramp(alt, CLIMB_CLEAR_ALT_M, GATE_ALT_MIN));
+        let lean = u * lean_max.min(LEAN_LONG_MAX);
+        clamp_tilt([ux, 1.0, uz], lean)
+    };
+
+    let soft_att = state.contacting || alt < CLIMB_CLEAR_ALT_M + 15.0;
+    let (pitch, yaw, roll, _) = attitude_toward(state, desired, COS_TILT_AIM, soft_att);
+
+    ControlCommand {
+        throttle: THR_FULL,
+        pitch,
+        yaw,
+        roll,
+    }
+    .clamp()
+}
+
+/// Transit guidance for Cruise: MPC selection, stop-distance brake latch,
 /// and terminal settle inside the careful envelope.
 ///
-/// Short/mid range: receding-horizon MPC among loft / cruise / brake / coast / sink;
-/// burn until ballistic apogee clears [`APOGEE_TARGET_M`] (soft-blended at long
-/// range), optional upright straighten, then go/brake from `d_stop`. Airplane
-/// range (≳ [`LONG_AIRPLANE_RANGE_M`]): full T + pitch elevator at
+/// Short/mid range: receding-horizon MPC among cruise / brake / coast / sink;
+/// airplane range (≳ [`LONG_AIRPLANE_RANGE_M`]): full T + pitch elevator at
 /// [`LONG_CRUISE_ALT_M`] (see [`airplane_hold_aim`]). Returns command, brake latch,
 /// terminal brake latch, MPC hold state, and terminal settle sub-phase.
 fn transit_command(
@@ -1931,27 +1978,19 @@ fn transit_command(
     let range = (dx * dx + dz * dz).sqrt();
     let cheby = chebyshev_xz(pos, target_xz);
     let near_handoff = near_handoff_zone(terminal_latched, cheby);
-    let lofted = transit_lofted(pos[1], near_handoff);
-    let aggression = careful_aggression(range);
-    let mu_long = long_range_weight(range);
-
     let vx = state.velocity[0];
     let vy = state.velocity[1];
     let vz = state.velocity[2];
+    let lofted = transit_lofted(pos[1], vy, near_handoff);
+    let aggression = careful_aggression(range);
+    let mu_long = long_range_weight(range);
+
     let vh = (vx * vx + vz * vz).sqrt();
 
     let mass = state.params.mass;
     let max_thrust = state.params.max_thrust;
     let hover = mass * GRAVITY / max_thrust;
 
-    // Loft apogee: 530 m short-hop → 480 m at full [`long_range_weight`]
-    // (never below the 480 m loft gate). Airplane range closes the last gap
-    // to [`LONG_CRUISE_ALT_M`] by pitch, not extra thrust.
-    let apogee_target = APOGEE_TARGET_M
-        + mu_long * ((LONG_CRUISE_ALT_M - 40.0) - APOGEE_TARGET_M).max(0.0);
-    let straighten_m = apogee_target - 180.0;
-
-    let apogee = pos[1] + vy.max(0.0) * vy.max(0.0) / (2.0 * GRAVITY);
     let in_airplane_range = range >= LONG_AIRPLANE_RANGE_M;
     let brake_mode = if in_airplane_range || vh > 35.0 {
         LateralThrMode::FullThrottle
@@ -1964,19 +2003,9 @@ fn transit_command(
         mass,
         max_thrust,
     );
-    // Apogee cutoff in every range: burning past it converts the climb burn's
-    // vertical momentum into a ballistic balloon far above the cruise hold
-    // (full-T to the 480 m gate left vy ≈ 100 m/s → topped out near 2000 m).
-    let burn_up = !lofted
-        && !(near_handoff && pos[1] >= GATE_ALT_MIN - 40.0)
-        && apogee < apogee_target;
     // Powered-cruise weight: 1 at vy ≤ +3, 0 at vy ≥ +8 (ballistic coast).
-    let cruise_w = if burn_up {
-        0.0
-    } else {
-        (1.0 - (vy - 3.0) / 5.0).clamp(0.0, 1.0)
-    };
-    let ballistic = !burn_up && cruise_w < 1.0;
+    let cruise_w = (1.0 - (vy - 3.0) / 5.0).clamp(0.0, 1.0);
+    let ballistic = cruise_w < 1.0;
 
     let inv_range = if range > 1e-3 { 1.0 / range } else { 0.0 };
     let ux = dx * inv_range;
@@ -2053,7 +2082,7 @@ fn transit_command(
             p.beta,
             p.t_flip_go,
         );
-        if burn_up || ballistic {
+        if ballistic {
             v.min(V_CLIMB_H_MAX)
         } else {
             v
@@ -2128,7 +2157,6 @@ fn transit_command(
             mu_long,
             in_airplane_range,
             lofted,
-            burn_up,
             ballistic,
             brake_latched,
             brake,
@@ -2170,15 +2198,7 @@ fn transit_command(
             mpc_out_hold = TransitCandidate::Brake;
         }
 
-        if burn_up {
-            let lean = LEAN_BURN_MAX + mu_long * (0.90 - LEAN_BURN_MAX);
-            let y_bias = AIM_Y_BIAS - mu_long * 0.55;
-            let k_h = 0.14 + mu_long * 0.35;
-            mpc_plan.desired_raw = [k_h * need_x, y_bias.max(0.40), k_h * need_z];
-            mpc_plan.lean_max = lean.min(LEAN_LONG_MAX);
-            mpc_plan.deep = mu_long > 0.35;
-            mpc_plan.force_full_thr = true;
-        } else if !mpc_plan.force_full_thr && !brake {
+        if !mpc_plan.force_full_thr && !brake {
             mpc_plan.desired_raw[0] += 0.05 * need_x;
             mpc_plan.desired_raw[2] += 0.05 * need_z;
         }
@@ -2192,22 +2212,12 @@ fn transit_command(
         )
     };
 
-    // Upright straighten before cutoff so the coast starts without lean/rates.
-    let straighten = burn_up && apogee >= straighten_m;
     // Deep airplane lean must not be faded by cruise_w (half-open aim = sway).
-    let aim_w = if burn_up || deep {
-        1.0
-    } else {
-        cruise_w
-    };
-    let desired = if straighten {
-        [0.0, 1.0, 0.0]
-    } else {
-        clamp_tilt(
-            [aim_w * desired_raw[0], desired_raw[1], aim_w * desired_raw[2]],
-            lean_max,
-        )
-    };
+    let aim_w = if deep { 1.0 } else { cruise_w };
+    let desired = clamp_tilt(
+        [aim_w * desired_raw[0], desired_raw[1], aim_w * desired_raw[2]],
+        lean_max,
+    );
     // Deep / airplane lean: low flip gate so nose-down is tracked, not "recovered".
     let flip_cos = if force_full_thr || deep {
         COS_TILT_AIM_AIR
@@ -2224,8 +2234,7 @@ fn transit_command(
     let upy_floor = if deep { 0.45 } else { 0.40 };
     let hover_cmd = (hover / up_y.max(upy_floor)).clamp(0.0, 0.95);
 
-    let mut throttle = if force_full_thr || burn_up {
-        // Airplane + short climb: near-full T (pitch owns altitude when airplane).
+    let mut throttle = if force_full_thr {
         THR_FULL
     } else {
         let v_damp = if up_y < 0.92 {
@@ -2245,9 +2254,7 @@ fn transit_command(
 
     let effort = pitch.abs() + yaw.abs() + 0.35 * roll.abs();
     let hp = handoff_plan;
-    if burn_up {
-        throttle = THR_FULL;
-    } else if force_full_thr {
+    if force_full_thr {
         // Do not demote airplane full-T to hover/cos — pitch owns altitude.
         // Exception: while post-burn climb rate remains, coast the pitch-over
         // (rate-kill bursts only) — full-T through half-vertical attitudes
@@ -2303,7 +2310,7 @@ fn transit_command(
                 };
             }
         }
-    } else if ballistic || burn_up {
+    } else if ballistic {
         throttle = throttle.max((0.9 * (effort - 0.15).max(0.0)).min(0.35));
     } else if effort > 0.04 {
         throttle = throttle.max(0.10 + 0.28 * effort);
@@ -2405,14 +2412,72 @@ mod tests {
     }
 
     #[test]
-    fn low_altitude_transit_leans_toward_target() {
-        let mut state = RocketState::at_altitude(50.0);
+    fn apogee_prediction_arms_cruise_before_altitude_gate() {
+        let mut state = RocketState::at_altitude(250.0);
+        state.contacting = false;
+        // vy ≈ 71 m/s → ballistic apogee ≈ 250 + 5041/19.6 > 500 m
+        state.velocity[1] = 71.0;
+        let mut ap = TargetLandingAutopilot::default();
+        ap.enabled = true;
+        ap.phase = TargetPhase::Climb;
+        let cmd = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
+        assert_eq!(
+            ap.phase,
+            TargetPhase::Cruise,
+            "predicted 500 m apogee must cut climb early"
+        );
+        assert!(
+            cmd.throttle < THR_FULL,
+            "cruise should bleed climb rate, thr={}",
+            cmd.throttle
+        );
+    }
+
+    #[test]
+    fn apogee_below_target_stays_in_climb() {
+        let mut state = RocketState::at_altitude(250.0);
+        state.contacting = false;
+        state.velocity[1] = 40.0;
+        let mut ap = TargetLandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
+        assert_eq!(ap.phase, TargetPhase::Climb);
+        assert!((cmd.throttle - THR_FULL).abs() < 0.01);
+    }
+
+    #[test]
+    fn climb_from_pad_is_upright_full_throttle() {
+        let state = RocketState::resting_on_pad();
+        let mut ap = TargetLandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
+        assert_eq!(ap.phase, TargetPhase::Climb);
+        assert!(
+            (cmd.throttle - THR_FULL).abs() < 0.01,
+            "climb must be full throttle, thr={}",
+            cmd.throttle
+        );
+        assert!(
+            cmd.pitch.abs() + cmd.yaw.abs() < 0.05,
+            "pad liftoff must stay upright, pitch={} yaw={}",
+            cmd.pitch,
+            cmd.yaw
+        );
+    }
+
+    #[test]
+    fn low_altitude_climb_leans_toward_target() {
+        let mut state = RocketState::at_altitude(200.0);
         state.contacting = false;
         let mut ap = TargetLandingAutopilot::default();
         ap.enabled = true;
         let cmd = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
         assert_eq!(ap.phase, TargetPhase::Climb);
-        assert!(cmd.throttle > 0.3, "transit needs thrust, thr={}", cmd.throttle);
+        assert!(
+            (cmd.throttle - THR_FULL).abs() < 0.01,
+            "climb must be full throttle, thr={}",
+            cmd.throttle
+        );
         assert!(
             cmd.pitch.abs() + cmd.yaw.abs() > 0.02,
             "expected lean toward target, pitch={} yaw={}",
@@ -3305,7 +3370,6 @@ mod tests {
             0.0,
             false,
             false,
-            true,
             false,
             false,
             false,
@@ -3340,7 +3404,6 @@ mod tests {
             0.0,
             true,
             true,
-            false,
             false,
             true,
             true,
