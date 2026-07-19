@@ -1,5 +1,5 @@
-//! Rigid-body rocket simulation with PGA pose, gravity, gimbaled main engine,
-//! center-body roll thrusters, and ground contact.
+//! Rigid-body rocket simulation with PGA pose, gravity, air drag, gimbaled main
+//! engine, center-body roll thrusters, and ground contact.
 
 use crate::euclidean_pga::{
     Multivector, compose_motors, extract_point, ground_plane, motor_from_pose, motor_rotate_vector,
@@ -28,6 +28,22 @@ pub const AIR_BALLISTIC_COEFF: f64 = 2.5e3;
 pub fn air_drag_k_from_mass(mass: f64) -> f64 {
     let m = mass.max(1e-6);
     AIR_DENSITY * m / (2.0 * AIR_BALLISTIC_COEFF)
+}
+
+/// World-frame quadratic drag force `F = −k |v| v` (zero when `k` or `|v|` is tiny).
+#[inline]
+pub fn air_drag_force(velocity: [f64; 3], k: f64) -> [f64; 3] {
+    let k = k.max(0.0);
+    if k <= 0.0 {
+        return [0.0, 0.0, 0.0];
+    }
+    let [vx, vy, vz] = velocity;
+    let speed = (vx * vx + vy * vy + vz * vz).sqrt();
+    if speed <= 1e-9 {
+        return [0.0, 0.0, 0.0];
+    }
+    let scale = -k * speed;
+    [scale * vx, scale * vy, scale * vz]
 }
 
 /// Rocket physical parameters (typical small VTOL stack proportions, SI).
@@ -236,7 +252,7 @@ pub struct RocketState {
     pub explosion_origin: [f64; 3],
     /// Peak normal impact speed (m/s) recorded at destruction.
     pub last_impact_speed: f64,
-    /// When true (Moon mode), skip air drag. Default false ⇒ Earth atmosphere on.
+    /// When true (Moon mode): no air drag + lunar ground visuals. Default false.
     pub moon_mode: bool,
 }
 
@@ -290,6 +306,13 @@ impl RocketState {
     /// World altitude of CoM (Y).
     pub fn altitude(&self) -> f64 {
         self.position()[1]
+    }
+
+    /// Ground-relative CoM speed (m/s): `|velocity|`.
+    #[inline]
+    pub fn speed(&self) -> f64 {
+        let v = self.velocity;
+        (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
     }
 
     /// Current commanded thrust (N).
@@ -418,22 +441,12 @@ impl RocketState {
         ];
         let mut body_torque = prop.torque;
 
-        // --- Air drag from ground-relative CoM velocity: F = −k |v| v ---
-        // Moon mode is vacuum: no drag. Earth (default) uses quadratic air drag.
+        // Air drag (Earth). Moon mode is vacuum — skip entirely.
         if !self.moon_mode {
-            let k = self.params.air_drag_k.max(0.0);
-            if k > 0.0 {
-                let vx = self.velocity[0];
-                let vy = self.velocity[1];
-                let vz = self.velocity[2];
-                let speed = (vx * vx + vy * vy + vz * vz).sqrt();
-                if speed > 1e-9 {
-                    let scale = -k * speed;
-                    force[0] += scale * vx;
-                    force[1] += scale * vy;
-                    force[2] += scale * vz;
-                }
-            }
+            let drag = air_drag_force(self.velocity, self.params.air_drag_k);
+            force[0] += drag[0];
+            force[1] += drag[1];
+            force[2] += drag[2];
         }
 
         // --- Unified ground contact: feet + body/nozzle/nose hull ---
@@ -922,5 +935,16 @@ mod unit_tests {
         );
         assert!(w.force.iter().all(|c| c.abs() < 1e-12));
         assert!(w.torque.iter().all(|c| c.abs() < 1e-12));
+    }
+
+    #[test]
+    fn air_drag_force_opposes_velocity() {
+        let f = air_drag_force([10.0, 0.0, 0.0], 2.0);
+        // F = −k |v| v = −2 · 10 · (10,0,0) = (−200, 0, 0)
+        assert!((f[0] + 200.0).abs() < 1e-9);
+        assert!(f[1].abs() < 1e-12 && f[2].abs() < 1e-12);
+        assert!(air_drag_force([0.0, 0.0, 0.0], 2.0)
+            .iter()
+            .all(|c| c.abs() < 1e-12));
     }
 }

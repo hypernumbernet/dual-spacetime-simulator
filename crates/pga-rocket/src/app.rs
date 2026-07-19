@@ -1,6 +1,6 @@
 //! winit application: window, Vulkan, sim step, keyboard control, render loop.
 
-use crate::control::{ControlMapper, KeySnapshot, ThrottleLatch};
+use crate::control::{ControlMapper, KeySnapshot};
 use crate::integration::Gui;
 use crate::landing::LandingAutopilot;
 use crate::mesh::{GRASS_METERS_PER_TILE, hud_text, random_target_xz};
@@ -225,11 +225,9 @@ impl App {
             self.control.apply(&keys, dt as f64)
         };
         self.rocket.set_command(cmd);
-        // L/T drive throttle; keep the manual mapper in lockstep so leaving the
-        // mode resumes at the same throttle (no enter-time snapshot needed).
+        // Keep manual throttle in lockstep with L/T so exit resumes at the same level.
         if using_autopilot {
-            self.control.command.throttle = cmd.throttle;
-            self.control.throttle_latch = ThrottleLatch::None;
+            self.control.adopt_throttle(cmd.throttle);
         }
 
         self.accum += dt as f64;

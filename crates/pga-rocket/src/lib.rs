@@ -12,7 +12,7 @@ pub mod sim;
 pub mod target_landing;
 
 pub use control::{
-    ControlMapper, FULL_THROTTLE_RAMP_S, KeySnapshot, THROTTLE_LATCH_RAMP_S, ThrottleLatch, map_keys,
+    ControlMapper, KeySnapshot, THROTTLE_LATCH_RAMP_S, ThrottleLatch, map_keys,
 };
 pub use landing::LandingAutopilot;
 pub use target_landing::{

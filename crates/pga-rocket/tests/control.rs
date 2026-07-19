@@ -179,6 +179,31 @@ fn f_then_c_latch_prefers_cut() {
 }
 
 #[test]
+fn space_cancels_cut_latch() {
+    let mut mapper = ControlMapper {
+        command: ControlCommand {
+            throttle: 0.8,
+            ..Default::default()
+        },
+        throttle_latch: ThrottleLatch::ToZero,
+        ..Default::default()
+    };
+    let thr0 = mapper.command.throttle;
+    mapper.apply(
+        &KeySnapshot {
+            thrust_up: true,
+            ..Default::default()
+        },
+        0.05,
+    );
+    assert_eq!(mapper.throttle_latch, ThrottleLatch::None);
+    assert!(
+        mapper.command.throttle > thr0,
+        "Space should raise throttle after cancelling cut latch"
+    );
+}
+
+#[test]
 fn f_key_from_partial_reaches_full_sooner() {
     let mut mapper = ControlMapper {
         command: ControlCommand {

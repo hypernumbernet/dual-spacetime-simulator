@@ -552,17 +552,11 @@ fn air_drag_on_slows_ground_speed() {
     // Realistic k is small: use high speed and several seconds to see clear decay.
     s.velocity = [120.0, 0.0, 0.0];
     s.set_command(ControlCommand::default());
-    let speed0 = (s.velocity[0] * s.velocity[0]
-        + s.velocity[1] * s.velocity[1]
-        + s.velocity[2] * s.velocity[2])
-        .sqrt();
+    let speed0 = s.speed();
     for _ in 0..(5 * 120) {
         step_rocket(&mut s, DT);
     }
-    let speed = (s.velocity[0] * s.velocity[0]
-        + s.velocity[1] * s.velocity[1]
-        + s.velocity[2] * s.velocity[2])
-        .sqrt();
+    let speed = s.speed();
     assert!(
         speed < speed0 - 2.0,
         "with drag, ground speed should drop: speed0={speed0} speed={speed}"

@@ -2,11 +2,8 @@
 
 use crate::sim::ControlCommand;
 
-/// Time (s) for F / C latch ramps: 0 → 1 (F) or 1 → 0 (C) from the far end.
+/// Time (s) for F / C latch ramps across a full 0 ↔ 1 span.
 pub const THROTTLE_LATCH_RAMP_S: f64 = 0.2;
-
-/// Backward-compatible alias for the full-throttle ramp duration.
-pub const FULL_THROTTLE_RAMP_S: f64 = THROTTLE_LATCH_RAMP_S;
 
 /// One-shot throttle latch started by F (full) or C (cut). Continues after key release.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -45,16 +42,9 @@ pub struct KeySnapshot {
 
 /// Maps key state into incremental control updates.
 ///
-/// - Space: raise throttle while held
-/// - Ctrl: lower throttle while held
-/// - F: latch ramp to full in [`THROTTLE_LATCH_RAMP_S`] (no hold needed)
-/// - C: latch ramp to off in the same duration (no hold needed)
-/// - W/S: pitch (main-engine gimbal about body +X; needs thrust)
-/// - Q/E: yaw (main-engine gimbal about body +Z; needs thrust)
-/// - A/D: roll (four center RCS thrusters about body +Y; works on the pad too)
-/// - R: signal reset (caller applies)
-/// - L: signal landing toggle (caller applies)
-/// - T: signal target-pad landing toggle (caller applies)
+/// - Space / Ctrl: hold to raise / lower throttle
+/// - F / C: edge-triggered latch ramps (full / cut) over [`THROTTLE_LATCH_RAMP_S`]
+/// - W/S pitch, Q/E yaw, A/D roll; R / L / T are edge signals for the app
 #[derive(Clone, Debug)]
 pub struct ControlMapper {
     /// Throttle units per second while Space / Ctrl held.
@@ -76,38 +66,26 @@ impl Default for ControlMapper {
 }
 
 impl ControlMapper {
-    /// Apply held keys over `dt` and return the resulting command.
+    /// Apply held / edge keys over `dt` and return the resulting command.
     pub fn apply(&mut self, keys: &KeySnapshot, dt: f64) -> ControlCommand {
-        // Edge-triggered latches (F / C): start ramp; the other latch cancels this one.
+        // Edge latches: C wins if both fire in the same frame.
         if keys.thrust_full {
             self.throttle_latch = ThrottleLatch::ToFull;
         }
         if keys.thrust_cut {
             self.throttle_latch = ThrottleLatch::ToZero;
         }
-
-        let mut thr = self.command.throttle;
-        let ramp = dt / THROTTLE_LATCH_RAMP_S.max(1e-6);
-
-        match self.throttle_latch {
-            ThrottleLatch::ToFull => {
-                thr += ramp;
-                if thr >= 1.0 {
-                    thr = 1.0;
-                    self.throttle_latch = ThrottleLatch::None;
-                }
-            }
-            ThrottleLatch::ToZero => {
-                thr -= ramp;
-                if thr <= 0.0 {
-                    thr = 0.0;
-                    self.throttle_latch = ThrottleLatch::None;
-                }
-            }
-            ThrottleLatch::None => {}
+        // Opposite hold cancels a latch so Space/Ctrl stay predictable.
+        if keys.thrust_up && self.throttle_latch == ThrottleLatch::ToZero {
+            self.throttle_latch = ThrottleLatch::None;
+        }
+        if keys.thrust_down && self.throttle_latch == ThrottleLatch::ToFull {
+            self.throttle_latch = ThrottleLatch::None;
         }
 
-        // Hold keys: Space up, Ctrl down (release leaves last value).
+        let mut thr = self.command.throttle;
+        thr = step_throttle_latch(&mut self.throttle_latch, thr, dt);
+
         if keys.thrust_up {
             thr += self.throttle_rate * dt;
         }
@@ -116,7 +94,6 @@ impl ControlMapper {
         }
         thr = thr.clamp(0.0, 1.0);
 
-        // Attitude is momentary (spring to zero when keys released).
         let pitch = axis(keys.pitch_up, keys.pitch_down);
         let yaw = axis(keys.yaw_right, keys.yaw_left);
         let roll = axis(keys.roll_right, keys.roll_left);
@@ -131,12 +108,30 @@ impl ControlMapper {
         self.command
     }
 
-    /// Zero throttle and attitude; clear any F/C latch.
-    #[allow(dead_code)]
-    pub fn cut_engines(&mut self) {
-        self.command = ControlCommand::default();
+    /// Take over throttle from an external source (L/T autopilot). Clears F/C latches.
+    pub fn adopt_throttle(&mut self, throttle: f64) {
+        self.command.throttle = throttle.clamp(0.0, 1.0);
         self.throttle_latch = ThrottleLatch::None;
     }
+}
+
+/// Advance a latch toward 0 or 1; clears the latch when the target is reached.
+fn step_throttle_latch(latch: &mut ThrottleLatch, thr: f64, dt: f64) -> f64 {
+    let target = match *latch {
+        ThrottleLatch::ToFull => 1.0,
+        ThrottleLatch::ToZero => 0.0,
+        ThrottleLatch::None => return thr,
+    };
+    let rate = 1.0 / THROTTLE_LATCH_RAMP_S.max(1e-6);
+    let next = if target >= thr {
+        (thr + rate * dt).min(target)
+    } else {
+        (thr - rate * dt).max(target)
+    };
+    if (next - target).abs() < 1e-12 {
+        *latch = ThrottleLatch::None;
+    }
+    next
 }
 
 fn axis(pos: bool, neg: bool) -> f64 {
@@ -180,5 +175,18 @@ pub fn map_keys(
         reset: r,
         toggle_landing: l,
         toggle_target_landing: t,
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn latch_step_hits_target_and_clears() {
+        let mut latch = ThrottleLatch::ToFull;
+        let thr = step_throttle_latch(&mut latch, 0.0, THROTTLE_LATCH_RAMP_S);
+        assert!((thr - 1.0).abs() < 1e-12);
+        assert_eq!(latch, ThrottleLatch::None);
     }
 }

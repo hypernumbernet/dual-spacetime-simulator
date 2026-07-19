@@ -87,8 +87,7 @@ fn flight_section(ui: &mut egui::Ui, rocket: &RocketState, target_xz: [f32; 2]) 
     kv(ui, "Vel X", format!("{:.2} m/s", v[0]));
     kv(ui, "Vel Y", format!("{:.2} m/s", v[1]));
     kv(ui, "Vel Z", format!("{:.2} m/s", v[2]));
-    let ground_speed = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    kv(ui, "Gnd spd", format!("{:.2} m/s", ground_speed));
+    kv(ui, "Speed", format!("{:.2} m/s", rocket.speed()));
     kv(ui, "ω X", format!("{:.3} rad/s", w[0]));
     kv(ui, "ω Y", format!("{:.3} rad/s", w[1]));
     kv(ui, "ω Z", format!("{:.3} rad/s", w[2]));
