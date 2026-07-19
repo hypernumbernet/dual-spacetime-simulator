@@ -76,7 +76,7 @@ pub const LAUNCH_PAD_HALF_EXTENT: f32 = 30.0;
 pub const PAD_METERS_PER_TILE: f32 = 2.0;
 
 /// Minimum horizontal range from launch origin to the random landing target (meters).
-pub const TARGET_DISTANCE_MIN_M: f32 = 500.0;
+pub const TARGET_DISTANCE_MIN_M: f32 = 100.0;
 /// Maximum horizontal range from launch origin to the random landing target (meters).
 pub const TARGET_DISTANCE_MAX_M: f32 = 8000.0;
 /// Target pad uses the same half-extent as the launch pad.
@@ -332,24 +332,19 @@ pub fn rocket_mesh(state: &RocketState) -> (Vec<Vertex>, Vec<u32>) {
     }
 
     // Exhaust plume starts just past the bell exit; absent at zero throttle.
-    append_exhaust_plume(&mut verts, &mut idx, state, &nozzle_xf, exit_y, exit_r, segs);
+    append_exhaust_plume(
+        &mut verts, &mut idx, state, &nozzle_xf, exit_y, exit_r, segs,
+    );
 
     // Center-body roll RCS jets when commanded.
     append_rcs_plumes(&mut verts, &mut idx, state);
 
     // Landing legs: line from body attach to foot, thickened as thin boxes.
     for foot in &state.params.leg_feet {
-        let foot_w = body_to_world(
-            state,
-            [foot[0] as f32, foot[1] as f32, foot[2] as f32],
-        );
+        let foot_w = body_to_world(state, [foot[0] as f32, foot[1] as f32, foot[2] as f32]);
         let attach = body_to_world(
             state,
-            [
-                foot[0] as f32 * 0.35,
-                -hh * 0.6,
-                foot[2] as f32 * 0.35,
-            ],
+            [foot[0] as f32 * 0.35, -hh * 0.6, foot[2] as f32 * 0.35],
         );
         append_leg_prism(&mut verts, &mut idx, attach, foot_w, 0.18, leg_col);
     }
@@ -366,7 +361,9 @@ pub(crate) fn append_oriented_box(
     half: f32,
     color: [f32; 3],
 ) {
-    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
+    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
+        .sqrt()
+        .max(1e-4);
     let d = [dir[0] / len, dir[1] / len, dir[2] / len];
     let up = if d[1].abs() < 0.9 {
         [0.0, 1.0, 0.0]
@@ -378,7 +375,9 @@ pub(crate) fn append_oriented_box(
         d[2] * up[0] - d[0] * up[2],
         d[0] * up[1] - d[1] * up[0],
     ];
-    let pl = (px[0] * px[0] + px[1] * px[1] + px[2] * px[2]).sqrt().max(1e-4);
+    let pl = (px[0] * px[0] + px[1] * px[1] + px[2] * px[2])
+        .sqrt()
+        .max(1e-4);
     let px = [px[0] / pl * half, px[1] / pl * half, px[2] / pl * half];
     let py = [
         d[1] * px[2] - d[2] * px[1],
@@ -442,7 +441,14 @@ pub(crate) fn append_oriented_box(
         [4, 5, 6, 7],
     ];
     for f in &faces {
-        idx.extend_from_slice(&[base + f[0], base + f[1], base + f[2], base + f[0], base + f[2], base + f[3]]);
+        idx.extend_from_slice(&[
+            base + f[0],
+            base + f[1],
+            base + f[2],
+            base + f[0],
+            base + f[2],
+            base + f[3],
+        ]);
     }
 }
 
@@ -488,11 +494,7 @@ impl NozzleXform {
         let rot = rotate_vector_by_rotor(&self.rotor, rel);
         body_to_world(
             state,
-            [
-                rot[0] as f32,
-                (rot[1] + self.pivot_y) as f32,
-                rot[2] as f32,
-            ],
+            [rot[0] as f32, (rot[1] + self.pivot_y) as f32, rot[2] as f32],
         )
     }
 }
@@ -683,7 +685,17 @@ fn append_rcs_plumes(verts: &mut Vec<Vertex>, idx: &mut Vec<u32>, state: &Rocket
             pos: tip_w,
             color: color_tip,
         });
-        idx.extend_from_slice(&[i0, i0 + 1, i0 + 3, i0 + 1, i0 + 2, i0 + 3, i0 + 2, i0, i0 + 3]);
+        idx.extend_from_slice(&[
+            i0,
+            i0 + 1,
+            i0 + 3,
+            i0 + 1,
+            i0 + 2,
+            i0 + 3,
+            i0 + 2,
+            i0,
+            i0 + 3,
+        ]);
     }
 }
 
@@ -712,8 +724,14 @@ fn append_leg_prism(
         dir[2] * up[0] - dir[0] * up[2],
         dir[0] * up[1] - dir[1] * up[0],
     ];
-    let pl = (px[0] * px[0] + px[1] * px[1] + px[2] * px[2]).sqrt().max(1e-4);
-    let px = [px[0] / pl * radius, px[1] / pl * radius, px[2] / pl * radius];
+    let pl = (px[0] * px[0] + px[1] * px[1] + px[2] * px[2])
+        .sqrt()
+        .max(1e-4);
+    let px = [
+        px[0] / pl * radius,
+        px[1] / pl * radius,
+        px[2] / pl * radius,
+    ];
     let py = [
         dir[1] * px[2] - dir[2] * px[1],
         dir[2] * px[0] - dir[0] * px[2],
@@ -722,27 +740,51 @@ fn append_leg_prism(
 
     let base = verts.len() as u32;
     let corners = [
-        [a[0] + px[0] + py[0], a[1] + px[1] + py[1], a[2] + px[2] + py[2]],
-        [a[0] - px[0] + py[0], a[1] - px[1] + py[1], a[2] - px[2] + py[2]],
-        [a[0] - px[0] - py[0], a[1] - px[1] - py[1], a[2] - px[2] - py[2]],
-        [a[0] + px[0] - py[0], a[1] + px[1] - py[1], a[2] + px[2] - py[2]],
-        [b[0] + px[0] + py[0], b[1] + px[1] + py[1], b[2] + px[2] + py[2]],
-        [b[0] - px[0] + py[0], b[1] - px[1] + py[1], b[2] - px[2] + py[2]],
-        [b[0] - px[0] - py[0], b[1] - px[1] - py[1], b[2] - px[2] - py[2]],
-        [b[0] + px[0] - py[0], b[1] + px[1] - py[1], b[2] + px[2] - py[2]],
+        [
+            a[0] + px[0] + py[0],
+            a[1] + px[1] + py[1],
+            a[2] + px[2] + py[2],
+        ],
+        [
+            a[0] - px[0] + py[0],
+            a[1] - px[1] + py[1],
+            a[2] - px[2] + py[2],
+        ],
+        [
+            a[0] - px[0] - py[0],
+            a[1] - px[1] - py[1],
+            a[2] - px[2] - py[2],
+        ],
+        [
+            a[0] + px[0] - py[0],
+            a[1] + px[1] - py[1],
+            a[2] + px[2] - py[2],
+        ],
+        [
+            b[0] + px[0] + py[0],
+            b[1] + px[1] + py[1],
+            b[2] + px[2] + py[2],
+        ],
+        [
+            b[0] - px[0] + py[0],
+            b[1] - px[1] + py[1],
+            b[2] - px[2] + py[2],
+        ],
+        [
+            b[0] - px[0] - py[0],
+            b[1] - px[1] - py[1],
+            b[2] - px[2] - py[2],
+        ],
+        [
+            b[0] + px[0] - py[0],
+            b[1] + px[1] - py[1],
+            b[2] + px[2] - py[2],
+        ],
     ];
     for c in &corners {
-        verts.push(Vertex {
-            pos: *c,
-            color,
-        });
+        verts.push(Vertex { pos: *c, color });
     }
-    let faces = [
-        [0, 1, 5, 4],
-        [1, 2, 6, 5],
-        [2, 3, 7, 6],
-        [3, 0, 4, 7],
-    ];
+    let faces = [[0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]];
     for f in &faces {
         idx.extend_from_slice(&[
             base + f[0],
@@ -776,11 +818,6 @@ pub fn hud_text(
         "PGA Rocket  |  alt={:.1} m  vel_y={:.1} m/s  thr={:.0}%  auto={}  contact={}  fps={:.0}\n\
          Space/Ctrl: hold thr  F: full  C: cut  W/S: pitch  Q/E: yaw  A/D: roll RCS  L: land  T: target-land  R: reset\n\
          Drag LMB/RMB: orbit camera  Wheel: zoom  Arrows: orbit  Esc: quit",
-        p[1],
-        state.velocity[1],
-        thr,
-        status,
-        contact,
-        fps
+        p[1], state.velocity[1], thr, status, contact, fps
     )
 }

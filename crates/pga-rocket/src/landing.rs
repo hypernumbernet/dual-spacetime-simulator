@@ -906,7 +906,10 @@ fn physics_pad_vertical_throttle(
     // OR hovering at vy≈0): coast so the drop starts now. Holding hover here
     // walks toward the pad center and the walk pumps a pendulum that the
     // later drop then free-falls with (tilted, ~20 m of drift).
-    let handoff_climb = vy > -0.35 && v_down < V_BRAKE_MIN && dh > COAST_MARGIN_M;
+    // The window must overlap the fuzzy coast-rate shoulder (v_down ≈ 0.5) —
+    // an altitude-hold hand-off arrives at vy ≈ −0.4, and with a gap there the
+    // closed loop settles at hover and never starts the drop.
+    let handoff_climb = v_down < 0.6 && dh > COAST_MARGIN_M;
     let mut t_brake = mass * (a_req + GRAVITY) / (max_thrust * up_y_eff);
     if handoff_climb {
         t_brake = t_coast;

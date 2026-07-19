@@ -47,7 +47,15 @@ const OMEGA_HANDOFF_MAX: f64 = 0.12;
 const COS_TILT_HANDOFF: f64 = 0.95;
 /// Hand-off AND gates must hold this long (s) before arming Descend — kills
 /// one-frame chatter at the pad edge.
-const HANDOFF_SETTLE_MIN_S: f64 = 0.40;
+const HANDOFF_SETTLE_MIN_S: f64 = 0.25;
+/// Allowed touchdown drift (m) when already centered: bounds `vh · t_drift`.
+const HANDOFF_DRIFT_NEAR_M: f64 = 7.0;
+/// Allowed drift (m) while still closing — larger, because the predicted-miss
+/// term below cancels most of the along-track component.
+const HANDOFF_DRIFT_CLOSING_M: f64 = 9.5;
+/// Max predicted touchdown miss (m) for the closing-branch arm (half of the
+/// ±12 m success box, leaving room for cross-track drift).
+const HANDOFF_MISS_MAX_M: f64 = 6.0;
 /// Chebyshev (m) within which near-handoff altitude gate applies.
 const NEAR_HANDOFF_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M + 20.0;
 /// Chebyshev (m) beyond which terminal latch may release on range exit.
@@ -61,11 +69,11 @@ const OMEGA_TRIM_ENTER: f64 = OMEGA_HANDOFF_MAX * 0.50;
 /// Inside this Chebyshev (m) with quiet vh, Trim holds upright (no chase).
 const TRIM_DEADZONE_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M * 0.60;
 // Unscaled bases; runtime values multiply by distance-dependent aggression.
-const TRIM_LEAN_CAP_BASE: f64 = 0.075;
+const TRIM_LEAN_CAP_BASE: f64 = 0.15;
 const TRIM_LEAN_NEAR_BASE: f64 = 0.032;
-const TRIM_V_CREEP_PER_M_BASE: f64 = 0.16;
-const TRIM_V_CREEP_MAX_BASE: f64 = 4.00;
-const TRIM_V_CREEP_MIN_BASE: f64 = 1.0;
+const TRIM_V_CREEP_PER_M_BASE: f64 = 0.26;
+const TRIM_V_CREEP_MAX_BASE: f64 = 6.00;
+const TRIM_V_CREEP_MIN_BASE: f64 = 1.3;
 const CAREFUL_BRAKE_LEAN_SOFT_BASE: f64 = 0.22;
 
 // --- Transit lean / envelope -------------------------------------------------
@@ -142,16 +150,18 @@ fn cheby_near_pad_blend(cheby: f64, pad_near: f64, outer: f64) -> f64 {
 /// Continuous creep-speed cap vs Chebyshev offset (closer → slower).
 #[inline]
 fn cheby_creep_cap(cheby: f64) -> f64 {
-    let pad_near = (0.35 + 0.10 * cheby).min(1.60);
-    let outer = 2.80 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 0.80;
+    // Pad-near slope keeps creep just under the closing-branch hand-off vh
+    // bound (`HANDOFF_DRIFT_CLOSING_M / t_drift`) so Descend arms on the fly.
+    let pad_near = (0.35 + 0.10 * cheby).min(2.20);
+    let outer = 4.50 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 2.00;
     cheby_near_pad_blend(cheby, pad_near, outer)
 }
 
 /// Continuous speed ceiling base vs Chebyshev offset (closer → slower).
 #[inline]
 fn cheby_v_cap_base(cheby: f64) -> f64 {
-    let pad_near = (0.40 + 0.12 * cheby).min(1.80);
-    let outer = 3.00 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 0.60;
+    let pad_near = (0.40 + 0.12 * cheby).min(2.40);
+    let outer = 4.80 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 2.00;
     cheby_near_pad_blend(cheby, pad_near, outer)
 }
 
@@ -326,8 +336,6 @@ impl TargetLandingAutopilot {
         let dx = target_xz[0] - pos[0];
         let dz = target_xz[1] - pos[2];
         let range = (dx * dx + dz * dz).sqrt();
-        let high_pad_pass = cheby <= HANDOFF_CHEBY_MAX_M && alt > CRUISE_ALT_CAP + 20.0;
-
         if self.phase != TargetPhase::Descend {
             let was_terminal = self.terminal_latched;
             let near_handoff = near_handoff_zone(self.terminal_latched, cheby);
@@ -336,7 +344,6 @@ impl TargetLandingAutopilot {
                 range,
                 cheby,
                 transit_lofted(alt, near_handoff),
-                high_pad_pass,
                 TERMINAL_EXIT_CHEBY_M,
             );
             if was_terminal && !self.terminal_latched {
@@ -369,16 +376,21 @@ impl TargetLandingAutopilot {
         let om = state.omega;
         let om_pitch_yaw_sq = om[0] * om[0] + om[2] * om[2];
         let v_cheby_handoff = chebyshev_closing_rate(pos, target_xz, state.velocity);
+        // Drift budget: hand-off drift persists through the unpowered coast
+        // (the lander's burn then trims it), so end miss ≈ cheby − vh·t_drift.
+        // The coast time scales with hand-off altitude — Descend can arm at
+        // long-range cruise altitude, so the vh budget tightens as alt grows.
+        let t_drift = (2.0 * alt.max(0.0) / GRAVITY).sqrt().clamp(8.0, 16.0);
+        let miss_pred = (cheby - v_cheby_handoff * t_drift).abs();
         let handoff_ready = self.phase != TargetPhase::Descend
             && alt >= GATE_ALT_MIN
             && cheby <= HANDOFF_CHEBY_MAX_M
             && vh <= VH_HANDOFF_MAX
             && v_cheby_handoff > -0.25
-            // Drift budget: hand-off drift persists through the ~10 s free
-            // fall (the lander's burn then trims it), so end miss ≈
-            // cheby − vh·10. Both branches bound vh to keep the miss small.
-            && ((cheby <= HANDOFF_CHEBY_MAX_M * 0.60 && vh <= VH_HANDOFF_MAX * 0.15)
-                || (v_cheby_handoff > 0.12 && vh <= VH_HANDOFF_MAX * 0.20))
+            && ((cheby <= HANDOFF_CHEBY_MAX_M * 0.60 && vh <= HANDOFF_DRIFT_NEAR_M / t_drift)
+                || (v_cheby_handoff > 0.12
+                    && vh <= HANDOFF_DRIFT_CLOSING_M / t_drift
+                    && miss_pred <= HANDOFF_MISS_MAX_M))
             && om_pitch_yaw_sq <= OMEGA_HANDOFF_MAX * OMEGA_HANDOFF_MAX
             && world_up_in_body(&state.motor)[1] >= COS_TILT_HANDOFF;
         if handoff_ready {
@@ -528,21 +540,19 @@ fn kill_climb_vy(vy: f64) -> f64 {
 
 /// Vertical rate target for lofted cruise / far burn (altitude-hold).
 /// Never commands climb; above [`CRUISE_ALT_CAP`] asks for a gentle sink.
-/// `terminal`: inside the settle envelope, keep sinking through the hand-off
-/// band toward the loft gate so the descent visibly begins during the final
-/// centering instead of hovering at the cap until Descend arms.
+/// `terminal`: inside the settle envelope, hold the current altitude band —
+/// Descend arms at whatever altitude the settle finishes at and the lander
+/// owns the entire descent (no pre-hand-off approach sink).
 #[inline]
 fn cruise_v_des_y(alt: f64, vy: f64, terminal: bool) -> f64 {
-    let sink = if alt > CRUISE_ALT_CAP {
+    let sink = if terminal {
+        0.0
+    } else if alt > CRUISE_ALT_CAP {
         // Bleed excess altitude while translating (~1–8 m/s sink; deep only
         // when returning from long-range cruise altitude). Gain sets the
         // bleed time constant (~12 s) — at 0.04 the tail alone took ~50 s
         // and the HUD sat in "cruise" sinking centimeters per frame.
         (-0.08 * (alt - CRUISE_ALT_CAP)).clamp(-8.0, -0.8)
-    } else if terminal {
-        // 0 at GATE_ALT_MIN+10 → −0.8 at the cap; asymptotes ~10 m above the
-        // 480 m loft gate so a tracking undershoot cannot re-fire the climb.
-        -0.8 * ramp(alt, GATE_ALT_MIN + 10.0, CRUISE_ALT_CAP)
     } else {
         0.0
     };
@@ -1761,8 +1771,7 @@ fn terminal_trim_aim(
     let rate_gate = (1.0 - (omega_py / OMEGA_HANDOFF_MAX).clamp(0.0, 1.0)).powi(2);
     let lean_near = careful(TRIM_LEAN_NEAR_BASE, aggression);
     let lean_far = careful(TRIM_LEAN_CAP_BASE, aggression);
-    let lean_cap =
-        (lean_near + (lean_far - lean_near) * dist_scale * dist_scale) * rate_gate;
+    let lean_cap = (lean_near + (lean_far - lean_near) * dist_scale) * rate_gate;
 
     let k_vel = careful(0.38 + 0.12 * dist_scale, aggression);
     let k_pos = careful(0.008 * dist_scale, aggression);
@@ -1966,8 +1975,7 @@ fn transit_command(
     let v_approach = vx * ux + vz * uz;
     let v_cheby = chebyshev_closing_rate(pos, target_xz, state.velocity);
 
-    let high_pad_pass = cheby <= HANDOFF_CHEBY_MAX_M && pos[1] > CRUISE_ALT_CAP + 20.0;
-    let terminal = lofted && terminal_latched && !high_pad_pass;
+    let terminal = lofted && terminal_latched;
     let range_eff = (range - CAREFUL_NEAR_M).max(0.0);
 
     let plan = (!terminal).then(|| {
@@ -3151,9 +3159,16 @@ mod tests {
         let agg_mid = careful_aggression(80.0);
         let v8 = trim_creep_speed(8.0, agg_near);
         let v30 = trim_creep_speed(30.0, agg_mid);
-        assert!(v8 < 0.60, "near-pad creep too fast: {v8}");
-        assert!(v30 < VH_HANDOFF_MAX * 0.50, "careful-range creep too fast: {v30}");
-        assert!(v8 < VH_HANDOFF_MAX * 0.15);
+        // Closing-branch arm bound is HANDOFF_DRIFT_CLOSING_M / t_drift;
+        // t_drift ≈ 11.5 s at the ~650 m hand-off altitude band. Creep in the
+        // 6–10 m band must sit under it so Descend arms while still closing.
+        assert!(
+            v8 < HANDOFF_DRIFT_CLOSING_M / 11.5,
+            "near-pad creep above closing hand-off gate: {v8}"
+        );
+        // Hand-off vh gates apply inside the 10 m box; at 30 m the creep may
+        // ride modestly above VH_HANDOFF_MAX and bleed off on the way in.
+        assert!(v30 < VH_HANDOFF_MAX * 1.25, "careful-range creep too fast: {v30}");
         // Closing-branch hand-off gate must be satisfiable while creeping in
         // the 6–10 m band (see `handoff_ready`), or arming stalls at the rim.
         assert!(v8 > 0.12, "near-pad creep below hand-off closing gate: {v8}");
@@ -3167,12 +3182,11 @@ mod tests {
 
     #[test]
     fn terminal_latch_hysteresis() {
-        assert!(!careful_terminal_latch(false, 120.0, 50.0, true, false, TERMINAL_EXIT_CHEBY_M));
-        assert!(careful_terminal_latch(false, 85.0, 50.0, true, false, TERMINAL_EXIT_CHEBY_M));
-        assert!(careful_terminal_latch(true, 120.0, 50.0, true, false, TERMINAL_EXIT_CHEBY_M));
-        assert!(!careful_terminal_latch(true, 150.0, 60.0, true, false, TERMINAL_EXIT_CHEBY_M));
-        assert!(careful_terminal_latch(true, 150.0, 30.0, true, false, TERMINAL_EXIT_CHEBY_M));
-        assert!(!careful_terminal_latch(false, 85.0, 50.0, true, true, TERMINAL_EXIT_CHEBY_M));
+        assert!(!careful_terminal_latch(false, 120.0, 50.0, true, TERMINAL_EXIT_CHEBY_M));
+        assert!(careful_terminal_latch(false, 85.0, 50.0, true, TERMINAL_EXIT_CHEBY_M));
+        assert!(careful_terminal_latch(true, 120.0, 50.0, true, TERMINAL_EXIT_CHEBY_M));
+        assert!(!careful_terminal_latch(true, 150.0, 60.0, true, TERMINAL_EXIT_CHEBY_M));
+        assert!(careful_terminal_latch(true, 150.0, 30.0, true, TERMINAL_EXIT_CHEBY_M));
     }
 
     #[test]

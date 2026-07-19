@@ -647,7 +647,7 @@ pub const CAREFUL_NEAR_M: f64 = 40.0;
 /// Range (m) where aggression reaches full cruise boldness.
 pub const CAREFUL_FAR_M: f64 = 160.0;
 /// Minimum motion/lean scale inside the careful envelope.
-pub const CAREFUL_AGGRESSION_MIN: f64 = 0.40;
+pub const CAREFUL_AGGRESSION_MIN: f64 = 0.70;
 /// Full cruise aggression outside the far shoulder.
 pub const CAREFUL_AGGRESSION_MAX: f64 = 1.0;
 /// Enter terminal settle when range drops below this (m).
@@ -674,19 +674,20 @@ pub fn careful_envelope_membership(range_m: f64) -> f64 {
 }
 
 /// Hysteresis latch for the terminal settle envelope (enter ~90 m, exit ~140 m).
+/// Altitude does not gate entry: a pad arrival at long-range cruise altitude
+/// settles and hands off to Descend right there (no bleed-down approach).
 #[inline]
 pub fn careful_terminal_latch(
     latched: bool,
     range_m: f64,
     cheby_m: f64,
     lofted: bool,
-    high_pad_pass: bool,
     cheby_exit_m: f64,
 ) -> bool {
     if latched {
         range_m <= CAREFUL_TERMINAL_EXIT_M || cheby_m <= cheby_exit_m
     } else {
-        lofted && range_m <= CAREFUL_TERMINAL_ENTER_M && !high_pad_pass
+        lofted && range_m <= CAREFUL_TERMINAL_ENTER_M
     }
 }
 
