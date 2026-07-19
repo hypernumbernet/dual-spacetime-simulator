@@ -902,7 +902,11 @@ fn physics_pad_vertical_throttle(
     };
 
     let up_y_eff = up_y.max(UPY_BRAKE);
-    let handoff_climb = vy > 0.25 && v_down < V_BRAKE_MIN && dh > COAST_MARGIN_M;
+    // High above the burn envelope with no real descent yet (climbing hand-off
+    // OR hovering at vy≈0): coast so the drop starts now. Holding hover here
+    // walks toward the pad center and the walk pumps a pendulum that the
+    // later drop then free-falls with (tilted, ~20 m of drift).
+    let handoff_climb = vy > -0.35 && v_down < V_BRAKE_MIN && dh > COAST_MARGIN_M;
     let mut t_brake = mass * (a_req + GRAVITY) / (max_thrust * up_y_eff);
     if handoff_climb {
         t_brake = t_coast;

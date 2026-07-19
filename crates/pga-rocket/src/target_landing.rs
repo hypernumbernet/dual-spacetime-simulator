@@ -63,9 +63,9 @@ const TRIM_DEADZONE_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M * 0.60;
 // Unscaled bases; runtime values multiply by distance-dependent aggression.
 const TRIM_LEAN_CAP_BASE: f64 = 0.055;
 const TRIM_LEAN_NEAR_BASE: f64 = 0.025;
-const TRIM_V_CREEP_PER_M_BASE: f64 = 0.035;
-const TRIM_V_CREEP_MAX_BASE: f64 = 1.40;
-const TRIM_V_CREEP_MIN_BASE: f64 = 0.10;
+const TRIM_V_CREEP_PER_M_BASE: f64 = 0.12;
+const TRIM_V_CREEP_MAX_BASE: f64 = 1.80;
+const TRIM_V_CREEP_MIN_BASE: f64 = 1.0;
 const CAREFUL_BRAKE_LEAN_SOFT_BASE: f64 = 0.22;
 
 // --- Transit lean / envelope -------------------------------------------------
@@ -142,16 +142,16 @@ fn cheby_near_pad_blend(cheby: f64, pad_near: f64, outer: f64) -> f64 {
 /// Continuous creep-speed cap vs Chebyshev offset (closer → slower).
 #[inline]
 fn cheby_creep_cap(cheby: f64) -> f64 {
-    let pad_near = (0.10 + 0.05 * cheby).min(0.85);
-    let outer = 0.60 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 0.65;
+    let pad_near = (0.25 + 0.08 * cheby).min(1.20);
+    let outer = 1.20 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 0.65;
     cheby_near_pad_blend(cheby, pad_near, outer)
 }
 
 /// Continuous speed ceiling base vs Chebyshev offset (closer → slower).
 #[inline]
 fn cheby_v_cap_base(cheby: f64) -> f64 {
-    let pad_near = (0.10 + 0.05 * cheby).min(0.85);
-    let outer = 1.05 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 0.50;
+    let pad_near = (0.30 + 0.09 * cheby).min(1.40);
+    let outer = 1.40 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 0.50;
     cheby_near_pad_blend(cheby, pad_near, outer)
 }
 
@@ -375,7 +375,7 @@ impl TargetLandingAutopilot {
             && vh <= VH_HANDOFF_MAX
             && v_cheby_handoff > -0.25
             && (cheby <= HANDOFF_CHEBY_MAX_M * 0.60
-                || (v_cheby_handoff > 0.22 && vh <= VH_HANDOFF_MAX * 0.70))
+                || (v_cheby_handoff > 0.12 && vh <= VH_HANDOFF_MAX * 0.30))
             && om_pitch_yaw_sq <= OMEGA_HANDOFF_MAX * OMEGA_HANDOFF_MAX
             && world_up_in_body(&state.motor)[1] >= COS_TILT_HANDOFF;
         if handoff_ready {
@@ -528,8 +528,11 @@ fn kill_climb_vy(vy: f64) -> f64 {
 #[inline]
 fn cruise_v_des_y(alt: f64, vy: f64) -> f64 {
     let sink = if alt > CRUISE_ALT_CAP {
-        // Bleed excess altitude while translating (~1–3 m/s sink).
-        (-0.04 * (alt - CRUISE_ALT_CAP)).clamp(-3.0, -0.5)
+        // Bleed excess altitude while translating (~1–8 m/s sink; deep only
+        // when returning from long-range cruise altitude). Gain sets the
+        // bleed time constant (~12 s) — at 0.04 the tail alone took ~50 s
+        // and the HUD sat in "cruise" sinking centimeters per frame.
+        (-0.08 * (alt - CRUISE_ALT_CAP)).clamp(-8.0, -0.8)
     } else {
         0.0
     };
@@ -1353,7 +1356,9 @@ fn lean_for_lateral_accel(
         LateralThrMode::VerticalNeutral => (a / GRAVITY).atan(),
         LateralThrMode::FullThrottle => {
             let am = THR_FULL * max_thrust / mass.max(1e-6);
-            (a / am).asin()
+            // Demand can exceed full-T authority (hot terminal entry) — asin
+            // of >1 is NaN, so saturate at the flat-out quarter turn.
+            (a / am).min(1.0).asin()
         }
     };
     lean.clamp(floor, lean_cap.max(floor))
@@ -1482,6 +1487,7 @@ fn terminal_brake_blend(
     v_approach: f64,
     cheby: f64,
     latched: bool,
+    vh_hot: f64,
 ) -> (f64, bool) {
     let mut score = 0.0_f64;
     if v_cheby < 0.0 {
@@ -1492,6 +1498,10 @@ fn terminal_brake_blend(
     }
     if cheby <= HANDOFF_CHEBY_MAX_M && vh > VH_HANDOFF_MAX * 0.82 {
         score += ((vh - VH_HANDOFF_MAX * 0.82) / VH_HANDOFF_MAX).min(1.0);
+    }
+    if vh > vh_hot {
+        // Inbound but too fast for this offset — open reverse lean.
+        score += ((vh - vh_hot) / 1.5).min(1.0);
     }
     score = score.clamp(0.0, 1.5);
 
@@ -1544,6 +1554,13 @@ struct TerminalSettleOutput {
     upright_stable_s: f64,
 }
 
+/// "Too fast for here" speed: creep target plus margin, so a hot arrival
+/// brakes instead of sailing across the pad into the hand-off gate.
+#[inline]
+fn terminal_vh_hot(cheby: f64, aggression: f64) -> f64 {
+    (2.0 * trim_creep_speed(cheby, aggression) + 0.8).min(VH_HANDOFF_MAX * 1.35)
+}
+
 #[inline]
 fn terminal_needs_brake(
     brake_w: f64,
@@ -1551,9 +1568,10 @@ fn terminal_needs_brake(
     v_cheby: f64,
     vh: f64,
     v_approach: f64,
+    vh_hot: f64,
 ) -> bool {
     // Terminal is always inside [`CAREFUL_RANGE_M`]: prefer Trim unless clearly too fast.
-    vh > VH_HANDOFF_MAX * 1.35
+    vh > vh_hot
         || v_cheby < -0.70
         || v_approach < -2.5
         || (brake_latched && brake_w > 0.55 && vh > VH_HANDOFF_MAX)
@@ -1572,12 +1590,14 @@ fn update_terminal_settle_phase(
     vh: f64,
     v_approach: f64,
     t_att: f64,
+    vh_hot: f64,
 ) -> (TerminalSettlePhase, f64) {
     // Stricter than hand-off: Trim must not start while still rocking.
     let needs_upright = up_y < COS_TILT_HANDOFF
         || omega_py > OMEGA_TRIM_ENTER
         || t_att > 0.05;
-    let needs_brake = terminal_needs_brake(brake_w, brake_latched, v_cheby, vh, v_approach);
+    let needs_brake =
+        terminal_needs_brake(brake_w, brake_latched, v_cheby, vh, v_approach, vh_hot);
 
     match phase {
         TerminalSettlePhase::Brake => {
@@ -1771,8 +1791,9 @@ fn terminal_settle_aim(
     omega_py: f64,
     aggression: f64,
 ) -> TerminalSettleOutput {
+    let vh_hot = terminal_vh_hot(cheby, aggression);
     let (brake_w, new_latch) =
-        terminal_brake_blend(v_cheby, vh, v_approach, cheby, terminal_brake_latched);
+        terminal_brake_blend(v_cheby, vh, v_approach, cheby, terminal_brake_latched, vh_hot);
 
     let (phase, upright_stable_s) = update_terminal_settle_phase(
         phase,
@@ -1786,6 +1807,7 @@ fn terminal_settle_aim(
         vh,
         v_approach,
         hp.t_att,
+        vh_hot,
     );
 
     let (desired_raw, lean_max) = match phase {
@@ -1892,10 +1914,11 @@ fn transit_command(
     let max_thrust = state.params.max_thrust;
     let hover = mass * GRAVITY / max_thrust;
 
-    // Short-hop loft apogee (blends toward cruise alt with mu_long). Airplane
-    // mode ignores this and stays powered until the altitude gate.
-    let apogee_target =
-        APOGEE_TARGET_M + mu_long * ((LONG_CRUISE_ALT_M - 40.0) - APOGEE_TARGET_M);
+    // Loft apogee (blends toward cruise alt with mu_long, never below the
+    // short-hop target). Applies to airplane range too: the dash climbs the
+    // last stretch to the hold by pitch.
+    let apogee_target = APOGEE_TARGET_M
+        + mu_long * ((LONG_CRUISE_ALT_M - 40.0) - APOGEE_TARGET_M).max(0.0);
     let straighten_m = apogee_target - 180.0;
 
     let apogee = pos[1] + vy.max(0.0) * vy.max(0.0) / (2.0 * GRAVITY);
@@ -1911,9 +1934,12 @@ fn transit_command(
         mass,
         max_thrust,
     );
+    // Apogee cutoff in every range: burning past it converts the climb burn's
+    // vertical momentum into a ballistic balloon far above the cruise hold
+    // (full-T to the 480 m gate left vy ≈ 100 m/s → topped out near 2000 m).
     let burn_up = !lofted
         && !(near_handoff && pos[1] >= GATE_ALT_MIN - 40.0)
-        && (in_airplane_range || apogee < apogee_target);
+        && apogee < apogee_target;
     // Powered-cruise weight: 1 at vy ≤ +3, 0 at vy ≥ +8 (ballistic coast).
     let cruise_w = if burn_up {
         0.0
@@ -1986,7 +2012,7 @@ fn transit_command(
     let v_allow = if terminal {
         // Terminal == careful envelope: creep speed only.
         trim_creep_speed(cheby.max(1.0), aggression)
-            .min(careful(0.06, aggression) * (range - 4.0).max(0.0))
+            .min(careful(0.10, aggression) * (range - 4.0).max(0.0))
             .min(terminal_v_cap(cheby, aggression))
             .clamp(0.0, VH_HANDOFF_MAX)
     } else {
@@ -2136,8 +2162,8 @@ fn transit_command(
         )
     };
 
-    // Upright straighten only on short-hop burn (airplane owns altitude by pitch).
-    let straighten = burn_up && !in_airplane_range && apogee >= straighten_m;
+    // Upright straighten before cutoff so the coast starts without lean/rates.
+    let straighten = burn_up && apogee >= straighten_m;
     // Deep airplane lean must not be faded by cruise_w (half-open aim = sway).
     let aim_w = if burn_up || deep {
         1.0
@@ -2189,12 +2215,31 @@ fn transit_command(
 
     let effort = pitch.abs() + yaw.abs() + 0.35 * roll.abs();
     let hp = handoff_plan;
-    if force_full_thr {
-        // Do not demote airplane full-T to hover/cos — pitch owns altitude.
+    if burn_up {
         throttle = THR_FULL;
+    } else if force_full_thr {
+        // Do not demote airplane full-T to hover/cos — pitch owns altitude.
+        // Exception: while post-burn climb rate remains, coast the pitch-over
+        // (rate-kill bursts only) — full-T through half-vertical attitudes
+        // re-injects the vy the apogee cutoff just removed and balloons the
+        // hold altitude.
+        throttle = if vy < 12.0 {
+            THR_FULL
+        } else {
+            (0.9 * (effort - 0.15).max(0.0)).min(0.35)
+        };
     } else if deep {
         // Reverse lean: vertical-neutral hover/cos + modest effort torque.
-        let t_neutral = hover_cmd;
+        // Above the cruise cap never carry a real climb through the brake —
+        // trim throttle so vy bleeds instead of riding up to a new balloon.
+        // Only for a clear climb: shaving hover here also shaves the lateral
+        // braking authority the reverse lean exists for.
+        let climb_cut = if pos[1] > CRUISE_ALT_CAP + 50.0 && vy > 1.5 {
+            (0.04 * (vy - 1.5)).min(0.18)
+        } else {
+            0.0
+        };
+        let t_neutral = hover_cmd * (1.0 - climb_cut);
         throttle = (t_neutral + 0.06 * effort).clamp(t_neutral * 0.94, t_neutral + 0.05);
     } else if terminal {
         let p = hp.unwrap();
@@ -2841,6 +2886,7 @@ mod tests {
             2.0,
             1.0,
             0.0,
+            VH_HANDOFF_MAX * 1.35,
         );
         assert_eq!(phase.0, TerminalSettlePhase::Upright);
     }
@@ -2859,6 +2905,7 @@ mod tests {
             2.0,
             1.0,
             0.0,
+            VH_HANDOFF_MAX * 1.35,
         );
         assert_eq!(phase.0, TerminalSettlePhase::Upright);
     }
@@ -2877,6 +2924,7 @@ mod tests {
             2.0,
             1.0,
             0.0,
+            VH_HANDOFF_MAX * 1.35,
         );
         assert_eq!(phase.0, TerminalSettlePhase::Upright);
         assert!(phase.1 > 0.0, "upright stable timer should accumulate");
@@ -2896,6 +2944,7 @@ mod tests {
             2.0,
             1.0,
             0.0,
+            VH_HANDOFF_MAX * 1.35,
         );
         assert_eq!(phase.0, TerminalSettlePhase::Upright);
     }
@@ -2914,6 +2963,7 @@ mod tests {
             2.0,
             1.0,
             0.0,
+            VH_HANDOFF_MAX * 1.35,
         );
         assert_eq!(phase.0, TerminalSettlePhase::Trim);
     }
@@ -3087,9 +3137,12 @@ mod tests {
         let agg_mid = careful_aggression(80.0);
         let v8 = trim_creep_speed(8.0, agg_near);
         let v30 = trim_creep_speed(30.0, agg_mid);
-        assert!(v8 < 0.20, "near-pad creep too fast: {v8}");
-        assert!(v30 < VH_HANDOFF_MAX * 0.15, "careful-range creep too fast: {v30}");
-        assert!(v8 < VH_HANDOFF_MAX * 0.08);
+        assert!(v8 < 0.60, "near-pad creep too fast: {v8}");
+        assert!(v30 < VH_HANDOFF_MAX * 0.30, "careful-range creep too fast: {v30}");
+        assert!(v8 < VH_HANDOFF_MAX * 0.15);
+        // Closing-branch hand-off gate must be satisfiable while creeping in
+        // the 6–10 m band (see `handoff_ready`), or arming stalls at the rim.
+        assert!(v8 > 0.12, "near-pad creep below hand-off closing gate: {v8}");
         assert!(
             trim_creep_speed(8.0, agg_near) < trim_creep_speed(8.0, agg_mid),
             "closer range must creep slower at same cheby"
@@ -3122,6 +3175,7 @@ mod tests {
             1.0,
             0.5,
             0.0,
+            VH_HANDOFF_MAX * 1.35,
         );
         assert_eq!(phase.0, TerminalSettlePhase::Upright);
     }

@@ -30,6 +30,7 @@ fn main() {
         Scenario { name: "mid_250_500x", start: [0.0, 0.0], alt: Some(250.0), target: [500.0, 0.0] },
         // Long-range full-throttle ~800 m airplane cruise (range ≳ 1.5 km).
         Scenario { name: "pad_6000x", start: [0.0, 0.0], alt: None, target: [6000.0, 0.0] },
+        Scenario { name: "pad_8000x", start: [0.0, 0.0], alt: None, target: [8000.0, 0.0] },
     ];
 
     let mut fails = 0;

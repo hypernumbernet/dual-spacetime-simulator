@@ -691,8 +691,10 @@ pub const LONG_RANGE_M: f64 = 5000.0;
 /// Soft shoulder half-width (m) around [`LONG_RANGE_M`] (weight 0→1 on
 /// `[LONG_RANGE_M − shoulder, LONG_RANGE_M + shoulder]` ≈ 3–7 km).
 pub const LONG_RANGE_SHOULDER_M: f64 = 2000.0;
-/// Target CoM altitude (m) while in long-range airplane cruise.
-pub const LONG_CRUISE_ALT_M: f64 = 800.0;
+/// Target CoM altitude (m) while in long-range airplane cruise. Matches the
+/// short-hop cruise cap (~500 m band); must clear the 480 m loft gate even at
+/// the hold oscillation's low side, or a dip re-triggers the full-T climb burn.
+pub const LONG_CRUISE_ALT_M: f64 = 520.0;
 /// Body-up·world-up floor for nose-down dive at full throttle.
 /// Must stay above the caller's airplane flip-recover gate.
 pub const LONG_CRUISE_COS_DIVE: f64 = 0.12;
@@ -1041,9 +1043,9 @@ mod tests {
     #[test]
     fn long_range_hold_cos_pitch_elevator() {
         let hover = 1.0 / 3.0;
-        let cos_low = long_range_hold_cos(500.0, LONG_CRUISE_ALT_M, 0.0, hover);
+        let cos_low = long_range_hold_cos(LONG_CRUISE_ALT_M - 300.0, LONG_CRUISE_ALT_M, 0.0, hover);
         let cos_at = long_range_hold_cos(LONG_CRUISE_ALT_M, LONG_CRUISE_ALT_M, 0.0, hover);
-        let cos_hi = long_range_hold_cos(1100.0, LONG_CRUISE_ALT_M, 5.0, hover);
+        let cos_hi = long_range_hold_cos(LONG_CRUISE_ALT_M + 300.0, LONG_CRUISE_ALT_M, 5.0, hover);
         let cos_climb_thru =
             long_range_hold_cos(LONG_CRUISE_ALT_M, LONG_CRUISE_ALT_M, 20.0, hover);
         // Below → nose-up (higher cos); above → dive lean (lower cos).
