@@ -244,10 +244,17 @@ impl PhysicsPadThrottleFuzzy {
 
         // Coast vs closed-loop brake: shoulder on Δh above the envelope + descent rate.
         let dh = h_env - h_need;
-        let mu_coast = and(
-            ramp(dh, coast_margin - 4.0, coast_margin + 6.0),
-            ramp(v_down, v_brake_min - 1.0, v_brake_min + 0.5),
+        let mu_coast_rate = ramp(v_down, v_brake_min - 1.0, v_brake_min + 0.5);
+        let mu_coast_above = ramp(dh, coast_margin - 4.0, coast_margin + 6.0);
+        // T-Descend hand-off: residual climb above envelope, no downward speed yet.
+        let mu_coast_handoff = and(
+            ramp(dh, coast_margin, coast_margin + 15.0),
+            and(
+                ramp(vy, 0.2, 2.0),
+                ramp_down(v_down, v_brake_min - 0.2, v_brake_min + 0.3),
+            ),
         );
+        let mu_coast = or(and(mu_coast_above, mu_coast_rate), mu_coast_handoff);
         let mu_brake = ramp_down(dh, coast_margin - 6.0, coast_margin + 4.0);
         let mut t = defuzz_weighted(
             &[(mu_coast, t_coast), (mu_brake, t_brake)],
@@ -274,9 +281,11 @@ impl PhysicsPadThrottleFuzzy {
             t = defuzz_weighted(&[(mu_ground, t_ground), (1.0 - mu_ground, t)], t);
         }
 
-        // Post-bounce anti-loft near the pad.
+        // Post-bounce anti-loft near the pad; bleed transit climb above envelope.
         let mu_loft = if h_env < h_terminal {
             ramp(vy, -0.02, 0.30)
+        } else if vy > 0.5 {
+            ramp(vy, 0.5, 3.0) * ramp(dh, coast_margin, coast_margin + 20.0)
         } else {
             0.0
         };
@@ -793,6 +802,37 @@ mod tests {
         assert!(
             (thr - 0.42).abs() < 0.08,
             "near pad should track soft channel, thr={thr}"
+        );
+    }
+
+    #[test]
+    fn physics_pad_coast_without_downward_speed() {
+        let base = PhysicsPadThrottleFuzzy {
+            h_env: 640.0,
+            h_need: 25.0,
+            v_down: 0.0,
+            vy: 2.3,
+            vh: 0.0,
+            contacting: false,
+            vh_touch: 2.0,
+            up_y: 0.98,
+            t_coast: 0.027,
+            t_brake: 0.33,
+            t_bang: 0.95,
+            t_ground: 0.05,
+            t_skid: 0.4,
+            t_anti_loft: 0.1,
+            t_drift_hold: 0.05,
+            h_terminal: 4.5,
+            coast_margin: 12.0,
+            envelope_late: 0.75,
+            v_brake_min: 1.5,
+            upy_brake: 0.25,
+        };
+        let t = base.arbitrate();
+        assert!(
+            t < 0.12,
+            "hand-off above envelope with vy>0 must coast, t={t}"
         );
     }
 

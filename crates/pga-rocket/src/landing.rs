@@ -198,7 +198,9 @@ impl LandingAutopilot {
         self.enabled = true;
         self.complete = false;
         self.attitude_locked = false;
-        self.throttle_actuator_sync = true;
+        // Hand-off from transit: don't inherit cruise thrust into Descend.
+        self.throttle_actuator = 0.0;
+        self.throttle_actuator_sync = false;
     }
 
     pub fn toggle(&mut self) {
@@ -855,7 +857,12 @@ fn physics_pad_vertical_throttle(
     vh_touch: f64,
     t_auth: f64,
 ) -> f64 {
-    let t_coast = t_auth.max(0.0);
+    let dh = h_env - h_need;
+    let t_coast = if dh > COAST_MARGIN_M {
+        t_auth.max(0.0).min(hover_cmd * 0.08)
+    } else {
+        t_auth.max(0.0)
+    };
     let t_skid = hover_cmd * 0.55;
     let t_ground = t_auth.min(0.12);
     let t_drift_hold = t_auth.min(0.08);
@@ -875,7 +882,11 @@ fn physics_pad_vertical_throttle(
     };
 
     let up_y_eff = up_y.max(UPY_BRAKE);
+    let handoff_climb = vy > 0.25 && v_down < V_BRAKE_MIN && dh > COAST_MARGIN_M;
     let mut t_brake = mass * (a_req + GRAVITY) / (max_thrust * up_y_eff);
+    if handoff_climb {
+        t_brake = t_coast;
+    }
     t_brake = t_brake.clamp(0.0, BURN_PLAN_FRAC).max(t_auth);
 
     if h_env < H_TERMINAL && v_down < v_touch_eff + 0.25 {
@@ -1094,6 +1105,37 @@ mod tests {
         let err_legacy = motor_inverse_rotate_vector(&m, err_w);
         assert!((err[0] - err_legacy[0]).abs() < 1e-8);
         assert!((err[2] - err_legacy[2]).abs() < 1e-8);
+    }
+
+    #[test]
+    fn physics_vertical_handoff_kills_climb() {
+        let mass = 1000.0;
+        let max_thrust = 3.0 * mass * GRAVITY;
+        let hover_cmd = mass * GRAVITY / max_thrust;
+        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
+        let a_brake = a_lift - GRAVITY;
+        let h_env = 640.0;
+        let h_need = 25.0;
+        let t = physics_pad_vertical_throttle(
+            mass,
+            max_thrust,
+            hover_cmd,
+            0.98,
+            a_brake,
+            h_env,
+            h_env,
+            h_need,
+            0.0,
+            2.3,
+            0.0,
+            false,
+            VH_TOUCH_PAD,
+            0.0,
+        );
+        assert!(
+            t < hover_cmd * 0.25,
+            "T-Descend hand-off with residual climb must coast, t={t} hover={hover_cmd}"
+        );
     }
 
     #[test]

@@ -214,6 +214,22 @@ X' = M X M~      (M~ は反転 reverse)
    - 距離フロアにより、高速で 3 km まで寄っても ballistic thr カット／直立ストレッチに
      落ちず、airplane 法を維持する。
 
+2.5. **ターミナル settle（Cruise→Descend 手渡し前、`range ≤ 55 m`）**
+   - **アーム条件は離散 AND のまま**（高度 ≥480 m、Chebyshev ≤22 m、`vh` ≤6.5 m/s、
+     `ω_py` ≤0.12 rad/s、`up_y` ≥0.95）。安全ゲート自体はソフト化しない。
+   - その手前の settle 制御は [`HandoffSettlePlan`](src/target_landing.rs) で
+     **クリアまでの残り時間**を物理予測:
+     - `t_att`: 現 tilt → hand-off tilt（√-profile 反転時間 + レート減速）
+     - `t_vh`: 残 `vh` → `VH_HANDOFF_MAX`（`a_lat ≈ f·g·tan(θ_lean)`、抗力込み）
+     - `t_pos`: Chebyshev 残差 → `HANDOFF_CHEBY_MAX`（**Chebyshev 接近率**
+     `v_cheby` —  diverging 時は減速＋反転時間を加算）
+     - `t_settle = max(t_att, t_vh, t_pos)` — 大きいほど lean / aim ゲインを上げる。
+   - `t_att` 支配時は aim を直立寄りにし、**スロットルを hover/cos 付近まで上げて
+     ジンバルトルクを優先**（深リーン中の 0.35–0.55 上限は撤廃）。
+   - `t_settle ≈ 0`（閾値目前）だけ静かな lean に戻し、go↔brake チャタを抑える。
+   - ターミナル域では `vh` 過大・オーバーシュート・Chebyshev 超過時に **逆リーン
+     ブレーキ**を再投入。`a_stop = vh²/(2Δcheby)` から lean を逆算して位置収束を加速。
+
 3. **ターミナル Descend（パッド上・hand-off 後）**
    - 垂直: 物理閉ループ自殺バーン — `a_req = clamp((v² − v_touch²)/(2h), 0, a_brake)`、
      `t = m(a_req + g)/(T_max·up_y)`。コースト／ブレーキ／接地カットは
@@ -232,6 +248,7 @@ X' = M X M~      (M~ は反転 reverse)
 | go / brake の **選択**を離散＋ヒステリシス | go と brake の自由ベクトルを平均 |
 | フル T 巡航で高度を pitch で取る | 高度不足を thr 床で補ってロフト |
 | 過高度で機首下げ dive | dive を「倒立」とみなして upright 復帰 |
+| 姿勢 settle 中は thr 床でトルク確保 | 深リーン回転中に thr を 0.55 で頭打ち |
 
 定数の数値はソース先頭のコメントとユニットテスト（`fuzzy::tests`、
 `target_landing` の long-range 系）が仕様の一部です。
