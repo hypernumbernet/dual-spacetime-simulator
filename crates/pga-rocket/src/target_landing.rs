@@ -1,27 +1,17 @@
-//! Target-pad autopilot (T key): burn–coast loft, airplane-style cruise, then land.
+//! Target-pad autopilot (T key): loft, cruise to pad, terminal land.
 //!
-//! Vertical plan is burn-then-coast: near-full throttle (leaning downrange to
-//! build horizontal speed at the same time) until the ballistic apogee clears
-//! the loft target, an upright straightening leg still under full thrust, then
-//! a thrust-free coast over the top — gravity kills the climb.
+//! **Short / mid range:** burn–coast loft to ~500 m (apogee cut + optional
+//! upright straighten), then envelope cruise `v_stop = √(2 a r)` with reverse-
+//! lean brake hysteresis. No hard speed cap.
 //!
-//! Far-pad cruise is airplane-like: deep lean of the body +Y thrust axis toward
-//! the T-mark free vector, with **no hard speed cap**. Closing speed is governed
-//! only by a braking envelope `v_stop = √(2 a r)` — accelerate while below it,
-//! reverse-lean while above it.
+//! **Airplane range (≳ 1.5 km):** full throttle toward T; altitude is pitch only
+//! (`long_range_hold_cos` / `long_range_go_aim` — nose-up / **nose-down dive**).
+//! Hold ~800 m. Soft `long_range_weight` blends short-range loft; the hard range
+//! floor keeps airplane mode after a fast downrange close. Inside ~55 m: quiet
+//! station-keep → Descend via [`LandingAutopilot`].
 //!
-//! **Long-range airplane cruise (range ≳ 1.5 km):** full-throttle go toward T;
-//! altitude is the elevator. Pitch commands
-//! `cos(θ) ≈ hover·(1+a_cmd/g)` — nose-up when low, **nose-down dive lean** when
-//! high or lofting through the ~800 m hold (flip gate stays low so dive is not
-//! fought). Soft long-range weight blends the hold target 520→800 m; a hard
-//! airplane-range floor keeps full-T pitch hold after a fast downrange burn.
-//! Closer in, control hands to the normal envelope cruise / terminal lander.
-//!
-//! Attitude uses the same inverse sandwich transports as the L lander
-//! (`motor_inverse_rotate_vector` / `world_up_in_body`). Desired thrust is a
-//! free vector from CoM toward the lofted pad waypoint, `clamp_tilt`-ed into
-//! the cruise lean cone.
+//! Attitude: PGA inverse sandwich (`motor_inverse_rotate_vector` /
+//! `world_up_in_body`), desired thrust `clamp_tilt`-ed into the lean cone.
 
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
@@ -70,23 +60,17 @@ const CRUISE_ALT_CAP: f64 = GATE_ALT_MIN + 40.0;
 /// Ballistic apogee the climb burn aims for (m). Cut thrust once the coast
 /// alone clears this, so the loft tops out just above [`CLIMB_ALT_M`].
 const APOGEE_TARGET_M: f64 = CLIMB_ALT_M + 30.0;
-/// Near-full climb throttle (gimbal authority scales with thrust, so no
-/// reserve is needed — full thrust is also max attitude authority).
-const THR_CLIMB_BURN: f64 = 0.97;
-/// Long-range (≥5 km) full-throttle cruise / altitude-hold.
-const THR_LONG: f64 = 0.97;
-/// Lean cap for airplane cruise (rad). cos(1.45)≈0.12 — deep nose-down dive at
-/// full T (hover cos≈0.33). Must stay at/above [`COS_TILT_AIM_AIR`] flip gate.
+/// Near-full throttle for climb burn and airplane cruise (gimbal authority
+/// scales with thrust — full T is also max attitude authority).
+const THR_FULL: f64 = 0.97;
+/// Lean cap for airplane cruise (rad). cos(1.45)≈0.12 — matches dive floor in
+/// [`long_range_hold_cos`]. Must stay at/above [`COS_TILT_AIM_AIR`].
 const LEAN_LONG_MAX: f64 = 1.45;
-/// Flip-recover only when nearly inverted during airplane cruise (cos < this).
-/// Normal COS_TILT_AIM (0.30) would fight a legitimate dive lean / nose-down.
+/// Flip-recover only when nearly inverted in airplane / deep-lean mode.
+/// Normal [`COS_TILT_AIM`] (0.30) would fight a legitimate nose-down dive.
 const COS_TILT_AIM_AIR: f64 = 0.10;
-/// Above this horizontal range: free accelerate (no reverse-lean). Below it,
-/// envelope braking with **hysteresis** (no go↔brake chatter / sway).
-const FREE_GO_RANGE_M: f64 = 5200.0;
-/// Airplane full-T + pitch elevator while range is still large. Independent of
-/// the soft long-range weight so a fast downrange burn that closes to ~3 km
-/// does not fall back into ballistic thr-cut / upright straighten.
+/// Horizontal range (m) above which transit is airplane mode: full-T go +
+/// pitch elevator, no reverse-lean brake, no ballistic thr-cut / straighten.
 const LONG_AIRPLANE_RANGE_M: f64 = 1500.0;
 /// Enter reverse-lean when `v_approach − v_stop` exceeds this (m/s).
 const BRAKE_LATCH_ENTER: f64 = 10.0;
@@ -190,7 +174,7 @@ impl TargetLandingAutopilot {
         }
     }
 
-    /// HUD helper: long-range full-throttle cruise is active (range ≳ 5 km).
+    /// HUD helper: airplane full-T + pitch-elevator cruise is active.
     pub fn is_long_range_cruise(&self, pos: [f64; 3], target_xz: [f64; 2]) -> bool {
         if !self.enabled || self.complete || self.phase == TargetPhase::Descend {
             return false;
@@ -198,7 +182,7 @@ impl TargetLandingAutopilot {
         let dx = target_xz[0] - pos[0];
         let dz = target_xz[1] - pos[2];
         let range = (dx * dx + dz * dz).sqrt();
-        long_range_weight(range) > 0.5
+        range >= LONG_AIRPLANE_RANGE_M
     }
 
     pub fn update(
@@ -305,19 +289,30 @@ fn envelope_v_stop(range: f64, v_approach: f64) -> f64 {
     (2.0 * A_DEC_H * range_eff).sqrt()
 }
 
-/// Simultaneous climb + airplane-style translate toward the lofted pad waypoint.
+/// Full-T airplane aim: pitch elevator holds `alt_hold` while leaning to pad.
+#[inline]
+fn airplane_hold_aim(
+    ux: f64,
+    uz: f64,
+    alt: f64,
+    alt_hold: f64,
+    vy: f64,
+    hover: f64,
+) -> ([f64; 3], f64, bool, bool) {
+    let cos_up = long_range_hold_cos(alt, alt_hold, vy, hover);
+    (
+        long_range_go_aim(ux, uz, cos_up),
+        LEAN_LONG_MAX,
+        true,
+        true,
+    )
+}
+
+/// Climb + translate toward the lofted pad, or airplane cruise when far out.
 ///
-/// Vertical plan is burn-then-coast: near-full throttle until the ballistic
-/// apogee (`alt + vy²/2g`, conserved in vacuum coast) clears the loft target,
-/// then thrust drops and gravity tops out the climb. Far cruise aims body +Y
-/// along the free vector to the pad with a deep lean cone; speed is only
-/// limited by the braking envelope (accelerate / reverse-brake).
-///
-/// When horizontal range ≳ [`FREE_GO_RANGE_M`]: **airplane cruise** — full
-/// throttle toward the pad; altitude held only by pitch/lean (elevator).
-/// Closer in, envelope reverse-lean uses `brake_latched` hysteresis.
-///
-/// Returns `(command, updated_brake_latch)`.
+/// Short range: burn until ballistic apogee clears the loft, optional upright
+/// straighten, then envelope go/brake. Airplane range: full T + pitch elevator
+/// (see [`airplane_hold_aim`]). Returns `(command, updated_brake_latch)`.
 fn transit_command(
     state: &RocketState,
     target_xz: [f64; 2],
@@ -338,27 +333,16 @@ fn transit_command(
     let mass = state.params.mass;
     let hover = mass * GRAVITY / state.params.max_thrust;
 
-    // Long-range loft aims near cruise hold (~800 m). Slightly under so full-T
-    // airplane climb into the hold band does not balloon past 1 km.
-    let apogee_target = APOGEE_TARGET_M
-        + mu_long * ((LONG_CRUISE_ALT_M - 40.0) - APOGEE_TARGET_M);
+    // Short-hop loft apogee (blends toward cruise alt with mu_long). Airplane
+    // mode ignores this and stays powered until the altitude gate.
+    let apogee_target =
+        APOGEE_TARGET_M + mu_long * ((LONG_CRUISE_ALT_M - 40.0) - APOGEE_TARGET_M);
     let straighten_m = apogee_target - 180.0;
 
     let apogee = pos[1] + vy.max(0.0) * vy.max(0.0) / (2.0 * GRAVITY);
-    // Large remaining range ⇒ airplane mode (full T, pitch elevator), even if
-    // the soft long-range membership has already faded after a fast burn.
     let long_airplane = range >= LONG_AIRPLANE_RANGE_M;
-    // Airplane ascent: stay powered until the altitude gate. Short hops still
-    // use ballistic apogee cut so they do not over-burn.
-    let burn_up = !lofted
-        && if long_airplane {
-            true
-        } else {
-            apogee < apogee_target
-        };
-    // Powered-cruise weight: 1 at vy ≤ +3 (hover/translate), 0 at vy ≥ +8
-    // (ballistic coast). Continuous blend avoids upright/lean chatter on the
-    // boundary that would hold hover thrust forever.
+    let burn_up = !lofted && (long_airplane || apogee < apogee_target);
+    // Powered-cruise weight: 1 at vy ≤ +3, 0 at vy ≥ +8 (ballistic coast).
     let cruise_w = if burn_up {
         0.0
     } else {
@@ -371,11 +355,9 @@ fn transit_command(
     let uz = dz * inv_range;
     let v_approach = vx * ux + vz * uz;
 
-    // Near-pad station keeping: quiet enough for hand-off (no deep lean chase).
     let terminal = lofted && range <= RANGE_TERMINAL_M;
 
     let v_stop = envelope_v_stop(range, v_approach);
-    // Climb burn: modest horizontal build; free accel on cruise; creep near pad.
     let v_cmd_h = if burn_up || ballistic {
         v_stop.min(V_CLIMB_H_MAX)
     } else if terminal {
@@ -387,8 +369,6 @@ fn transit_command(
     let need_x = ux * v_cmd_h - vx;
     let need_z = uz * v_cmd_h - vz;
 
-    // Far cruise: airplane lean along the free vector to T, or reverse-brake
-    // when above the envelope. No velocity-PD flip — aim is direction-stable.
     let far = lofted && cruise_w > 0.75 && !terminal && range > RANGE_FAR_M;
     let far_or_overshoot = far
         || (lofted
@@ -397,28 +377,18 @@ fn transit_command(
             && range > RANGE_TERMINAL_M
             && v_approach < -1.5);
 
-    // Free-go band: far enough that reverse-lean is unnecessary (and looks bad).
-    let free_go = !terminal && !burn_up && lofted && range >= FREE_GO_RANGE_M;
-    // Long altitude-hold style: soft membership **or** still outside the
-    // airplane range floor (keeps pitch elevator after a fast range close).
-    let long_alt =
-        !terminal && !burn_up && lofted && (mu_long > 0.05 || long_airplane);
-    // Blend altitude target 520→800 m. While in airplane range, hold full
-    // cruise altitude even if mu_long has faded.
-    let w_alt = if long_airplane {
-        1.0
+    // Airplane range: always hold cruise altitude. Closer in: blend 520→800 m.
+    let alt_hold = if long_airplane {
+        LONG_CRUISE_ALT_M
     } else {
-        mu_long
+        CRUISE_ALT_CAP + mu_long * (LONG_CRUISE_ALT_M - CRUISE_ALT_CAP)
     };
-    let alt_hold = CRUISE_ALT_CAP + w_alt * (LONG_CRUISE_ALT_M - CRUISE_ALT_CAP);
 
-    // Brake latch: free_go / airplane cruise never reverse-lean (go + pitch
-    // elevator). Inside terminal, drop latch so reverse-lean does not fight
-    // station-keeping over the pad.
+    // No reverse-lean in airplane mode or over the pad (station-keeping).
     let delta_v = v_approach - v_stop;
     let overshoot = v_approach < -1.5 && range > RANGE_TERMINAL_M;
     let mut brake = brake_latched;
-    if free_go || long_airplane || terminal {
+    if long_airplane || terminal {
         brake = false;
     } else if overshoot || delta_v > BRAKE_LATCH_ENTER {
         brake = true;
@@ -426,16 +396,10 @@ fn transit_command(
         brake = false;
     }
 
-    let (desired_raw, lean_max, deep, force_full_thr) = if burn_up && long_airplane {
-        // Long-range ascent is airplane mode: full-T toward T with pitch
-        // elevator to `alt_hold`. No upright straighten loft.
-        let cos_up = long_range_hold_cos(pos[1], alt_hold, vy, hover);
-        (
-            long_range_go_aim(ux, uz, cos_up),
-            LEAN_LONG_MAX,
-            true,
-            true,
-        )
+    // Aim regime (mutually exclusive by range / loft state).
+    let (desired_raw, lean_max, deep, force_full_thr) = if long_airplane {
+        // Full-T go + pitch elevator (ascent and cruise share one law).
+        airplane_hold_aim(ux, uz, pos[1], alt_hold, vy, hover)
     } else if burn_up {
         // Short/mid ascent: modest lean, then upright straighten for coast.
         let lean = LEAN_BURN_MAX + mu_long * (0.90 - LEAN_BURN_MAX);
@@ -448,10 +412,7 @@ fn transit_command(
             false,
         )
     } else if terminal {
-        // Blend toward upright as we enter the hand-off box (vh quiet).
-        // Keep this modest: aggressive free anti-v / deep lean overshoots,
-        // holds rates/tilt outside Descend gates, or hands the lander a
-        // lateral sprint. Mid-range brake envelope already kills most vh.
+        // Quiet into hand-off (modest lean — deep free anti-v blocks Descend).
         let settle = range <= HANDOFF_CHEBY_MAX_M && vh <= VH_HANDOFF_MAX + 3.0;
         let k = if settle { 0.06 } else { 0.10 };
         let lean = if settle {
@@ -460,21 +421,8 @@ fn transit_command(
             (0.08 + 0.025 * vh).clamp(0.10, 0.28)
         };
         ([k * need_x, AIM_Y_BIAS, k * need_z], lean, false, false)
-    } else if free_go || (long_alt && !brake) {
-        // Full-throttle airplane go + pitch elevator altitude hold.
-        // Priority: keep thrusting toward T; altitude via nose-up / nose-down
-        // lean only (no throttle cut). Dive lean is intentional when high.
-        let cos_up = long_range_hold_cos(pos[1], alt_hold, vy, hover);
-        (
-            long_range_go_aim(ux, uz, cos_up),
-            LEAN_LONG_MAX,
-            true,
-            // Full T whenever this airplane hold is active (not only free_go),
-            // so pitch — not thr — owns altitude across the long-range shoulder.
-            true,
-        )
     } else if far_or_overshoot {
-        // Near/mid-pad airplane cruise (cruise_w high). Reverse-lean uses latch.
+        // Mid-range envelope: go free vector or latched reverse-brake.
         let s = vh.max(1.0);
         if brake {
             ([-vx / s, AIM_Y_BIAS, -vz / s], LEAN_CRUISE, true, false)
@@ -487,7 +435,7 @@ fn transit_command(
             }
         }
     } else {
-        // Mid-range / ballistic: shallower cone; reverse only when latched.
+        // Ballistic / shallow mid: reverse only when latched.
         let s = vh.max(1.0);
         if brake && lofted && !terminal {
             ([-vx / s, AIM_Y_BIAS, -vz / s], LEAN_MID, false, false)
@@ -501,9 +449,7 @@ fn transit_command(
         }
     };
 
-    // Straightening burn aims strictly upright: cutoff then happens with no
-    // lean and no rates, so the coast needs almost no recovery thrust.
-    // Skip on airplane-range ascent (pitch elevator owns altitude).
+    // Upright straighten only on short-hop burn (airplane owns altitude by pitch).
     let straighten = burn_up && !long_airplane && apogee >= straighten_m;
     // Deep airplane lean must not be faded by cruise_w (half-open aim = sway).
     let aim_w = if burn_up || deep {
@@ -519,8 +465,7 @@ fn transit_command(
             lean_max,
         )
     };
-    // Airplane / deep-lean cruise: low flip gate so nose-down dive is tracked
-    // instead of fought as "inverted recovery".
+    // Deep / airplane lean: low flip gate so nose-down is tracked, not "recovered".
     let flip_cos = if force_full_thr || deep {
         COS_TILT_AIM_AIR
     } else {
@@ -528,16 +473,12 @@ fn transit_command(
     };
     let (pitch, yaw, roll, up_y) = attitude_toward(state, desired, flip_cos);
 
-    // Near-pad altitude-hold throttle (not used for free-go airplane cruise).
     let upy_floor = if deep { 0.45 } else { 0.40 };
     let hover_cmd = (hover / up_y.max(upy_floor)).clamp(0.0, 0.95);
 
-    let mut throttle = if burn_up {
-        THR_CLIMB_BURN
-    } else if force_full_thr {
-        // Airplane mode: **always full throttle**. Altitude is pitch/lean only.
-        // Reverse-lean brake phase also keeps full T for deceleration authority.
-        THR_LONG
+    let mut throttle = if force_full_thr || burn_up {
+        // Airplane + short climb: near-full T (pitch owns altitude when airplane).
+        THR_FULL
     } else {
         let v_damp = if up_y < 0.92 {
             motor_inverse_rotate_vector(&state.motor, state.velocity)[1]
@@ -556,10 +497,10 @@ fn transit_command(
 
     let effort = pitch.abs() + yaw.abs() + 0.35 * roll.abs();
     if force_full_thr {
-        // Never demote airplane full-T to hover/cos — pitch owns altitude.
-        throttle = THR_LONG;
+        // Do not demote airplane full-T to hover/cos — pitch owns altitude.
+        throttle = THR_FULL;
     } else if deep && up_y < 0.80 {
-        // Near-pad airplane: track hover/cos so vertical net accel ≈ 0.
+        // Mid-range deep lean: vertical-neutral thr ≈ hover/cos.
         throttle = throttle.clamp(hover_cmd * 0.85, (hover_cmd + 0.08).min(0.92));
     } else if deep {
         // Still rotating into lean: gimbal only — never a climb burn.

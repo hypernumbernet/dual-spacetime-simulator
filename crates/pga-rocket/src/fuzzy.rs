@@ -490,19 +490,20 @@ pub fn cruise_brake_weight(delta_v: f64, v_brake_enter: f64, v_brake_exit: f64) 
 
 // --- Long-range full-throttle altitude-hold cruise ---------------------------
 
-/// Horizontal range (m) where long-range full-throttle cruise fully engages.
+/// Horizontal range (m) where soft long-range membership is 0.5.
 pub const LONG_RANGE_M: f64 = 5000.0;
-/// Soft shoulder half-width (m) around [`LONG_RANGE_M`].
-/// Wide on the low side so a fast airplane climb that closes range to ~3 km
-/// still keeps pitch-elevator altitude hold (not mid-range ballistic coast).
+/// Soft shoulder half-width (m) around [`LONG_RANGE_M`] (weight 0→1 on
+/// `[LONG_RANGE_M − shoulder, LONG_RANGE_M + shoulder]` ≈ 3–7 km).
 pub const LONG_RANGE_SHOULDER_M: f64 = 2000.0;
-/// Target CoM altitude (m) while in long-range cruise.
+/// Target CoM altitude (m) while in long-range airplane cruise.
 pub const LONG_CRUISE_ALT_M: f64 = 800.0;
+/// Body-up·world-up floor for nose-down dive at full throttle.
+/// Must stay above the caller's airplane flip-recover gate.
+pub const LONG_CRUISE_COS_DIVE: f64 = 0.12;
+/// Extra cos above `hover` allowed when climbing toward the hold.
+const LONG_CRUISE_COS_CLIMB_EXTRA: f64 = 0.18;
 
-/// Membership for long-range cruise: 0 well below ~3 km, 1 well above ~7 km.
-///
-/// Shoulder 3–7 km: hand-off from 800 m full-throttle cruise into the normal
-/// ~500 m envelope cruise stays continuous even after a fast downrange burn.
+/// Soft membership for long-range altitude target blend (0 below ~3 km, 1 above ~7 km).
 #[inline]
 pub fn long_range_weight(range_m: f64) -> f64 {
     ramp(
@@ -512,65 +513,52 @@ pub fn long_range_weight(range_m: f64) -> f64 {
     )
 }
 
-/// Airplane-style pitch command at **full throttle**: body-up · world-up (`cos`).
+/// Airplane pitch elevator at **full throttle**: desired body-up · world-up (`cos`).
 ///
-/// Priority is always go-toward-target at full T. Altitude is the elevator:
-///   `a_y = (T/m)·cos − g = g·(cos/hover − 1)` at thr=1.
-/// Equilibrium hold: `cos ≈ hover` (≈1/3 for T/W=3).
-/// Nose-up (higher cos) climbs; **nose-down / deeper lean (lower cos) sinks**.
-///
-/// Full-T climb is cheap and overshoots hard, so this schedule is **asymmetric**:
-/// modest nose-up when low, strong dive + ballistic-apogee look-ahead when
-/// lofting. Caller must allow lean past ~acos(0.12) and must **not**
-/// flip-recover until below that (see long-cruise attitude gate).
+/// Go-toward-target is priority; altitude is pitch only:
+/// `a_y = (T/m)·cos − g = g·(cos/hover − 1)`. Hold when `cos ≈ hover`.
+/// Nose-up climbs; **nose-down / deeper lean sinks**. Full-T climb overshoots
+/// easily, so the schedule is asymmetric (soft climb, hard dive + apogee look-ahead).
 #[inline]
 pub fn long_range_hold_cos(alt: f64, alt_tgt: f64, vy: f64, hover: f64) -> f64 {
-    let g = 9.80665;
-    let e = alt_tgt - alt; // + ⇒ below target (need slight nose-up)
-    // Ballistic coast apogee if thrust were cut — under full-T this underestimates
-    // peak, so treat any predicted overshoot as an immediate dive demand.
+    let g = crate::sim::GRAVITY;
+    let e = alt_tgt - alt; // + ⇒ below target
+    // Coast apogee (underestimates peak under thrust) — dive if it clears hold.
     let apogee_pred = alt + vy.max(0.0) * vy.max(0.0) / (2.0 * g);
-    let e_apo = alt_tgt - apogee_pred; // − ⇒ will overshoot hold even coasting
-    // Fuzzy vertical-rate schedule (elevator, m/s). Climb rates stay small.
+    let e_apo = alt_tgt - apogee_pred; // − ⇒ will overshoot even if thr cut
     let mu_very_low = ramp(e, 120.0, 320.0);
     let mu_low = trap(e, 25.0, 55.0, 110.0, 200.0);
     let mu_near = trap(e, -30.0, -10.0, 10.0, 30.0);
     let mu_high = trap(e, -240.0, -120.0, -40.0, -12.0);
     let mu_very_high = ramp_down(e, -480.0, -150.0);
-    // Apogee-ahead membership: start diving before altitude itself exceeds hold.
     let mu_apo_high = ramp_down(e_apo, -200.0, -20.0);
     let v_des = defuzz_weighted(
         &[
             (mu_very_low, 7.0),
             (mu_low, 3.5),
-            (mu_near, -0.5), // slight sink bias near hold (full-T loft margin)
+            (mu_near, -0.5),
             (mu_high, -16.0),
             (mu_very_high, -32.0),
             (mu_apo_high, -22.0),
         ],
         (0.06 * e).clamp(-34.0, 8.0),
     );
-    // Rate loop on v_des. Extra loft kill only when ballistic apogee will
-    // overshoot the hold band.
     let loft_kill = if e_apo < 40.0 {
         0.55 * vy.max(0.0)
     } else {
         0.0
     };
     let mut a_cmd = (0.75 * (v_des - vy) - loft_kill).clamp(-22.0, 5.5);
-    // While clearly below hold and not going to overshoot, never command a dive
-    // — and keep a positive climb floor so rate-damping of a hot loft does not
-    // freeze altitude hundreds of metres below the hold.
+    // Below hold and not going to overshoot: keep climbing (rate damp alone
+    // would freeze altitude hundreds of metres low).
     if e > 150.0 && e_apo > 80.0 {
         a_cmd = a_cmd.max(3.0);
     } else if e > 80.0 && e_apo > 50.0 {
         a_cmd = a_cmd.max(1.5);
     }
-    // cos = m(g+a)/T = hover * (g+a)/g
     let cos_eq = hover * (g + a_cmd) / g;
-    // Dive down to ~0.12 (nose well down); climb modestly above hover.
-    let cos_climb_max = (hover + 0.18).clamp(0.45, 0.55);
-    cos_eq.clamp(0.12, cos_climb_max)
+    let cos_climb_max = (hover + LONG_CRUISE_COS_CLIMB_EXTRA).clamp(0.45, 0.55);
+    cos_eq.clamp(LONG_CRUISE_COS_DIVE, cos_climb_max)
 }
 
 /// World-frame unit-ish aim for long-range go: lean `acos(cos_up)` toward `(ux,uz)`.
@@ -796,8 +784,8 @@ mod tests {
             cos_climb_thru < hover,
             "climb-through must dive, cos={cos_climb_thru}"
         );
-        // Deep dive floor ~0.12; climb cap stays modest (no balloon under full T).
-        assert!(cos_hi >= 0.12 - 1e-9 && cos_low <= 0.55 + 1e-9);
+        // Dive floor / climb cap stay in the designed band.
+        assert!(cos_hi >= LONG_CRUISE_COS_DIVE - 1e-9 && cos_low <= 0.55 + 1e-9);
     }
 
     #[test]
