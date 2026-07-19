@@ -19,6 +19,7 @@
 //! the cruise lean cone.
 
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
+use crate::fuzzy::cruise_brake_weight;
 use crate::landing::{
     axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_pad_square, saturate, LandingAutopilot,
     PAD_HALF_M,
@@ -340,20 +341,30 @@ fn transit_command(state: &RocketState, target_xz: [f64; 2], pos: [f64; 3]) -> C
         };
         ([k * need_x, AIM_Y_BIAS, k * need_z], lean, false)
     } else if far_or_overshoot {
-        let braking = v_approach > v_stop + V_BRAKE_ENTER
-            || (v_approach < -1.5 && range > RANGE_TERMINAL_M);
-        if braking {
-            let s = vh.max(1.0);
+        // Direction is discrete (go / mid / brake): averaging opposite free
+        // vectors cancels the horizontal aim and causes long-range misses.
+        // Fuzzy only softens the δv threshold that picks the mode.
+        let overshoot = v_approach < -1.5 && range > RANGE_TERMINAL_M;
+        let delta = v_approach - v_stop;
+        let w_brake = cruise_brake_weight(delta, V_BRAKE_ENTER, V_BRAKE_EXIT);
+        let s = vh.max(1.0);
+        if overshoot || w_brake > 0.55 {
             ([-vx / s, AIM_Y_BIAS, -vz / s], LEAN_CRUISE, true)
-        } else if v_approach > v_stop + V_BRAKE_EXIT {
+        } else if w_brake > 0.2 {
+            // Mid hold band (former V_BRAKE_EXIT‥ENTER) — shallow lean.
             ([0.08 * need_x, AIM_Y_BIAS, 0.08 * need_z], LEAN_MID, false)
         } else {
             ([ux, AIM_Y_BIAS, uz], LEAN_CRUISE, true)
         }
     } else {
-        // Mid-range: same envelope idea, shallower cone.
-        let braking = v_approach > v_stop + V_BRAKE_ENTER;
-        if braking {
+        // Mid-range: shallower cone; brake only when clearly overspeed (no
+        // opposite-vector blend — same cancellation hazard as far cruise).
+        let w_brake = cruise_brake_weight(
+            v_approach - v_stop,
+            V_BRAKE_ENTER,
+            V_BRAKE_EXIT,
+        );
+        if w_brake > 0.55 {
             let s = vh.max(1.0);
             ([-vx / s, AIM_Y_BIAS, -vz / s], LEAN_MID, false)
         } else {

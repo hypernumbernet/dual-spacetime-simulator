@@ -6,6 +6,7 @@
 pub mod control;
 pub mod euclidean_pga;
 pub mod explosion;
+pub mod fuzzy;
 pub mod landing;
 pub mod mesh;
 pub mod sim;
