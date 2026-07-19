@@ -100,6 +100,51 @@ fn contact_prevents_ground_penetration() {
 }
 
 #[test]
+fn slight_tilt_on_pad_settles_upright() {
+    use pga_rocket::euclidean_pga::motor_body_up_world;
+
+    // Residual post-touchdown lean must not freeze: rest-share normals on the
+    // lower feet should produce a restoring torque back toward all-four-feet.
+    let mut s = RocketState::resting_on_pad();
+    let com_y = s.altitude();
+    s.motor = motor_from_pose(0.0, com_y, 0.0, 0.10, 0.0, 0.0);
+    s.velocity = [0.0, 0.0, 0.0];
+    s.omega = [0.0, 0.0, 0.0];
+    s.contacting = true;
+    s.set_command(ControlCommand::default());
+
+    let tilt0 = {
+        let up = motor_body_up_world(&s.motor);
+        up[1].clamp(-1.0, 1.0).acos()
+    };
+    assert!(tilt0 > 0.08, "precondition: start tilted, tilt0={tilt0:.3}");
+
+    for _ in 0..(8 * 120) {
+        step_rocket(&mut s, DT);
+        assert!(
+            s.lowest_probe_y() >= -0.08,
+            "penetrated while settling: y={}",
+            s.lowest_probe_y()
+        );
+    }
+
+    let tilt = {
+        let up = motor_body_up_world(&s.motor);
+        up[1].clamp(-1.0, 1.0).acos()
+    };
+    assert!(!s.destroyed, "impact={}", s.last_impact_speed);
+    assert!(
+        tilt < 0.025,
+        "expected near-upright after pad settle, tilt={tilt:.4} (was {tilt0:.3})"
+    );
+    assert!(
+        s.omega[0].abs() < 0.05 && s.omega[2].abs() < 0.05,
+        "should be nearly at rest angularly, omega={:?}",
+        s.omega
+    );
+}
+
+#[test]
 fn tipped_body_hull_contacts_ground_without_penetration() {
     use pga_rocket::euclidean_pga::motor_from_pose;
     use std::f64::consts::FRAC_PI_2;

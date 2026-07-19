@@ -170,9 +170,9 @@ pub struct ThrusterSample {
 /// Kind of ground-contact probe (feet vs structural hull).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContactKind {
-    /// Landing-pad foot (uses foot friction μ + rest-share support).
+    /// Landing-pad foot (foot friction μ + rest-share / spring normal).
     Foot,
-    /// Body cylinder, nozzle bell, or nose (hull friction μ; spring-only normal).
+    /// Body cylinder, nozzle bell, or nose (hull friction μ + rest-share / spring normal).
     Hull,
 }
 
@@ -426,18 +426,16 @@ impl RocketState {
             let mu_hull = self.params.body_friction_mu.max(0.0);
             let v_eps = self.params.friction_slip_eps.max(1e-6);
             let v_eps2 = v_eps * v_eps;
-            // Foot rest-share for pad friction when spring N≈0 after hard projection.
-            let n_rest_foot = if n_foot_planted > 0 {
-                (mass * GRAVITY) / n_foot_planted as f64
-            } else {
-                0.0
-            };
-            // Hull rest-share when lying on the body (several hull samples planted).
-            let n_rest_hull = if n_hull_planted > 0 {
-                (mass * GRAVITY) / n_hull_planted as f64
-            } else {
-                0.0
-            };
+            // Hard projection leaves probes at y≈0 ⇒ n_spring→0. Without a
+            // quasi-static rest normal there is no restoring torque from offset
+            // feet and residual tilt freezes. Support demand is the unmet
+            // downward load so hover/liftoff (F_prop_y ≥ mg) stays free.
+            // Friction capacity still uses full weight share (legacy pad grip
+            // while thrusting off the deck) even when support demand is zero.
+            let n_planted = n_foot_planted + n_hull_planted;
+            let support_demand = (-force[1]).max(0.0);
+            let n_rest_support = support_demand / n_planted as f64;
+            let n_rest_friction = (mass * GRAVITY) / n_planted as f64;
 
             for i in 0..probes.len() {
                 if !planted_flags[i] {
@@ -463,16 +461,6 @@ impl RocketState {
                 let n_spring = (self.params.contact_stiffness * penetration
                     - self.params.contact_damping * v_pt[1].min(0.0))
                 .max(0.0);
-                force[1] += n_spring;
-
-                if n_spring > 0.0 {
-                    let tau_n = [-r[2] * n_spring, 0.0, r[0] * n_spring];
-                    let tau_nb = motor_rotate_vector(&motor_inv, tau_n);
-                    body_torque[0] += tau_nb[0];
-                    body_torque[1] += tau_nb[1];
-                    body_torque[2] += tau_nb[2];
-                }
-
                 let plant = if world[1] <= 0.0 {
                     1.0
                 } else if band > 0.0 {
@@ -480,11 +468,25 @@ impl RocketState {
                 } else {
                     0.0
                 };
-                let (mu, n_rest) = match probe.kind {
-                    ContactKind::Foot => (mu_foot, n_rest_foot),
-                    ContactKind::Hull => (mu_hull, n_rest_hull),
+                // Normal force/torque: spring (impact) or rest-share (settled).
+                let n_normal = n_spring.max(n_rest_support * plant);
+                force[1] += n_normal;
+
+                if n_normal > 0.0 {
+                    let tau_n = [-r[2] * n_normal, 0.0, r[0] * n_normal];
+                    let tau_nb = motor_rotate_vector(&motor_inv, tau_n);
+                    body_torque[0] += tau_nb[0];
+                    body_torque[1] += tau_nb[1];
+                    body_torque[2] += tau_nb[2];
+                }
+
+                let mu = match probe.kind {
+                    ContactKind::Foot => mu_foot,
+                    ContactKind::Hull => mu_hull,
                 };
-                let n_fric = n_spring.max(n_rest * plant);
+                // Friction μN uses weight rest-share so pad grip while
+                // thrusting matches the pre-rest-normal model.
+                let n_fric = n_spring.max(n_rest_friction * plant);
 
                 // Regularized Coulomb friction: F = −μ N v_h / sqrt(|v_h|² + v_ε²)
                 if mu > 0.0 && n_fric > 0.0 {
