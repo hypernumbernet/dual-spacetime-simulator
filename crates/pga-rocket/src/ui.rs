@@ -37,7 +37,7 @@ impl ContentRegion {
 /// Draws the left docked parameter panel with live simulation telemetry.
 pub fn draw_params_panel(
     ctx: &egui::Context,
-    rocket: &RocketState,
+    rocket: &mut RocketState,
     landing: &LandingAutopilot,
     target_landing: &TargetLandingAutopilot,
     fps: f32,
@@ -50,6 +50,7 @@ pub fn draw_params_panel(
         .exact_width(PANEL_WIDTH)
         .resizable(false)
         .show(ctx, |ui| {
+            ui.checkbox(&mut rocket.air_drag_enabled, "空気抵抗");
             ui.heading("PGA Rocket");
             ui.separator();
 
@@ -86,6 +87,8 @@ fn flight_section(ui: &mut egui::Ui, rocket: &RocketState, target_xz: [f32; 2]) 
     kv(ui, "Vel X", format!("{:.2} m/s", v[0]));
     kv(ui, "Vel Y", format!("{:.2} m/s", v[1]));
     kv(ui, "Vel Z", format!("{:.2} m/s", v[2]));
+    let ground_speed = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    kv(ui, "Gnd spd", format!("{:.2} m/s", ground_speed));
     kv(ui, "ω X", format!("{:.3} rad/s", w[0]));
     kv(ui, "ω Y", format!("{:.3} rad/s", w[1]));
     kv(ui, "ω Z", format!("{:.3} rad/s", w[2]));
@@ -184,6 +187,7 @@ fn help_section(ui: &mut egui::Ui) {
     section(ui, "Controls");
     for line in [
         "Space / Ctrl: throttle",
+        "F: full throttle (0.5s)",
         "W/S: pitch (needs thr)",
         "Q/E: yaw (needs thr)",
         "A/D: roll RCS",

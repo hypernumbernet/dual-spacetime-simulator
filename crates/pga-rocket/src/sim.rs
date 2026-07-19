@@ -10,6 +10,26 @@ use std::ops::Add;
 /// Standard gravity (m/s²).
 pub const GRAVITY: f64 = 9.81;
 
+/// Sea-level air density (kg/m³), ISA.
+pub const AIR_DENSITY: f64 = 1.225;
+
+/// Effective ballistic coefficient β = m / (C_d A) (kg/m²).
+///
+/// Real launch-vehicle stages are typically a few ×10³ kg/m². Using
+/// `½ ρ C_d A` with this stack's full geometric cross-section would understate
+/// β (the visual body is far lighter than a metal vehicle of that size) and
+/// make drag dominate. We pin β to a launch-vehicle-like value so
+/// drag/weight at subsonic speeds matches the real world:
+/// `k = ρ m / (2 β)` ⇒ `F = −k |v| v`.
+pub const AIR_BALLISTIC_COEFF: f64 = 2.5e3;
+
+/// Quadratic air-drag coefficient `k` for `F = −k |v| v` from mass and β.
+#[inline]
+pub fn air_drag_k_from_mass(mass: f64) -> f64 {
+    let m = mass.max(1e-6);
+    AIR_DENSITY * m / (2.0 * AIR_BALLISTIC_COEFF)
+}
+
 /// Rocket physical parameters (typical small VTOL stack proportions, SI).
 #[derive(Clone, Debug)]
 pub struct RocketParams {
@@ -52,6 +72,9 @@ pub struct RocketParams {
     pub restitution: f64,
     /// Normal impact speed (m/s) above which the vehicle is destroyed on ground contact.
     pub crash_impact_speed: f64,
+    /// Quadratic air-drag coefficient: world force `F = −k |v| v` (N when v in m/s).
+    /// Default is [`air_drag_k_from_mass`] (realistic β, not full geometric C_d A).
+    pub air_drag_k: f64,
 }
 
 impl Default for RocketParams {
@@ -98,6 +121,8 @@ impl Default for RocketParams {
             contact_band: 0.05,
             restitution: 0.35,
             crash_impact_speed: 10.0,
+            // β≈2500 kg/m² → k≈0.245; freefall terminal ≈ √(mg/k) ≈ 200 m/s.
+            air_drag_k: air_drag_k_from_mass(mass),
         }
     }
 }
@@ -211,6 +236,8 @@ pub struct RocketState {
     pub explosion_origin: [f64; 3],
     /// Peak normal impact speed (m/s) recorded at destruction.
     pub last_impact_speed: f64,
+    /// When true, apply quadratic air drag from ground-relative CoM velocity.
+    pub air_drag_enabled: bool,
 }
 
 impl Default for RocketState {
@@ -238,6 +265,7 @@ impl RocketState {
             explosion_age: 0.0,
             explosion_origin: [0.0, com_y, 0.0],
             last_impact_speed: 0.0,
+            air_drag_enabled: true,
         }
     }
 
@@ -389,6 +417,23 @@ impl RocketState {
             f_prop_w[2],
         ];
         let mut body_torque = prop.torque;
+
+        // --- Air drag from ground-relative CoM velocity: F = −k |v| v ---
+        if self.air_drag_enabled {
+            let k = self.params.air_drag_k.max(0.0);
+            if k > 0.0 {
+                let vx = self.velocity[0];
+                let vy = self.velocity[1];
+                let vz = self.velocity[2];
+                let speed = (vx * vx + vy * vy + vz * vz).sqrt();
+                if speed > 1e-9 {
+                    let scale = -k * speed;
+                    force[0] += scale * vx;
+                    force[1] += scale * vy;
+                    force[2] += scale * vz;
+                }
+            }
+        }
 
         // --- Unified ground contact: feet + body/nozzle/nose hull ---
         self.contacting = false;

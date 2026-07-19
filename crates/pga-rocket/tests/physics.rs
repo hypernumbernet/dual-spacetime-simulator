@@ -12,6 +12,8 @@ const DT: f64 = 1.0 / 120.0;
 #[test]
 fn freefall_increases_downward_velocity_and_loses_altitude() {
     let mut s = RocketState::at_altitude(100.0);
+    // Pure gravity: disable air drag so Δv ≈ −g t holds tightly.
+    s.air_drag_enabled = false;
     s.set_command(ControlCommand {
         throttle: 0.0,
         ..Default::default()
@@ -524,4 +526,97 @@ fn direct_high_speed_impact_triggers_explosion() {
     }
     assert!(s.destroyed, "12 m/s descent should exceed 10 m/s crash threshold");
     assert!(s.last_impact_speed >= 10.0);
+}
+
+#[test]
+fn air_drag_off_keeps_horizontal_speed() {
+    let mut s = RocketState::at_altitude(200.0);
+    s.air_drag_enabled = false;
+    s.velocity = [40.0, 0.0, 0.0];
+    s.set_command(ControlCommand::default());
+    let vx0 = s.velocity[0];
+    for _ in 0..120 {
+        step_rocket(&mut s, DT);
+    }
+    assert!(
+        (s.velocity[0] - vx0).abs() < 0.05,
+        "without drag, horizontal speed should stay ~constant: vx0={vx0} vx={}",
+        s.velocity[0]
+    );
+}
+
+#[test]
+fn air_drag_on_slows_ground_speed() {
+    let mut s = RocketState::at_altitude(500.0);
+    assert!(s.air_drag_enabled, "air drag should default to on");
+    // Realistic k is small: use high speed and several seconds to see clear decay.
+    s.velocity = [120.0, 0.0, 0.0];
+    s.set_command(ControlCommand::default());
+    let speed0 = (s.velocity[0] * s.velocity[0]
+        + s.velocity[1] * s.velocity[1]
+        + s.velocity[2] * s.velocity[2])
+        .sqrt();
+    for _ in 0..(5 * 120) {
+        step_rocket(&mut s, DT);
+    }
+    let speed = (s.velocity[0] * s.velocity[0]
+        + s.velocity[1] * s.velocity[1]
+        + s.velocity[2] * s.velocity[2])
+        .sqrt();
+    assert!(
+        speed < speed0 - 2.0,
+        "with drag, ground speed should drop: speed0={speed0} speed={speed}"
+    );
+    assert!(
+        s.velocity[0] < 120.0 - 2.0,
+        "horizontal component should decay, vx={}",
+        s.velocity[0]
+    );
+}
+
+#[test]
+fn air_drag_stronger_at_higher_ground_speed() {
+    // One step of quadratic drag: |Δv| ≈ (k/m) |v|² dt, so higher speed loses more speed.
+    let mut slow = RocketState::at_altitude(500.0);
+    slow.air_drag_enabled = true;
+    slow.velocity = [40.0, 0.0, 0.0];
+    slow.set_command(ControlCommand::default());
+    let slow_vx0 = slow.velocity[0];
+    step_rocket(&mut slow, DT);
+    let slow_loss = slow_vx0 - slow.velocity[0];
+
+    let mut fast = RocketState::at_altitude(500.0);
+    fast.air_drag_enabled = true;
+    fast.velocity = [120.0, 0.0, 0.0];
+    fast.set_command(ControlCommand::default());
+    let fast_vx0 = fast.velocity[0];
+    step_rocket(&mut fast, DT);
+    let fast_loss = fast_vx0 - fast.velocity[0];
+
+    assert!(slow_loss > 0.0, "slow case should decelerate, loss={slow_loss}");
+    assert!(
+        fast_loss > slow_loss * 2.0,
+        "higher ground speed should lose more per step: slow={slow_loss} fast={fast_loss}"
+    );
+}
+
+#[test]
+fn air_drag_k_matches_realistic_ballistic_coeff() {
+    use pga_rocket::sim::{AIR_BALLISTIC_COEFF, AIR_DENSITY, air_drag_k_from_mass};
+    let mass = 1000.0;
+    let k = air_drag_k_from_mass(mass);
+    let expected = AIR_DENSITY * mass / (2.0 * AIR_BALLISTIC_COEFF);
+    assert!((k - expected).abs() < 1e-12);
+    // Default params should use the same scale (not the old gamey k≈5).
+    let p = RocketParams::default();
+    assert!((p.air_drag_k - k).abs() < 1e-12);
+    assert!(p.air_drag_k < 0.5, "k should be O(0.1), got {}", p.air_drag_k);
+    // At 50 m/s, drag/weight should be a few percent (launch-vehicle-like).
+    let drag = p.air_drag_k * 50.0 * 50.0;
+    let weight = mass * GRAVITY;
+    let ratio = drag / weight;
+    assert!(
+        ratio > 0.01 && ratio < 0.08,
+        "drag/weight at 50 m/s should be ~few % (got {ratio:.4})"
+    );
 }

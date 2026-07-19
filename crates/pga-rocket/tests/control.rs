@@ -1,6 +1,6 @@
 //! Keyboard → control mapping tests against the real ControlMapper.
 
-use pga_rocket::control::{ControlMapper, KeySnapshot, map_keys};
+use pga_rocket::control::{ControlMapper, FULL_THROTTLE_RAMP_S, KeySnapshot, map_keys};
 use pga_rocket::sim::{ControlCommand, RocketState, step_rocket};
 
 #[test]
@@ -72,12 +72,13 @@ fn attitude_keys_set_pitch_yaw_roll() {
 
 #[test]
 fn map_keys_is_not_noop() {
-    // space, thrust_down, w, s, a, d, q, e, r
+    // space, thrust_down, f, w, s, a, d, q, e, r, l, t
     // A/D → roll, Q/E → yaw: d=roll_right, q=yaw_left
     let snap = map_keys(
-        true, false, true, false, false, true, true, false, false, false, false,
+        true, false, false, true, false, false, true, true, false, false, false, false,
     );
     assert!(snap.thrust_up);
+    assert!(!snap.thrust_full);
     assert!(snap.pitch_up);
     assert!(snap.roll_right);
     assert!(snap.yaw_left);
@@ -89,6 +90,53 @@ fn map_keys_is_not_noop() {
     assert_eq!(cmd.pitch, 1.0);
     assert_eq!(cmd.yaw, -1.0);
     assert_eq!(cmd.roll, 1.0);
+}
+
+#[test]
+fn f_key_reaches_full_throttle_in_500ms() {
+    let mut mapper = ControlMapper::default();
+    let keys = KeySnapshot {
+        thrust_full: true,
+        ..Default::default()
+    };
+    // Just under the ramp: should not quite hit 1.0 yet.
+    let almost = mapper.apply(&keys, FULL_THROTTLE_RAMP_S - 0.02);
+    assert!(
+        almost.throttle > 0.9 && almost.throttle < 1.0,
+        "near end of ramp: {}",
+        almost.throttle
+    );
+    let full = mapper.apply(&keys, 0.02);
+    assert!(
+        (full.throttle - 1.0).abs() < 1e-9,
+        "F held for 500ms from zero should reach full, got {}",
+        full.throttle
+    );
+    // Release holds at full.
+    let held = mapper.apply(&KeySnapshot::default(), 0.1);
+    assert!((held.throttle - 1.0).abs() < 1e-9);
+}
+
+#[test]
+fn f_key_from_partial_reaches_full_sooner() {
+    let mut mapper = ControlMapper {
+        command: ControlCommand {
+            throttle: 0.5,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let keys = KeySnapshot {
+        thrust_full: true,
+        ..Default::default()
+    };
+    // Remaining 0.5 at rate 1/0.5 ⇒ 0.25 s to full.
+    let cmd = mapper.apply(&keys, 0.25);
+    assert!(
+        (cmd.throttle - 1.0).abs() < 1e-9,
+        "from 0.5, F for 250ms should hit full, got {}",
+        cmd.throttle
+    );
 }
 
 #[test]

@@ -111,6 +111,7 @@ impl App {
             thrust_down: self.input.held(KeyCode::ControlLeft)
                 || self.input.held(KeyCode::ControlRight)
                 || self.input.held(KeyCode::KeyC),
+            thrust_full: self.input.held(KeyCode::KeyF),
             pitch_up: self.input.held(KeyCode::KeyW),
             pitch_down: self.input.held(KeyCode::KeyS),
             // A/D: roll, Q/E: yaw (swapped from classic A/D yaw layout).
@@ -197,7 +198,9 @@ impl App {
         }
 
         if keys.reset {
+            let air_drag_enabled = self.rocket.air_drag_enabled;
             self.rocket = RocketState::resting_on_pad();
+            self.rocket.air_drag_enabled = air_drag_enabled;
             self.control = ControlMapper::default();
             self.landing.disable();
             self.target_landing.disable();
@@ -283,7 +286,7 @@ impl App {
             let ctx = gui.context();
             draw_params_panel(
                 &ctx,
-                &self.rocket,
+                &mut self.rocket,
                 &self.landing,
                 &self.target_landing,
                 fps,
@@ -331,7 +334,7 @@ impl ApplicationHandler for App {
         }
         let attrs = Window::default_attributes()
             .with_title(
-                "PGA Rocket — Space/Ctrl throttle, WASD/QE attitude, L land, T target-land, R reset",
+                "PGA Rocket — Space/Ctrl/F throttle, WASD/QE attitude, L land, T target-land, R reset",
             )
             .with_inner_size(LogicalSize::new(1280.0, 720.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));

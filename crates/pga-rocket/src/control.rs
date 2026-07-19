@@ -2,11 +2,16 @@
 
 use crate::sim::ControlCommand;
 
+/// Time (s) for F-key full-throttle ramp from 0 → 1.
+pub const FULL_THROTTLE_RAMP_S: f64 = 0.5;
+
 /// Snapshot of held control keys for one frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct KeySnapshot {
     pub thrust_up: bool,
     pub thrust_down: bool,
+    /// Hold F: ramp throttle to full in [`FULL_THROTTLE_RAMP_S`] from zero.
+    pub thrust_full: bool,
     pub pitch_up: bool,
     pub pitch_down: bool,
     pub yaw_left: bool,
@@ -23,6 +28,7 @@ pub struct KeySnapshot {
 /// Maps key state into incremental control updates.
 ///
 /// - Space: raise throttle
+/// - F: ramp to full throttle in 500 ms (from zero)
 /// - Left Ctrl / C: lower throttle
 /// - W/S: pitch (main-engine gimbal about body +X; needs thrust)
 /// - Q/E: yaw (main-engine gimbal about body +Z; needs thrust)
@@ -32,7 +38,7 @@ pub struct KeySnapshot {
 /// - T: signal target-pad landing toggle (caller applies)
 #[derive(Clone, Debug)]
 pub struct ControlMapper {
-    /// Throttle units per second while thrust keys held.
+    /// Throttle units per second while Space / Ctrl thrust keys held.
     pub throttle_rate: f64,
     /// Current command (persistent throttle).
     pub command: ControlCommand,
@@ -50,8 +56,12 @@ impl Default for ControlMapper {
 impl ControlMapper {
     /// Apply held keys over `dt` and return the resulting command.
     pub fn apply(&mut self, keys: &KeySnapshot, dt: f64) -> ControlCommand {
-        // Throttle: hold Space to increase, Ctrl/C to decrease; release leaves last value.
+        // Throttle: Space up, F full ramp, Ctrl/C down; release leaves last value.
         let mut thr = self.command.throttle;
+        if keys.thrust_full {
+            // 0 → 1 in FULL_THROTTLE_RAMP_S; partial start reaches 1 sooner.
+            thr += dt / FULL_THROTTLE_RAMP_S;
+        }
         if keys.thrust_up {
             thr += self.throttle_rate * dt;
         }
@@ -94,6 +104,7 @@ fn axis(pos: bool, neg: bool) -> f64 {
 pub fn map_keys(
     space: bool,
     thrust_down: bool,
+    f: bool,
     w: bool,
     s: bool,
     a: bool,
@@ -107,6 +118,7 @@ pub fn map_keys(
     KeySnapshot {
         thrust_up: space,
         thrust_down,
+        thrust_full: f,
         pitch_up: w,
         pitch_down: s,
         // A/D ↔ Q/E swapped relative to classic FPS layout: A/D roll, Q/E yaw.
