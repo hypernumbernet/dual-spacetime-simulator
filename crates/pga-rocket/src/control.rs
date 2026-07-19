@@ -2,16 +2,34 @@
 
 use crate::sim::ControlCommand;
 
-/// Time (s) for F-key full-throttle ramp from 0 → 1.
-pub const FULL_THROTTLE_RAMP_S: f64 = 0.5;
+/// Time (s) for F / C latch ramps: 0 → 1 (F) or 1 → 0 (C) from the far end.
+pub const THROTTLE_LATCH_RAMP_S: f64 = 0.2;
 
-/// Snapshot of held control keys for one frame.
+/// Backward-compatible alias for the full-throttle ramp duration.
+pub const FULL_THROTTLE_RAMP_S: f64 = THROTTLE_LATCH_RAMP_S;
+
+/// One-shot throttle latch started by F (full) or C (cut). Continues after key release.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ThrottleLatch {
+    #[default]
+    None,
+    /// Ramp toward 1.0 at `1 / THROTTLE_LATCH_RAMP_S` per second.
+    ToFull,
+    /// Ramp toward 0.0 at the same rate.
+    ToZero,
+}
+
+/// Snapshot of held / edge-triggered control keys for one frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct KeySnapshot {
+    /// Space held: raise throttle while held.
     pub thrust_up: bool,
+    /// Ctrl held: lower throttle while held.
     pub thrust_down: bool,
-    /// Hold F: ramp throttle to full in [`FULL_THROTTLE_RAMP_S`] from zero.
+    /// F just pressed: start latched ramp to full (continues after release).
     pub thrust_full: bool,
+    /// C just pressed: start latched ramp to zero (continues after release).
+    pub thrust_cut: bool,
     pub pitch_up: bool,
     pub pitch_down: bool,
     pub yaw_left: bool,
@@ -27,9 +45,10 @@ pub struct KeySnapshot {
 
 /// Maps key state into incremental control updates.
 ///
-/// - Space: raise throttle
-/// - F: ramp to full throttle in 500 ms (from zero)
-/// - Left Ctrl / C: lower throttle
+/// - Space: raise throttle while held
+/// - Ctrl: lower throttle while held
+/// - F: latch ramp to full in [`THROTTLE_LATCH_RAMP_S`] (no hold needed)
+/// - C: latch ramp to off in the same duration (no hold needed)
 /// - W/S: pitch (main-engine gimbal about body +X; needs thrust)
 /// - Q/E: yaw (main-engine gimbal about body +Z; needs thrust)
 /// - A/D: roll (four center RCS thrusters about body +Y; works on the pad too)
@@ -38,10 +57,12 @@ pub struct KeySnapshot {
 /// - T: signal target-pad landing toggle (caller applies)
 #[derive(Clone, Debug)]
 pub struct ControlMapper {
-    /// Throttle units per second while Space / Ctrl thrust keys held.
+    /// Throttle units per second while Space / Ctrl held.
     pub throttle_rate: f64,
     /// Current command (persistent throttle).
     pub command: ControlCommand,
+    /// Active one-shot F/C ramp (continues after key release).
+    pub throttle_latch: ThrottleLatch,
 }
 
 impl Default for ControlMapper {
@@ -49,6 +70,7 @@ impl Default for ControlMapper {
         Self {
             throttle_rate: 0.45,
             command: ControlCommand::default(),
+            throttle_latch: ThrottleLatch::None,
         }
     }
 }
@@ -56,12 +78,36 @@ impl Default for ControlMapper {
 impl ControlMapper {
     /// Apply held keys over `dt` and return the resulting command.
     pub fn apply(&mut self, keys: &KeySnapshot, dt: f64) -> ControlCommand {
-        // Throttle: Space up, F full ramp, Ctrl/C down; release leaves last value.
-        let mut thr = self.command.throttle;
+        // Edge-triggered latches (F / C): start ramp; the other latch cancels this one.
         if keys.thrust_full {
-            // 0 → 1 in FULL_THROTTLE_RAMP_S; partial start reaches 1 sooner.
-            thr += dt / FULL_THROTTLE_RAMP_S;
+            self.throttle_latch = ThrottleLatch::ToFull;
         }
+        if keys.thrust_cut {
+            self.throttle_latch = ThrottleLatch::ToZero;
+        }
+
+        let mut thr = self.command.throttle;
+        let ramp = dt / THROTTLE_LATCH_RAMP_S.max(1e-6);
+
+        match self.throttle_latch {
+            ThrottleLatch::ToFull => {
+                thr += ramp;
+                if thr >= 1.0 {
+                    thr = 1.0;
+                    self.throttle_latch = ThrottleLatch::None;
+                }
+            }
+            ThrottleLatch::ToZero => {
+                thr -= ramp;
+                if thr <= 0.0 {
+                    thr = 0.0;
+                    self.throttle_latch = ThrottleLatch::None;
+                }
+            }
+            ThrottleLatch::None => {}
+        }
+
+        // Hold keys: Space up, Ctrl down (release leaves last value).
         if keys.thrust_up {
             thr += self.throttle_rate * dt;
         }
@@ -85,10 +131,11 @@ impl ControlMapper {
         self.command
     }
 
-    /// Zero throttle and attitude.
+    /// Zero throttle and attitude; clear any F/C latch.
     #[allow(dead_code)]
     pub fn cut_engines(&mut self) {
         self.command = ControlCommand::default();
+        self.throttle_latch = ThrottleLatch::None;
     }
 }
 
@@ -101,10 +148,13 @@ fn axis(pos: bool, neg: bool) -> f64 {
 }
 
 /// Build a key snapshot from boolean flags (mirrors winit KeyCode mapping).
+///
+/// `f` / `c` are edge presses (full / cut latch); `space` / `thrust_down` are holds.
 pub fn map_keys(
     space: bool,
     thrust_down: bool,
     f: bool,
+    c: bool,
     w: bool,
     s: bool,
     a: bool,
@@ -119,6 +169,7 @@ pub fn map_keys(
         thrust_up: space,
         thrust_down,
         thrust_full: f,
+        thrust_cut: c,
         pitch_up: w,
         pitch_down: s,
         // A/D ↔ Q/E swapped relative to classic FPS layout: A/D roll, Q/E yaw.

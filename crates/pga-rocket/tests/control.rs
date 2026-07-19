@@ -1,6 +1,8 @@
 //! Keyboard → control mapping tests against the real ControlMapper.
 
-use pga_rocket::control::{ControlMapper, FULL_THROTTLE_RAMP_S, KeySnapshot, map_keys};
+use pga_rocket::control::{
+    ControlMapper, KeySnapshot, THROTTLE_LATCH_RAMP_S, ThrottleLatch, map_keys,
+};
 use pga_rocket::sim::{ControlCommand, RocketState, step_rocket};
 
 #[test]
@@ -72,13 +74,14 @@ fn attitude_keys_set_pitch_yaw_roll() {
 
 #[test]
 fn map_keys_is_not_noop() {
-    // space, thrust_down, f, w, s, a, d, q, e, r, l, t
+    // space, thrust_down, f, c, w, s, a, d, q, e, r, l, t
     // A/D → roll, Q/E → yaw: d=roll_right, q=yaw_left
     let snap = map_keys(
-        true, false, false, true, false, false, true, true, false, false, false, false,
+        true, false, false, false, true, false, false, true, true, false, false, false, false,
     );
     assert!(snap.thrust_up);
     assert!(!snap.thrust_full);
+    assert!(!snap.thrust_cut);
     assert!(snap.pitch_up);
     assert!(snap.roll_right);
     assert!(snap.yaw_left);
@@ -93,28 +96,86 @@ fn map_keys_is_not_noop() {
 }
 
 #[test]
-fn f_key_reaches_full_throttle_in_500ms() {
+fn f_key_latch_reaches_full_in_200ms_after_release() {
     let mut mapper = ControlMapper::default();
-    let keys = KeySnapshot {
+    // One-frame edge: F pressed, then released for the rest of the ramp.
+    let press = KeySnapshot {
         thrust_full: true,
         ..Default::default()
     };
-    // Just under the ramp: should not quite hit 1.0 yet.
-    let almost = mapper.apply(&keys, FULL_THROTTLE_RAMP_S - 0.02);
+    let after_press = mapper.apply(&press, 1.0 / 60.0);
+    assert!(after_press.throttle > 0.0);
+    assert_eq!(mapper.throttle_latch, ThrottleLatch::ToFull);
+
+    let released = KeySnapshot::default();
+    let mut t = 1.0 / 60.0;
+    while t < THROTTLE_LATCH_RAMP_S - 0.02 {
+        mapper.apply(&released, 1.0 / 60.0);
+        t += 1.0 / 60.0;
+    }
     assert!(
-        almost.throttle > 0.9 && almost.throttle < 1.0,
-        "near end of ramp: {}",
-        almost.throttle
+        mapper.command.throttle < 1.0,
+        "should still be ramping before 200ms, thr={}",
+        mapper.command.throttle
     );
-    let full = mapper.apply(&keys, 0.02);
+    // Finish the remaining time with keys released.
+    let full = mapper.apply(&released, THROTTLE_LATCH_RAMP_S);
     assert!(
         (full.throttle - 1.0).abs() < 1e-9,
-        "F held for 500ms from zero should reach full, got {}",
+        "F latch should reach full without holding, got {}",
         full.throttle
     );
-    // Release holds at full.
-    let held = mapper.apply(&KeySnapshot::default(), 0.1);
-    assert!((held.throttle - 1.0).abs() < 1e-9);
+    assert_eq!(mapper.throttle_latch, ThrottleLatch::None);
+}
+
+#[test]
+fn c_key_latch_cuts_to_zero_after_release() {
+    let mut mapper = ControlMapper {
+        command: ControlCommand {
+            throttle: 1.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let press = KeySnapshot {
+        thrust_cut: true,
+        ..Default::default()
+    };
+    mapper.apply(&press, 1.0 / 60.0);
+    assert_eq!(mapper.throttle_latch, ThrottleLatch::ToZero);
+
+    let released = KeySnapshot::default();
+    let cut = mapper.apply(&released, THROTTLE_LATCH_RAMP_S);
+    assert!(
+        cut.throttle.abs() < 1e-9,
+        "C latch should reach zero without holding, got {}",
+        cut.throttle
+    );
+    assert_eq!(mapper.throttle_latch, ThrottleLatch::None);
+}
+
+#[test]
+fn f_then_c_latch_prefers_cut() {
+    let mut mapper = ControlMapper::default();
+    mapper.apply(
+        &KeySnapshot {
+            thrust_full: true,
+            ..Default::default()
+        },
+        0.05,
+    );
+    assert!(mapper.command.throttle > 0.0);
+    assert_eq!(mapper.throttle_latch, ThrottleLatch::ToFull);
+    // C cancels full latch and starts cut (small dt so we do not finish the ramp).
+    mapper.apply(
+        &KeySnapshot {
+            thrust_cut: true,
+            ..Default::default()
+        },
+        1.0 / 120.0,
+    );
+    assert_eq!(mapper.throttle_latch, ThrottleLatch::ToZero);
+    assert!(mapper.command.throttle < 1.0);
 }
 
 #[test]
@@ -126,15 +187,18 @@ fn f_key_from_partial_reaches_full_sooner() {
         },
         ..Default::default()
     };
-    let keys = KeySnapshot {
-        thrust_full: true,
-        ..Default::default()
-    };
-    // Remaining 0.5 at rate 1/0.5 ⇒ 0.25 s to full.
-    let cmd = mapper.apply(&keys, 0.25);
+    // Edge press then hold released for remaining 0.5 at rate 1/0.2 ⇒ 0.1 s.
+    mapper.apply(
+        &KeySnapshot {
+            thrust_full: true,
+            ..Default::default()
+        },
+        0.0,
+    );
+    let cmd = mapper.apply(&KeySnapshot::default(), 0.1);
     assert!(
         (cmd.throttle - 1.0).abs() < 1e-9,
-        "from 0.5, F for 250ms should hit full, got {}",
+        "from 0.5, F latch for 100ms should hit full, got {}",
         cmd.throttle
     );
 }

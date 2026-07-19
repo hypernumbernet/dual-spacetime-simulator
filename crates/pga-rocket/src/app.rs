@@ -1,6 +1,6 @@
 //! winit application: window, Vulkan, sim step, keyboard control, render loop.
 
-use crate::control::{ControlMapper, KeySnapshot};
+use crate::control::{ControlMapper, KeySnapshot, ThrottleLatch};
 use crate::integration::Gui;
 use crate::landing::LandingAutopilot;
 use crate::mesh::{GRASS_METERS_PER_TILE, hud_text, random_target_xz};
@@ -108,10 +108,11 @@ impl App {
     fn keys_from_input(&self) -> KeySnapshot {
         KeySnapshot {
             thrust_up: self.input.held(KeyCode::Space),
+            // Ctrl only: hold to lower. C is a one-shot cut latch (see thrust_cut).
             thrust_down: self.input.held(KeyCode::ControlLeft)
-                || self.input.held(KeyCode::ControlRight)
-                || self.input.held(KeyCode::KeyC),
-            thrust_full: self.input.held(KeyCode::KeyF),
+                || self.input.held(KeyCode::ControlRight),
+            thrust_full: self.input.just_pressed(KeyCode::KeyF),
+            thrust_cut: self.input.just_pressed(KeyCode::KeyC),
             pitch_up: self.input.held(KeyCode::KeyW),
             pitch_down: self.input.held(KeyCode::KeyS),
             // A/D: roll, Q/E: yaw (swapped from classic A/D yaw layout).
@@ -228,6 +229,7 @@ impl App {
         // mode resumes at the same throttle (no enter-time snapshot needed).
         if using_autopilot {
             self.control.command.throttle = cmd.throttle;
+            self.control.throttle_latch = ThrottleLatch::None;
         }
 
         self.accum += dt as f64;
@@ -343,7 +345,7 @@ impl ApplicationHandler for App {
         }
         let attrs = Window::default_attributes()
             .with_title(
-                "PGA Rocket — Space/Ctrl/F throttle, WASD/QE attitude, L land, T target-land, R reset",
+                "PGA Rocket — Space/Ctrl hold, F full, C cut, WASD/QE attitude, L land, T target, R reset",
             )
             .with_inner_size(LogicalSize::new(1280.0, 720.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));

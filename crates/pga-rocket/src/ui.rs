@@ -186,8 +186,9 @@ fn camera_section(
 fn help_section(ui: &mut egui::Ui) {
     section(ui, "Controls");
     for line in [
-        "Space / Ctrl: throttle",
-        "F: full throttle (0.5s)",
+        "Space / Ctrl: hold throttle",
+        "F: full (0.2s latch)",
+        "C: cut (0.2s latch)",
         "W/S: pitch (needs thr)",
         "Q/E: yaw (needs thr)",
         "A/D: roll RCS",
