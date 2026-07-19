@@ -16,6 +16,7 @@ pub use control::{
     ControlMapper, KeySnapshot, THROTTLE_LATCH_RAMP_S, ThrottleLatch, map_keys,
 };
 pub use landing::LandingAutopilot;
+pub use fuzzy::{LONG_CRUISE_ALT_M as LONG_RANGE_CRUISE_ALT_M, LONG_RANGE_M};
 pub use target_landing::{
     inside_target_pad, TargetLandingAutopilot, TargetPhase, CLIMB_ALT_M, TARGET_PAD_HALF_M,
 };

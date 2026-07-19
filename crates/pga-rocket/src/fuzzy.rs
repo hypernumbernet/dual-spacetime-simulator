@@ -488,6 +488,75 @@ pub fn cruise_brake_weight(delta_v: f64, v_brake_enter: f64, v_brake_exit: f64) 
     ramp(delta_v, lo, hi)
 }
 
+// --- Long-range full-throttle altitude-hold cruise ---------------------------
+
+/// Horizontal range (m) where long-range full-throttle cruise fully engages.
+pub const LONG_RANGE_M: f64 = 5000.0;
+/// Soft shoulder half-width (m) around [`LONG_RANGE_M`].
+pub const LONG_RANGE_SHOULDER_M: f64 = 500.0;
+/// Target CoM altitude (m) while in long-range cruise.
+pub const LONG_CRUISE_ALT_M: f64 = 800.0;
+
+/// Membership for long-range cruise: 0 well below 5 km, 1 well above.
+///
+/// Shoulder 4.5–5.5 km so the hand-off from 800 m full-throttle cruise into
+/// the normal ~500 m envelope cruise is continuous.
+#[inline]
+pub fn long_range_weight(range_m: f64) -> f64 {
+    ramp(
+        range_m,
+        LONG_RANGE_M - LONG_RANGE_SHOULDER_M,
+        LONG_RANGE_M + LONG_RANGE_SHOULDER_M,
+    )
+}
+
+/// Airplane-style pitch command at **full throttle**: body-up · world-up (`cos`).
+///
+/// Priority is always go-toward-target at full T. Altitude is the elevator:
+///   `a_y = (T/m)·cos − g = g·(cos/hover − 1)` at thr=1.
+/// Equilibrium hold: `cos ≈ hover` (≈1/3 for T/W=3).
+/// Nose-up (higher cos) climbs; nose-down / deeper lean (lower cos) sinks.
+///
+/// Wide authority so pitch alone can correct hundreds of metres without
+/// touching the throttle. Caller must allow lean past ~acos(0.2) and must
+/// **not** flip-recover until well past that (see long-cruise attitude gate).
+#[inline]
+pub fn long_range_hold_cos(alt: f64, alt_tgt: f64, vy: f64, hover: f64) -> f64 {
+    let e = alt_tgt - alt; // + ⇒ below target (need nose-up)
+    // Fuzzy vertical-rate schedule (elevator, m/s).
+    let mu_very_low = ramp(e, 60.0, 200.0);
+    let mu_low = trap(e, 10.0, 30.0, 80.0, 150.0);
+    let mu_near = trap(e, -50.0, -20.0, 20.0, 50.0);
+    let mu_high = trap(e, -200.0, -100.0, -40.0, -15.0);
+    let mu_very_high = ramp_down(e, -350.0, -150.0);
+    let v_des = defuzz_weighted(
+        &[
+            (mu_very_low, 12.0),
+            (mu_low, 5.0),
+            (mu_near, 0.0),
+            (mu_high, -8.0),
+            (mu_very_high, -18.0),
+        ],
+        (0.08 * e).clamp(-20.0, 14.0),
+    );
+    // Pitch-rate damping on vertical speed (still attitude, not throttle).
+    let a_cmd = (0.65 * (v_des - vy)).clamp(-12.0, 8.0);
+    let g = 9.80665;
+    // cos = m(g+a)/T = hover * (g+a)/g
+    let cos_eq = hover * (g + a_cmd) / g;
+    // Dive (low cos) down to ~0.18 ≈ 80° from vertical; climb up to ~0.62.
+    // Stay above flip-gate used by long-cruise attitude (0.12).
+    cos_eq.clamp(0.18, 0.62)
+}
+
+/// World-frame unit-ish aim for long-range go: lean `acos(cos_up)` toward `(ux,uz)`.
+#[inline]
+pub fn long_range_go_aim(ux: f64, uz: f64, cos_up: f64) -> [f64; 3] {
+    let c = cos_up.clamp(0.05, 0.999);
+    let s = (1.0 - c * c).max(0.0).sqrt();
+    [ux * s, c, uz * s]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,6 +742,37 @@ mod tests {
         let c = cruise_brake_weight(2.0, 1.0, -2.0);
         assert!(a < b && b < c);
         assert!(a < 0.05 && c > 0.95);
+    }
+
+    #[test]
+    fn long_range_weight_edges() {
+        assert!(long_range_weight(3000.0) < 0.01);
+        assert!(long_range_weight(6000.0) > 0.99);
+        let mid = long_range_weight(LONG_RANGE_M);
+        assert!(mid > 0.4 && mid < 0.6, "mid={mid}");
+    }
+
+    #[test]
+    fn long_range_hold_cos_pitch_elevator() {
+        let hover = 1.0 / 3.0;
+        let cos_low = long_range_hold_cos(500.0, LONG_CRUISE_ALT_M, 0.0, hover);
+        let cos_at = long_range_hold_cos(LONG_CRUISE_ALT_M, LONG_CRUISE_ALT_M, 0.0, hover);
+        let cos_hi = long_range_hold_cos(1100.0, LONG_CRUISE_ALT_M, 5.0, hover);
+        // Below → nose-up (higher cos); above → dive lean (lower cos).
+        assert!(cos_low > cos_at, "cos_low={cos_low} cos_at={cos_at}");
+        assert!(cos_hi < cos_at, "cos_hi={cos_hi} cos_at={cos_at}");
+        // Dive must go below hover so full-T can sink; climb above hover.
+        assert!(cos_hi < hover, "dive cos={cos_hi} hover={hover}");
+        assert!(cos_low > hover, "climb cos={cos_low} hover={hover}");
+        assert!(cos_hi >= 0.18 - 1e-9 && cos_low <= 0.62 + 1e-9);
+    }
+
+    #[test]
+    fn long_range_go_aim_unit_length() {
+        let a = long_range_go_aim(1.0, 0.0, 0.5);
+        let len = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+        assert!((len - 1.0).abs() < 1e-9, "len={len}");
+        assert!(a[0] > 0.5 && a[1] > 0.4);
     }
 }
 

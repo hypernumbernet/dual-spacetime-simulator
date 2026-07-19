@@ -324,8 +324,9 @@ impl LandingAutopilot {
 
         update_lock_latch(&mut self.attitude_locked, tilt, omega_sq, vh_sq);
 
-        // Free-field L-mode: tight upright lock.
-        if state.contacting
+        // Free-field L-mode only (no pad target): tight upright lock.
+        if target_xz.is_none()
+            && state.contacting
             && vy.abs() < 0.5
             && tilt < TILT_LOCK
             && omega_sq < 0.15 * 0.15
