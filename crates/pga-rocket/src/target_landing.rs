@@ -72,6 +72,10 @@ const COS_TILT_AIM_AIR: f64 = 0.10;
 const LONG_AIRPLANE_RANGE_M: f64 = 1500.0;
 /// Planning throttle fraction for horizontal brake accel (matches L-mode burn plan).
 const BRAKE_PLAN_FRAC: f64 = 0.95;
+/// `tan(LEAN_CRUISE)` — precomputed so hot path avoids a transcendentals call.
+const TAN_LEAN_CRUISE: f64 = 0.9630205290256505;
+/// Horizontal propulsive decel at [`LEAN_CRUISE`] reverse lean (m/s²).
+const A_PROP_CRUISE: f64 = BRAKE_PLAN_FRAC * GRAVITY * TAN_LEAN_CRUISE;
 /// Geometric hysteresis (m) when releasing latched reverse lean — must exceed
 /// hand-off cheby so go↔brake does not chatter at the pad edge.
 const BRAKE_RELEASE_MARGIN_M: f64 = HANDOFF_CHEBY_MAX_M;
@@ -270,11 +274,56 @@ fn cruise_v_des_y(alt: f64, vy: f64) -> f64 {
     }
 }
 
-/// Horizontal thrust acceleration at planned brake throttle with vertical-neutral
-/// reverse lean (`a ≈ f·g·tan θ`).
-#[inline]
-fn horizontal_brake_prop_accel(lean_max: f64) -> f64 {
-    (BRAKE_PLAN_FRAC * GRAVITY * lean_max.tan()).max(0.5)
+/// Shared per-frame inputs for stop-distance prediction and its inverse.
+#[derive(Clone, Copy, Debug)]
+struct HorizontalBrakePlan {
+    beta: f64,
+    a_prop: f64,
+    v_end: f64,
+    t_flip_go: f64,
+    d_stop: f64,
+}
+
+impl HorizontalBrakePlan {
+    fn evaluate(
+        state: &RocketState,
+        mass: f64,
+        ux: f64,
+        uz: f64,
+        vh: f64,
+        v_approach: f64,
+        in_airplane_range: bool,
+        wind_approach: f64,
+    ) -> Self {
+        let beta = if state.moon_mode {
+            0.0
+        } else {
+            state.params.air_drag_k / mass.max(1e-6)
+        };
+        let a_prop = A_PROP_CRUISE;
+        let v_end = VH_HANDOFF_MAX;
+        let v_closing = (v_approach - wind_approach).max(0.0);
+        let flip_brake = brake_flip_angle(state, ux, uz, vh, LEAN_CRUISE);
+        let t_flip_brake = brake_flip_time(flip_brake);
+        let go_lean = if in_airplane_range {
+            LEAN_LONG_MAX
+        } else {
+            LEAN_CRUISE
+        };
+        let t_flip_go = if (go_lean - LEAN_CRUISE).abs() < 1e-9 {
+            t_flip_brake
+        } else {
+            brake_flip_time(brake_flip_angle(state, ux, uz, vh, go_lean))
+        };
+        let d_stop = predicted_stop_distance(v_closing, v_end, a_prop, beta, t_flip_brake);
+        Self {
+            beta,
+            a_prop,
+            v_end,
+            t_flip_go,
+            d_stop,
+        }
+    }
 }
 
 /// Braking distance along approach axis from `v` to `v_end` with propulsion `a_prop`
@@ -346,24 +395,33 @@ fn predicted_stop_distance(
 }
 
 /// Max approach speed (m/s) that still fits in `range_eff` before braking.
+///
+/// Vacuum seed from `v·t + (v²−v_end²)/(2a) = range`, then monotone bisection
+/// (≤16 steps) so the result matches `predicted_stop_distance ≤ range_eff`.
+#[inline]
 fn allowed_approach_speed(
     range_eff: f64,
     v_end: f64,
     a_prop: f64,
     beta: f64,
-    t_flip_base: f64,
+    t_flip: f64,
 ) -> f64 {
     if range_eff <= 1e-6 {
         return v_end;
     }
-    let mut lo = v_end;
-    let mut hi = 500.0;
-    while predicted_stop_distance(hi, v_end, a_prop, beta, t_flip_base) < range_eff && hi < 800.0 {
+    let disc = a_prop * a_prop * t_flip * t_flip + 2.0 * a_prop * range_eff + v_end * v_end;
+    let mut hi = if disc > 0.0 {
+        (-a_prop * t_flip + disc.sqrt()).max(v_end + 1.0)
+    } else {
+        v_end + 1.0
+    };
+    while predicted_stop_distance(hi, v_end, a_prop, beta, t_flip) < range_eff && hi < 900.0 {
         hi *= 1.5;
     }
-    for _ in 0..48 {
+    let mut lo = v_end;
+    for _ in 0..16 {
         let mid = 0.5 * (lo + hi);
-        if predicted_stop_distance(mid, v_end, a_prop, beta, t_flip_base) <= range_eff {
+        if predicted_stop_distance(mid, v_end, a_prop, beta, t_flip) <= range_eff {
             lo = mid;
         } else {
             hi = mid;
@@ -463,44 +521,42 @@ fn transit_command(
     let terminal = lofted && range <= RANGE_TERMINAL_M;
     let range_eff = (range - RANGE_TERMINAL_M).max(0.0);
 
-    let beta = if state.moon_mode {
-        0.0
+    let plan = (!terminal).then(|| {
+        HorizontalBrakePlan::evaluate(
+            state,
+            mass,
+            ux,
+            uz,
+            vh,
+            v_approach,
+            in_airplane_range,
+            0.0, // future: wind dot approach axis
+        )
+    });
+    let brake = if terminal {
+        false
     } else {
-        state.params.air_drag_k / mass.max(1e-6)
+        let p = plan.unwrap();
+        update_brake_latch(brake_latched, terminal, range_eff, p.d_stop, v_approach)
     };
-    let a_prop = horizontal_brake_prop_accel(LEAN_CRUISE);
-    let flip_angle = brake_flip_angle(state, ux, uz, vh, LEAN_CRUISE);
-    let t_flip = brake_flip_time(flip_angle);
-    let wind_approach = 0.0; // future: wind dot approach axis
-    let v_closing = (v_approach - wind_approach).max(0.0);
-    let d_stop = predicted_stop_distance(
-        v_closing,
-        VH_HANDOFF_MAX,
-        a_prop,
-        beta,
-        t_flip,
-    );
-    let brake = update_brake_latch(brake_latched, terminal, range_eff, d_stop, v_approach);
     let airplane_go = in_airplane_range && !brake;
 
-    let t_flip_go = brake_flip_time(brake_flip_angle(
-        state,
-        ux,
-        uz,
-        vh,
-        if in_airplane_range {
-            LEAN_LONG_MAX
-        } else {
-            LEAN_CRUISE
-        },
-    ));
     let v_allow = if terminal {
         (0.12 * (range - 6.0)).clamp(0.0, 10.0)
-    } else if burn_up || ballistic {
-        allowed_approach_speed(range_eff, VH_HANDOFF_MAX, a_prop, beta, t_flip_go)
-            .min(V_CLIMB_H_MAX)
     } else {
-        allowed_approach_speed(range_eff, VH_HANDOFF_MAX, a_prop, beta, t_flip_go)
+        let p = plan.unwrap();
+        let v = allowed_approach_speed(
+            range_eff,
+            p.v_end,
+            p.a_prop,
+            p.beta,
+            p.t_flip_go,
+        );
+        if burn_up || ballistic {
+            v.min(V_CLIMB_H_MAX)
+        } else {
+            v
+        }
     };
 
     let need_x = ux * v_allow - vx;
@@ -546,8 +602,8 @@ fn transit_command(
             (0.08 + 0.025 * vh).clamp(0.10, 0.28)
         };
         ([k * need_x, AIM_Y_BIAS, k * need_z], lean, false, false)
-    } else if far_or_overshoot || (brake && !terminal) {
-        // Mid/long range: go free vector or latched reverse-brake (discrete aim).
+    } else if far_or_overshoot {
+        // Mid/long range: discrete go or reverse-brake aim.
         let s = vh.max(1.0);
         if brake {
             ([-vx / s, AIM_Y_BIAS, -vz / s], LEAN_CRUISE, true, false)
@@ -743,19 +799,22 @@ mod tests {
     }
 
     #[test]
+    fn a_prop_cruise_matches_tan_formula() {
+        let a = BRAKE_PLAN_FRAC * GRAVITY * TAN_LEAN_CRUISE;
+        assert!((a - A_PROP_CRUISE).abs() < 1e-9);
+    }
+
+    #[test]
     fn vacuum_burn_distance_matches_kinematics() {
-        let a = horizontal_brake_prop_accel(LEAN_CRUISE);
-        let d = horizontal_burn_distance(40.0, VH_HANDOFF_MAX, a, 0.0);
-        let expected = (40.0 * 40.0 - VH_HANDOFF_MAX * VH_HANDOFF_MAX) / (2.0 * a);
+        let d = horizontal_burn_distance(40.0, VH_HANDOFF_MAX, A_PROP_CRUISE, 0.0);
+        let expected = (40.0 * 40.0 - VH_HANDOFF_MAX * VH_HANDOFF_MAX) / (2.0 * A_PROP_CRUISE);
         assert!((d - expected).abs() < 1e-6, "d={d} expected={expected}");
     }
 
     #[test]
     fn drag_shortens_burn_distance() {
-        let a = horizontal_brake_prop_accel(LEAN_CRUISE);
-        let beta = 0.001;
-        let d_vac = horizontal_burn_distance(60.0, VH_HANDOFF_MAX, a, 0.0);
-        let d_drag = horizontal_burn_distance(60.0, VH_HANDOFF_MAX, a, beta);
+        let d_vac = horizontal_burn_distance(60.0, VH_HANDOFF_MAX, A_PROP_CRUISE, 0.0);
+        let d_drag = horizontal_burn_distance(60.0, VH_HANDOFF_MAX, A_PROP_CRUISE, 0.001);
         assert!(
             d_drag < d_vac,
             "drag should help braking: vac={d_vac} drag={d_drag}"
@@ -768,20 +827,31 @@ mod tests {
         state.contacting = false;
         state.velocity = [50.0, 0.0, 0.0];
         state.params.max_thrust *= 0.5;
-        let a = horizontal_brake_prop_accel(LEAN_CRUISE);
         let beta = state.params.air_drag_k / state.params.mass;
-        let d_hi = predicted_stop_distance(50.0, VH_HANDOFF_MAX, a, beta, 0.5);
-        let a_lo = horizontal_brake_prop_accel(LEAN_CRUISE) * 0.5;
+        let d_hi = predicted_stop_distance(50.0, VH_HANDOFF_MAX, A_PROP_CRUISE, beta, 0.5);
+        let a_lo = A_PROP_CRUISE * 0.5;
         let d_lo = predicted_stop_distance(50.0, VH_HANDOFF_MAX, a_lo, beta, 0.5);
         assert!(d_lo > d_hi, "weaker thrust needs longer stop: hi={d_hi} lo={d_lo}");
         let _ = state;
     }
 
     #[test]
+    fn allowed_speed_inverts_stop_distance_vacuum() {
+        let a = A_PROP_CRUISE;
+        let t = 0.5;
+        let range = 400.0;
+        let v = allowed_approach_speed(range, VH_HANDOFF_MAX, a, 0.0, t);
+        let d = predicted_stop_distance(v, VH_HANDOFF_MAX, a, 0.0, t);
+        assert!(
+            (d - range).abs() < 0.5,
+            "v={v} d={d} range={range}"
+        );
+    }
+
+    #[test]
     fn allowed_speed_grows_with_range() {
-        let a = horizontal_brake_prop_accel(LEAN_CRUISE);
-        let v_near = allowed_approach_speed(200.0, VH_HANDOFF_MAX, a, 0.0, 0.5);
-        let v_far = allowed_approach_speed(800.0, VH_HANDOFF_MAX, a, 0.0, 0.5);
+        let v_near = allowed_approach_speed(200.0, VH_HANDOFF_MAX, A_PROP_CRUISE, 0.0, 0.5);
+        let v_far = allowed_approach_speed(800.0, VH_HANDOFF_MAX, A_PROP_CRUISE, 0.0, 0.5);
         assert!(v_far > v_near, "v_near={v_near} v_far={v_far}");
     }
 
