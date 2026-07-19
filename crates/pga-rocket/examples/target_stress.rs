@@ -109,13 +109,15 @@ fn main() {
 
         let p = state.position();
         let on_target = inside_target_pad(p, sc.target);
-        let ok = !state.destroyed && ap.complete && on_target;
+        let center_err = (p[0] - sc.target[0]).abs().max((p[2] - sc.target[1]).abs());
+        // Survival: on-pad + complete. Soft center preference (≤ 30 m = pad half).
+        let ok = !state.destroyed && ap.complete && on_target && center_err <= 30.0;
         if !ok {
             fails += 1;
         }
         let mean_climb_thr = if climb_steps > 0 { climb_thr_sum / climb_steps as f64 } else { 0.0 };
         println!(
-            "{:<16} {} t={:6.1}s arm={:6.1}s max_alt={:6.1} climb_thr={:4.2} impulse={:6.1} desc_tilt_max={:5.3} sway_rev={:3} pos=({:6.1},{:6.1}) {}{}",
+            "{:<16} {} t={:6.1}s arm={:6.1}s max_alt={:6.1} climb_thr={:4.2} impulse={:6.1} desc_tilt_max={:5.3} sway_rev={:3} pos=({:6.1},{:6.1}) err={:5.1} {}{}",
             sc.name,
             if state.destroyed { "DESTROYED" } else if ap.complete { "landed   " } else { "timeout  " },
             t,
@@ -126,6 +128,7 @@ fn main() {
             if descend_started { max_tilt_descent } else { f64::NAN },
             sway_reversals,
             p[0], p[2],
+            center_err,
             if on_target { "on-pad" } else { "OFF-PAD" },
             if ok { "" } else { "  <-- FAIL" },
         );

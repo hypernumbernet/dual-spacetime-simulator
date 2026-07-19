@@ -9,8 +9,9 @@
 //! the T-mark free vector, with **no hard speed cap**. Closing speed is governed
 //! only by a braking envelope `v_stop = √(2 a r)` — accelerate while below it,
 //! reverse-lean while above it. Terminal descent reuses [`LandingAutopilot`]
-//! with pad-square success (Chebyshev half-extent), armed only once over the
-//! pad approach with drift and attitude quiet enough for the lander's gains.
+//! with pad-square success (Chebyshev half-extent). Horizontal work is done
+//! in cruise under conservative lean caps; terminal descent commits upright
+//! (no last-metre pad walk-in) once high-alt offset and drift are quiet enough.
 //!
 //! Attitude uses the same inverse sandwich transports as the L lander
 //! (`motor_inverse_rotate_vector` / `world_up_in_body`). Desired thrust is a
@@ -29,17 +30,19 @@ pub const CLIMB_ALT_M: f64 = 500.0;
 const GATE_ALT_MIN: f64 = 480.0;
 /// Target pad half-extent (m) — same painted square as the mesh pad.
 pub const TARGET_PAD_HALF_M: f64 = PAD_HALF_M;
-/// Chebyshev margin outside the pad when starting terminal descent (m).
-const PAD_APPROACH_MARGIN_M: f64 = 8.0;
+/// Max Chebyshev offset from pad center when arming terminal descent (m).
+/// Inside the painted square with margin — lander will not walk in near ground,
+/// so hand-off must already be over the pad.
+const HANDOFF_CHEBY_MAX_M: f64 = 22.0;
 /// Lean cap during the full-throttle ascent burn (rad): keeps the climb fast
 /// while still building downrange speed (3g·sin ≈ 8.7 m/s² lateral).
 const LEAN_BURN_MAX: f64 = 0.30;
-/// Airplane-style cruise lean (rad, ~54°). Body +Y points well toward the T
-/// free vector so horizontal accel is large under altitude-hold throttle.
+/// Airplane-style cruise lean (rad, ~46°). Tighter than the old ~54° cap so
+/// high-alt transit stays stable, still enough for ~500–800 m downrange.
 /// Must stay below the flip gate ([`COS_TILT_AIM`]).
-const LEAN_CRUISE: f64 = 0.95;
+const LEAN_CRUISE: f64 = 0.80;
 /// Mid-range lean while still on the envelope but closer in (rad).
-const LEAN_MID: f64 = 0.55;
+const LEAN_MID: f64 = 0.45;
 /// Range (m) where deep airplane cruise takes over.
 const RANGE_FAR_M: f64 = 80.0;
 /// Soft ceiling above the altitude gate (m). Once lofted, prefer a slight
@@ -61,7 +64,7 @@ const THR_CLIMB_BURN: f64 = 0.97;
 /// Horizontal deceleration assumed by the braking envelope (m/s²).
 /// Conservative vs peak g·tan(LEAN_CRUISE) so attitude-flip lag still fits
 /// inside the remaining range (starts reverse lean earlier).
-const A_DEC_H: f64 = 4.0;
+const A_DEC_H: f64 = 3.5;
 /// Stand-off subtracted from range in the envelope (m) so speed is already
 /// small when terminal descent arms.
 const V_APPROACH_OFF_M: f64 = 30.0;
@@ -72,14 +75,13 @@ const T_ATT_LAG_S: f64 = 2.0;
 const V_CLIMB_H_MAX: f64 = 28.0;
 /// Max drift allowed when arming terminal descent (m/s): a fast overflight
 /// must brake on the powered cruise leg first, not hand the lander a sprint.
-const VH_HANDOFF_MAX: f64 = 12.0;
+const VH_HANDOFF_MAX: f64 = 9.0;
 /// Attitude quiet gates for the hand-off (rad/s, cos(rad)). Arming mid-swing
 /// hands the lander a rotation its gentler √-profile cannot stop before the
 /// stack sails through upright into a pro-drift lean.
-const OMEGA_HANDOFF_MAX: f64 = 0.15;
-/// Loose: station-keeping legitimately leans ~0.3 rad; the rate gate is the
-/// real mid-swing detector.
-const COS_TILT_HANDOFF: f64 = 0.939; // cos(0.35)
+const OMEGA_HANDOFF_MAX: f64 = 0.12;
+/// Quiet upright before hand-off (~0.32 rad). Terminal lander commits upright.
+const COS_TILT_HANDOFF: f64 = 0.95; // cos(~0.32)
 /// Attitude √-profile planning accel (rad/s²).
 const ALPHA_PLAN: f64 = 0.5;
 const OMEGA_MAX: f64 = 1.15;
@@ -200,7 +202,7 @@ impl TargetLandingAutopilot {
         let om_pitch_yaw_sq = om[0] * om[0] + om[2] * om[2];
         if self.phase != TargetPhase::Descend
             && alt >= GATE_ALT_MIN
-            && cheby <= TARGET_PAD_HALF_M + PAD_APPROACH_MARGIN_M
+            && cheby <= HANDOFF_CHEBY_MAX_M
             && vh <= VH_HANDOFF_MAX
             && om_pitch_yaw_sq <= OMEGA_HANDOFF_MAX * OMEGA_HANDOFF_MAX
             && world_up_in_body(&state.motor)[1] >= COS_TILT_HANDOFF
@@ -331,11 +333,22 @@ fn transit_command(state: &RocketState, target_xz: [f64; 2], pos: [f64; 3]) -> C
         // Light downrange lean while lofting.
         ([0.14 * need_x, AIM_Y_BIAS, 0.14 * need_z], LEAN_BURN_MAX, false)
     } else if terminal {
-        (
-            [0.12 * need_x, AIM_Y_BIAS, 0.12 * need_z],
-            (0.08 + 0.03 * vh).clamp(0.10, 0.35),
-            false,
-        )
+        // Quiet approach for hand-off: kill residual vh, do not chase pad centre
+        // with deep lean — the lander will not walk in near the ground.
+        let settle = range <= HANDOFF_CHEBY_MAX_M && vh <= VH_HANDOFF_MAX + 3.0;
+        if settle {
+            (
+                [0.06 * need_x, AIM_Y_BIAS, 0.06 * need_z],
+                (0.05 + 0.015 * vh).clamp(0.06, 0.18),
+                false,
+            )
+        } else {
+            (
+                [0.10 * need_x, AIM_Y_BIAS, 0.10 * need_z],
+                (0.08 + 0.025 * vh).clamp(0.10, 0.28),
+                false,
+            )
+        }
     } else if far_or_overshoot {
         let braking = v_approach > v_stop + V_BRAKE_ENTER
             || (v_approach < -1.5 && range > 55.0);

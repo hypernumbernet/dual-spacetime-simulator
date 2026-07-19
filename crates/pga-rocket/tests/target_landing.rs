@@ -70,6 +70,13 @@ fn low_altitude_climbs_above_500m_and_lands_on_target() {
         p[0],
         p[2]
     );
+    let cheby = (p[0] - target[0]).abs().max((p[2] - target[1]).abs());
+    assert!(
+        cheby <= 30.0,
+        "should land near pad center (Cheby ≤ 30 m), pos=({:.1},{:.1}) err={cheby:.1}",
+        p[0],
+        p[2]
+    );
 }
 
 /// While still below 500 m, the rocket must already be translating toward the pad
@@ -149,12 +156,18 @@ fn high_altitude_skips_climb_label_and_lands() {
         state.lowest_foot_y()
     );
     let p = state.position();
+    let cheby = (p[0] - target[0]).abs().max((p[2] - target[1]).abs());
     assert!(
         inside_target_pad(p, target),
-        "should land inside target pad square, pos=({:.1},{:.1}) cheby={:.1}",
+        "should land inside target pad square, pos=({:.1},{:.1}) cheby={cheby:.1}",
         p[0],
-        p[2],
-        (p[0] - target[0]).abs().max((p[2] - target[1]).abs())
+        p[2]
+    );
+    assert!(
+        cheby <= 30.0,
+        "should land near pad center (Cheby ≤ 30 m), pos=({:.1},{:.1}) err={cheby:.1}",
+        p[0],
+        p[2]
     );
 }
 
