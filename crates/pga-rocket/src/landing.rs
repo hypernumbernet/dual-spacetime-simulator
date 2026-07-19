@@ -24,9 +24,12 @@
 //! - lean cone + desired thrust-axis mix (upright / anti-v / trim / pos-seek)
 //! - soft shoulder on flip aim around [`TILT_AIM`]
 //!
-//! With a pad target ([`LandingAutopilot::update_with_target`]): mild position PD
-//! only while high; near the ground the lander commits upright (no last-metre
-//! walk-in). Survival success is the painted pad square.
+//! T-key Descend ([`LandingAutopilot::update_target_descend`]) reuses the same
+//! high-altitude pad-seek / low-altitude upright-commit attitude geometry as the
+//! optional pad branch of [`LandingAutopilot::update_with_target`]: mild position
+//! PD only while high; near the ground upright + soft-touch (no last-metre
+//! walk-in). T-mode success is the inner 12 m Chebyshev box; L-mode on the
+//! launch pad uses the painted 30 m square.
 
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
@@ -547,9 +550,9 @@ impl LandingAutopilot {
         .clamp()
     }
 
-    /// T-key terminal Descend: same attitude geometry as [`update_with_target`], but
-    /// vertical thrust is a closed-loop suicide burn (`a_req → throttle`) instead of
-    /// √h gains and fuzzy arbitration.
+    /// T-key terminal Descend: reuses the pad-target attitude path from
+    /// [`update_with_target`], but vertical thrust is a closed-loop suicide burn
+    /// (`a_req → throttle`) instead of √h gains and fuzzy arbitration.
     pub fn update_target_descend(
         &mut self,
         state: &RocketState,

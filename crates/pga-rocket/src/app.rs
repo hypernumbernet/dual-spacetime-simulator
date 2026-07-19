@@ -58,7 +58,8 @@ pub struct App {
     scroll_zoom: f32,
     /// Earliest time the next rendered frame may start (60 FPS pacing).
     next_frame_at: Instant,
-    /// Random landing target on a ~500 m ring around the launch pad (world XZ).
+    /// Random T-mark target XZ — uniform annulus 100–8000 m from launch
+    /// ([`crate::mesh::TARGET_DISTANCE_MIN_M`], [`crate::mesh::TARGET_DISTANCE_MAX_M`]).
     target_xz: [f32; 2],
 }
 

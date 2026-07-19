@@ -1,5 +1,5 @@
-//! Stress harness for the T-key target autopilot: several start poses vs a
-//! ~500 m ring target. Reports flight time, max altitude, climb throttle, and
+//! Stress harness for the T-key target autopilot: several start poses vs targets
+//! from 500 m to 8 km. Reports flight time, max altitude, climb throttle, and
 //! descent attitude sway. Pass a scenario name for a 0.25 s trace.
 
 use pga_rocket::euclidean_pga::{motor_body_up_world, motor_from_pose};
@@ -28,7 +28,7 @@ fn main() {
         Scenario { name: "pad_overhead", start: [500.0, 0.0], alt: None, target: [500.0, 0.0] },
         Scenario { name: "high_600_off400", start: [0.0, 0.0], alt: Some(600.0), target: [400.0, 0.0] },
         Scenario { name: "mid_250_500x", start: [0.0, 0.0], alt: Some(250.0), target: [500.0, 0.0] },
-        // Long-range full-throttle ~800 m airplane cruise (range ≳ 1.5 km).
+        // Long-range full-throttle airplane cruise at LONG_CRUISE_ALT_M (~520 m; range ≳ 1.5 km).
         Scenario { name: "pad_6000x", start: [0.0, 0.0], alt: None, target: [6000.0, 0.0] },
         Scenario { name: "pad_8000x", start: [0.0, 0.0], alt: None, target: [8000.0, 0.0] },
     ];

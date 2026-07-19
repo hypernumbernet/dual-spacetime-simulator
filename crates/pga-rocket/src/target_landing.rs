@@ -1,20 +1,23 @@
 //! Target-pad autopilot (T key): loft, cruise to pad, terminal land.
 //!
-//! **Short / mid range:** MPC over a simplified 3DOF rollout chooses among loft,
-//! cruise, brake, coast, and sink candidates each replan cycle. Climb and translate
-//! are coupled in the predictor (gravity + thrust + quadratic drag + lean lag).
-//! Closed-form `d_stop` still gates brake latch hysteresis.
+//! **Transit (Climb / Cruise — same controller, HUD phase split):** receding-horizon
+//! MPC over a simplified 3DOF rollout picks among loft, cruise, brake, coast, sink,
+//! and (when far) airplane-hold candidates every other frame. The predictor couples
+//! climb and translate (gravity + thrust + quadratic drag + lean lag). A parallel
+//! closed-form `d_stop` gate latches reverse-lean braking with geometric hysteresis.
 //!
-//! **Airplane range (≳ 1.5 km):** full throttle toward T while outside the
-//! predicted stop distance; altitude is pitch only (`long_range_hold_cos` /
-//! `long_range_go_aim`). Hold ~800 m. Same stop-distance gate hands off to
-//! reverse lean. Inside the careful envelope (~90–140 m shoulder): sequenced
-//! terminal settle (Brake → Upright → Trim) drives lean and throttle until hard
-//! AND gates arm Descend via [`LandingAutopilot::update_target_descend`]
+//! **Airplane range (horizontal ≳ 1.5 km):** full throttle toward T while outside
+//! `d_stop`; altitude is pitch only ([`long_range_hold_cos`] /
+//! [`long_range_go_aim`]). Hold [`LONG_CRUISE_ALT_M`] (~520 m, same band as the
+//! short-hop cruise cap). The climb apogee target soft-blends toward 480 m via
+//! [`long_range_weight`]. Same stop-distance gate hands off to reverse lean. Inside
+//! the terminal-settle envelope (enter ~90 m, exit ~140 m): sequenced
+//! Brake → Upright → Trim drives lean and throttle until hard AND gates arm
+//! [`TargetPhase::Descend`] via [`LandingAutopilot::update_target_descend`]
 //! (physics closed-loop suicide burn).
 //!
-//! Attitude: PGA inverse sandwich (`motor_inverse_rotate_vector` /
-//! `world_up_in_body`), desired thrust `clamp_tilt`-ed into the lean cone.
+//! Attitude: PGA inverse sandwich ([`motor_inverse_rotate_vector`] /
+//! [`world_up_in_body`]), desired thrust [`clamp_tilt`]-ed into the lean cone.
 
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
@@ -221,7 +224,9 @@ pub struct TargetLandingAutopilot {
     pub enabled: bool,
     pub complete: bool,
     pub phase: TargetPhase,
-    /// Nested lander used only in [`TargetPhase::Descend`] (physics closed-loop vertical).
+    /// Nested lander armed at transit hand-off; runs
+    /// [`LandingAutopilot::update_target_descend`] (closed-loop suicide burn +
+    /// shared pad-seek attitude geometry).
     lander: LandingAutopilot,
     /// Latched reverse-lean brake (hysteresis) — kills go↔brake sway.
     brake_latched: bool,
@@ -309,7 +314,8 @@ impl TargetLandingAutopilot {
         }
     }
 
-    /// HUD helper: airplane full-T + pitch-elevator cruise is active.
+    /// HUD helper: airplane full-T + pitch-elevator cruise is active
+    /// (range ≳ [`LONG_AIRPLANE_RANGE_M`], not brake-latched).
     pub fn is_long_range_cruise(&self, pos: [f64; 3], target_xz: [f64; 2]) -> bool {
         if !self.enabled || self.complete || self.phase == TargetPhase::Descend {
             return false;
@@ -474,7 +480,7 @@ const W_MPC_IMPULSE: f64 = 0.12;
 enum TransitCandidate {
     /// Full-thrust loft toward the pad while below the altitude gate.
     LoftGo,
-    /// Long-range full-T + pitch elevator (~800 m hold).
+    /// Long-range full-T + pitch elevator (hold [`LONG_CRUISE_ALT_M`] ≈ 520 m).
     AirplaneHold,
     /// Mid-range powered cruise toward the pad.
     #[default]
@@ -1890,12 +1896,15 @@ fn airplane_hold_aim(
     )
 }
 
-/// Climb + translate toward the lofted pad, or airplane cruise when far out.
+/// Transit guidance for Climb/Cruise: MPC selection, stop-distance brake latch,
+/// and terminal settle inside the careful envelope.
 ///
-/// Short range: burn until ballistic apogee clears the loft, optional upright
-/// straighten, then envelope go/brake. Airplane range: full T + pitch elevator
-/// (see [`airplane_hold_aim`]). Returns command, brake latch, terminal brake latch,
-/// and updated terminal settle sub-phase state.
+/// Short/mid range: receding-horizon MPC among loft / cruise / brake / coast / sink;
+/// burn until ballistic apogee clears [`APOGEE_TARGET_M`] (soft-blended at long
+/// range), optional upright straighten, then go/brake from `d_stop`. Airplane
+/// range (≳ [`LONG_AIRPLANE_RANGE_M`]): full T + pitch elevator at
+/// [`LONG_CRUISE_ALT_M`] (see [`airplane_hold_aim`]). Returns command, brake latch,
+/// terminal brake latch, MPC hold state, and terminal settle sub-phase.
 fn transit_command(
     state: &RocketState,
     target_xz: [f64; 2],
@@ -1935,9 +1944,9 @@ fn transit_command(
     let max_thrust = state.params.max_thrust;
     let hover = mass * GRAVITY / max_thrust;
 
-    // Loft apogee (blends toward cruise alt with mu_long, never below the
-    // short-hop target). Applies to airplane range too: the dash climbs the
-    // last stretch to the hold by pitch.
+    // Loft apogee: 530 m short-hop → 480 m at full [`long_range_weight`]
+    // (never below the 480 m loft gate). Airplane range closes the last gap
+    // to [`LONG_CRUISE_ALT_M`] by pitch, not extra thrust.
     let apogee_target = APOGEE_TARGET_M
         + mu_long * ((LONG_CRUISE_ALT_M - 40.0) - APOGEE_TARGET_M).max(0.0);
     let straighten_m = apogee_target - 180.0;
@@ -2054,7 +2063,8 @@ fn transit_command(
     let need_x = ux * v_allow - vx;
     let need_z = uz * v_allow - vz;
 
-    // Airplane range: hold cruise altitude. Closer in: blend 520→800 m.
+    // Pitch-elevator altitude target — [`LONG_CRUISE_ALT_M`] at all ranges
+    // (short-hop [`CRUISE_ALT_CAP`] matches the long-range hold).
     let alt_hold = if in_airplane_range {
         LONG_CRUISE_ALT_M
     } else {
@@ -2628,7 +2638,7 @@ mod tests {
 
     #[test]
     fn long_range_full_throttle_near_800m() {
-        // 6 km out, already at long-cruise altitude → full throttle, not hover.
+        // 6 km out at LONG_CRUISE_ALT_M (~520 m) → full throttle, not hover.
         let mut state = RocketState::at_altitude(LONG_CRUISE_ALT_M);
         state.contacting = false;
         state.velocity = [40.0, 0.0, 0.0];

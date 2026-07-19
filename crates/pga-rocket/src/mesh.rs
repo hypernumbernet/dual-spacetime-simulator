@@ -127,7 +127,7 @@ fn splitmix64(state: &mut u64) -> u64 {
 }
 
 /// Deterministic target in an annulus [`TARGET_DISTANCE_MIN_M`, `TARGET_DISTANCE_MAX_M`]
-/// around the origin (uniform area in the ring).
+/// around the launch origin (uniform area in the ring; 100–8000 m).
 pub fn target_xz_from_seed(seed: u64) -> [f32; 2] {
     let mut s = seed;
     // Avoid the all-zero fixed point of the additive constant path looking "stuck".
