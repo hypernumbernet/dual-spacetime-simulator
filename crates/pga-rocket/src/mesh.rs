@@ -75,8 +75,10 @@ pub const LAUNCH_PAD_HALF_EXTENT: f32 = 30.0;
 /// World meters covered by one paved texture tile (ground.frag PAD_METERS_PER_TILE).
 pub const PAD_METERS_PER_TILE: f32 = 2.0;
 
-/// Horizontal range from launch origin to the random landing target (meters).
-pub const TARGET_DISTANCE_M: f32 = 500.0;
+/// Minimum horizontal range from launch origin to the random landing target (meters).
+pub const TARGET_DISTANCE_MIN_M: f32 = 500.0;
+/// Maximum horizontal range from launch origin to the random landing target (meters).
+pub const TARGET_DISTANCE_MAX_M: f32 = 8000.0;
 /// Target pad uses the same half-extent as the launch pad.
 pub const TARGET_PAD_HALF_EXTENT: f32 = LAUNCH_PAD_HALF_EXTENT;
 /// High-contrast paint color for pad letter marks (H / T) — must match ground.frag.
@@ -124,16 +126,20 @@ fn splitmix64(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Deterministic target on a circle of radius [`TARGET_DISTANCE_M`] around the origin.
+/// Deterministic target in an annulus [`TARGET_DISTANCE_MIN_M`, `TARGET_DISTANCE_MAX_M`]
+/// around the origin (uniform area in the ring).
 pub fn target_xz_from_seed(seed: u64) -> [f32; 2] {
     let mut s = seed;
     // Avoid the all-zero fixed point of the additive constant path looking "stuck".
     if s == 0 {
         s = 0xA5A5_A5A5_A5A5_A5A5;
     }
-    let u = (splitmix64(&mut s) >> 11) as f64 / ((1u64 << 53) as f64);
-    let theta = u * std::f64::consts::TAU;
-    let r = TARGET_DISTANCE_M as f64;
+    let u_angle = (splitmix64(&mut s) >> 11) as f64 / ((1u64 << 53) as f64);
+    let u_radius = (splitmix64(&mut s) >> 11) as f64 / ((1u64 << 53) as f64);
+    let theta = u_angle * std::f64::consts::TAU;
+    let r_min = TARGET_DISTANCE_MIN_M as f64;
+    let r_max = TARGET_DISTANCE_MAX_M as f64;
+    let r = (u_radius * (r_max * r_max - r_min * r_min) + r_min * r_min).sqrt();
     [(r * theta.cos()) as f32, (r * theta.sin()) as f32]
 }
 
@@ -152,23 +158,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn target_from_seed_is_at_fixed_range() {
+    fn target_from_seed_is_within_range() {
         for seed in [1u64, 42, 999, u64::MAX / 3] {
             let [x, z] = target_xz_from_seed(seed);
             let r = (x * x + z * z).sqrt();
             assert!(
-                (r - TARGET_DISTANCE_M).abs() < 1e-2,
+                r >= TARGET_DISTANCE_MIN_M - 1e-2 && r <= TARGET_DISTANCE_MAX_M + 1e-2,
                 "seed={seed} r={r}"
             );
         }
     }
 
     #[test]
-    fn different_seeds_change_bearing() {
+    fn different_seeds_change_bearing_and_radius() {
         let a = target_xz_from_seed(1);
         let b = target_xz_from_seed(2);
         let c = target_xz_from_seed(9999);
         assert!(a != b || b != c);
+        let radii: Vec<f32> = [1u64, 2, 9999, 12345, 67890]
+            .iter()
+            .map(|&seed| {
+                let [x, z] = target_xz_from_seed(seed);
+                (x * x + z * z).sqrt()
+            })
+            .collect();
+        let min_r = radii.iter().copied().fold(f32::INFINITY, f32::min);
+        let max_r = radii.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            max_r - min_r > 100.0,
+            "expected spread in radii, got min={min_r} max={max_r}"
+        );
     }
 
     #[test]

@@ -1,9 +1,9 @@
 //! Target-pad autopilot (T key): loft, cruise to pad, terminal land.
 //!
-//! **Short / mid range:** burn–coast loft to ~500 m (apogee cut + optional
-//! upright straighten), then physics-predicted horizontal braking: reverse lean
-//! when `range_eff ≤ d_flip + d_burn` (thrust/mass, lean, drag, attitude lag).
-//! No hard speed cap.
+//! **Short / mid range:** MPC over a simplified 3DOF rollout chooses among loft,
+//! cruise, brake, coast, and sink candidates each replan cycle. Climb and translate
+//! are coupled in the predictor (gravity + thrust + quadratic drag + lean lag).
+//! Closed-form `d_stop` still gates brake latch hysteresis.
 //!
 //! **Airplane range (≳ 1.5 km):** full throttle toward T while outside the
 //! predicted stop distance; altitude is pitch only (`long_range_hold_cos` /
@@ -204,6 +204,9 @@ pub struct TargetLandingAutopilot {
     terminal_settle_phase: TerminalSettlePhase,
     /// Seconds upright gates have held during [`TerminalSettlePhase::Upright`].
     upright_stable_s: f64,
+    /// Held MPC candidate between replans (receding-horizon hysteresis).
+    mpc_hold: TransitCandidate,
+    mpc_hold_counter: u32,
 }
 
 impl Default for TargetLandingAutopilot {
@@ -218,6 +221,8 @@ impl Default for TargetLandingAutopilot {
             handoff_settle_s: 0.0,
             terminal_settle_phase: TerminalSettlePhase::Brake,
             upright_stable_s: 0.0,
+            mpc_hold: TransitCandidate::CruiseGo,
+            mpc_hold_counter: MPC_REPLAN_EVERY,
         }
     }
 }
@@ -232,6 +237,8 @@ impl TargetLandingAutopilot {
 
     fn reset_transit_latches(&mut self) {
         self.brake_latched = false;
+        self.mpc_hold = TransitCandidate::CruiseGo;
+        self.mpc_hold_counter = MPC_REPLAN_EVERY;
         self.reset_terminal_settle();
     }
 
@@ -354,20 +361,25 @@ impl TargetLandingAutopilot {
 
         match self.phase {
             TargetPhase::Climb | TargetPhase::Cruise => {
-                let (cmd, brake, terminal_brake, settle_phase, upright_s) = transit_command(
-                    state,
-                    target_xz,
-                    pos,
-                    self.brake_latched,
-                    self.terminal_brake_latched,
-                    self.terminal_settle_phase,
-                    self.upright_stable_s,
-                    dt,
-                );
+                let (cmd, brake, terminal_brake, settle_phase, upright_s, mpc_hold, mpc_counter) =
+                    transit_command(
+                        state,
+                        target_xz,
+                        pos,
+                        self.brake_latched,
+                        self.terminal_brake_latched,
+                        self.terminal_settle_phase,
+                        self.upright_stable_s,
+                        self.mpc_hold,
+                        self.mpc_hold_counter,
+                        dt,
+                    );
                 self.brake_latched = brake;
                 self.terminal_brake_latched = terminal_brake;
                 self.terminal_settle_phase = settle_phase;
                 self.upright_stable_s = upright_s;
+                self.mpc_hold = mpc_hold;
+                self.mpc_hold_counter = mpc_counter;
                 cmd
             }
             TargetPhase::Descend => {
@@ -393,8 +405,81 @@ enum LateralThrMode {
     /// Vertical-neutral reverse lean: `a_lat ≈ g·tan(θ)`.
     VerticalNeutral,
     /// Full-T go/brake: `a_lat = (T/m)·thr·sin(θ)`.
-    #[allow(dead_code)]
     FullThrottle,
+}
+
+// --- Short-horizon MPC (transit only) ----------------------------------------
+const MPC_DT: f64 = 0.10;
+const MPC_HORIZON_NEAR: f64 = 8.0;
+const MPC_HORIZON_MID: f64 = 10.0;
+const MPC_HORIZON_FAR: f64 = 12.0;
+const MPC_REPLAN_EVERY: u32 = 2;
+const MPC_COST_HYSTERESIS: f64 = 2.5;
+const W_MPC_GATE: f64 = 55.0;
+const W_MPC_OVERLOFT: f64 = 0.45;
+const W_MPC_RANGE: f64 = 0.07;
+const W_MPC_TIME: f64 = 0.015;
+const W_MPC_OVERSHOOT: f64 = 16.0;
+const W_MPC_HANDOFF: f64 = 18.0;
+const W_MPC_IMPULSE: f64 = 0.12;
+
+/// High-level transit action evaluated by the receding-horizon MPC sampler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum TransitCandidate {
+    /// Full-thrust loft toward the pad while below the altitude gate.
+    LoftGo,
+    /// Long-range full-T + pitch elevator (~800 m hold).
+    AirplaneHold,
+    /// Mid-range powered cruise toward the pad.
+    #[default]
+    CruiseGo,
+    /// Reverse lean to kill approach speed / overshoot.
+    Brake,
+    /// Ballistic coast with upright aim.
+    Coast,
+    /// Bleed excess altitude while translating.
+    SinkGo,
+}
+
+/// Simplified 3DOF state for transit rollouts (position, velocity, lean lag).
+#[derive(Clone, Copy, Debug)]
+struct TransitPredictorState {
+    pos: [f64; 3],
+    vel: [f64; 3],
+    lean_angle: f64,
+    lean_dir_x: f64,
+    lean_dir_z: f64,
+}
+
+/// Terminal metrics from one candidate rollout.
+#[derive(Clone, Copy, Debug)]
+struct TransitRolloutMetrics {
+    max_alt: f64,
+    range_end: f64,
+    v_approach_end: f64,
+    impulse: f64,
+    handoff_penalty: f64,
+}
+
+/// Per-candidate thrust / aim parameters for the predictor.
+#[derive(Clone, Copy, Debug)]
+struct CandidateParams {
+    aim: [f64; 3],
+    lean_max: f64,
+    thr: f64,
+    mode: LateralThrMode,
+    coast: bool,
+    deep: bool,
+    force_full_thr: bool,
+}
+
+/// MPC output mapped into the existing attitude/throttle pipeline.
+#[derive(Clone, Copy, Debug)]
+struct TransitMpcPlan {
+    desired_raw: [f64; 3],
+    lean_max: f64,
+    deep: bool,
+    force_full_thr: bool,
 }
 
 /// Kill residual climb rate only (never command positive vy once lofted).
@@ -452,10 +537,15 @@ impl HorizontalBrakePlan {
         } else {
             state.params.air_drag_k / mass.max(1e-6)
         };
+        let brake_mode = if in_airplane_range || vh > 35.0 {
+            LateralThrMode::FullThrottle
+        } else {
+            LateralThrMode::VerticalNeutral
+        };
         let brake_lean = LEAN_BRAKE_PLAN;
         let a_prop = lateral_accel_for_lean(
             brake_lean,
-            LateralThrMode::VerticalNeutral,
+            brake_mode,
             mass,
             max_thrust,
         );
@@ -644,6 +734,555 @@ impl HandoffSettlePlan {
             t_settle,
         }
     }
+}
+
+#[inline]
+fn mpc_horizon_s(range: f64) -> f64 {
+    if range >= LONG_AIRPLANE_RANGE_M {
+        MPC_HORIZON_FAR
+    } else if range >= RANGE_FAR_M {
+        MPC_HORIZON_MID
+    } else {
+        MPC_HORIZON_NEAR
+    }
+}
+
+#[inline]
+fn predictor_drag_accel(vel: [f64; 3], k: f64, mass: f64) -> [f64; 3] {
+    let vmag_sq = vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2];
+    if vmag_sq <= 1e-12 {
+        return [0.0, 0.0, 0.0];
+    }
+    let vmag = vmag_sq.sqrt();
+    let c = -k * vmag / mass.max(1e-6);
+    [c * vel[0], c * vel[1], c * vel[2]]
+}
+
+#[inline]
+fn predictor_thrust_accel(
+    aim: [f64; 3],
+    lean_max: f64,
+    thr: f64,
+    mode: LateralThrMode,
+    mass: f64,
+    max_thrust: f64,
+) -> [f64; 3] {
+    if thr <= 1e-6 {
+        return [0.0, 0.0, 0.0];
+    }
+    let d = clamp_tilt(aim, lean_max);
+    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    if len <= 1e-9 {
+        return [0.0, 0.0, 0.0];
+    }
+    let u = [d[0] / len, d[1] / len, d[2] / len];
+    match mode {
+        LateralThrMode::FullThrottle => {
+            let am = thr * max_thrust / mass.max(1e-6);
+            [am * u[0], am * u[1], am * u[2]]
+        }
+        LateralThrMode::VerticalNeutral => {
+            let horiz = (u[0] * u[0] + u[2] * u[2]).sqrt();
+            if horiz <= 1e-9 {
+                [0.0, 0.0, 0.0]
+            } else {
+                let lean = horiz.clamp(0.0, 0.999).asin();
+                let a_lat = (GRAVITY * lean.tan()).max(0.0);
+                let scale = a_lat / horiz;
+                [scale * u[0], 0.0, scale * u[2]]
+            }
+        }
+    }
+}
+
+fn predictor_init(state: &RocketState, pos: [f64; 3]) -> TransitPredictorState {
+    let up = world_up_in_body(&state.motor);
+    let up_y = up[1].clamp(-1.0, 1.0);
+    let lean_angle = up_y.acos();
+    let horiz = (up[0] * up[0] + up[2] * up[2]).sqrt();
+    let (lean_dir_x, lean_dir_z) = if horiz > 1e-6 {
+        (up[0] / horiz, up[2] / horiz)
+    } else {
+        (0.0, 0.0)
+    };
+    TransitPredictorState {
+        pos,
+        vel: state.velocity,
+        lean_angle,
+        lean_dir_x,
+        lean_dir_z,
+    }
+}
+
+fn predictor_target_lean(aim: [f64; 3], lean_max: f64) -> (f64, f64, f64) {
+    let d = clamp_tilt(aim, lean_max);
+    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    if len <= 1e-9 {
+        return (0.0, 0.0, 0.0);
+    }
+    let u = [d[0] / len, d[1] / len, d[2] / len];
+    let horiz = (u[0] * u[0] + u[2] * u[2]).sqrt();
+    let angle = horiz.clamp(0.0, 0.999).asin();
+    if horiz > 1e-9 {
+        (angle, u[0] / horiz, u[2] / horiz)
+    } else {
+        (angle, 0.0, 0.0)
+    }
+}
+
+fn predictor_step(
+    st: &mut TransitPredictorState,
+    params: CandidateParams,
+    mass: f64,
+    max_thrust: f64,
+    k_drag: f64,
+    dt: f64,
+) -> f64 {
+    let (tgt_angle, tgt_dx, tgt_dz) = predictor_target_lean(params.aim, params.lean_max);
+    let tau = brake_flip_time((st.lean_angle - tgt_angle).abs().max(1e-4)).max(0.35);
+    let alpha = (dt / tau).clamp(0.0, 1.0);
+    st.lean_angle += alpha * (tgt_angle - st.lean_angle);
+    if tgt_angle > 1e-4 {
+        st.lean_dir_x += alpha * (tgt_dx - st.lean_dir_x);
+        st.lean_dir_z += alpha * (tgt_dz - st.lean_dir_z);
+    }
+
+    let sin_l = st.lean_angle.sin();
+    let cos_l = st.lean_angle.cos();
+    let thrust_aim = [
+        st.lean_dir_x * sin_l,
+        cos_l,
+        st.lean_dir_z * sin_l,
+    ];
+    let a_thr = if params.coast {
+        [0.0, 0.0, 0.0]
+    } else {
+        predictor_thrust_accel(
+            thrust_aim,
+            params.lean_max,
+            params.thr,
+            params.mode,
+            mass,
+            max_thrust,
+        )
+    };
+    let a_drag = predictor_drag_accel(st.vel, k_drag, mass);
+    let ax = a_thr[0] + a_drag[0];
+    let ay = a_thr[1] + a_drag[1] - GRAVITY;
+    let az = a_thr[2] + a_drag[2];
+
+    st.vel[0] += ax * dt;
+    st.vel[1] += ay * dt;
+    st.vel[2] += az * dt;
+    st.pos[0] += st.vel[0] * dt;
+    st.pos[1] += st.vel[1] * dt;
+    st.pos[2] += st.vel[2] * dt;
+    if st.pos[1] < 0.0 {
+        st.pos[1] = 0.0;
+        if st.vel[1] < 0.0 {
+            st.vel[1] = 0.0;
+        }
+    }
+    if params.coast {
+        0.0
+    } else {
+        params.thr * dt
+    }
+}
+
+fn rollout_metrics(
+    st: &TransitPredictorState,
+    target_xz: [f64; 2],
+    ux: f64,
+    uz: f64,
+) -> TransitRolloutMetrics {
+    let dx = target_xz[0] - st.pos[0];
+    let dz = target_xz[1] - st.pos[2];
+    let range_end = (dx * dx + dz * dz).sqrt();
+    let cheby_end = chebyshev_xz(st.pos, target_xz);
+    let vh_end = (st.vel[0] * st.vel[0] + st.vel[2] * st.vel[2]).sqrt();
+    let v_approach_end = st.vel[0] * ux + st.vel[2] * uz;
+    let mut handoff_penalty = 0.0;
+    if st.pos[1] < GATE_ALT_MIN {
+        handoff_penalty += (GATE_ALT_MIN - st.pos[1]).powi(2);
+    }
+    if cheby_end > HANDOFF_CHEBY_MAX_M {
+        handoff_penalty += (cheby_end - HANDOFF_CHEBY_MAX_M).powi(2);
+    }
+    if vh_end > VH_HANDOFF_MAX {
+        handoff_penalty += (vh_end - VH_HANDOFF_MAX).powi(2);
+    }
+    if v_approach_end < -0.5 {
+        handoff_penalty += (-v_approach_end).powi(2);
+    }
+    TransitRolloutMetrics {
+        max_alt: st.pos[1],
+        range_end,
+        v_approach_end,
+        impulse: 0.0,
+        handoff_penalty,
+    }
+}
+
+fn transit_rollout(
+    init: TransitPredictorState,
+    params: CandidateParams,
+    target_xz: [f64; 2],
+    ux: f64,
+    uz: f64,
+    mass: f64,
+    max_thrust: f64,
+    k_drag: f64,
+    horizon: f64,
+) -> TransitRolloutMetrics {
+    let steps = (horizon / MPC_DT).ceil() as u32;
+    let mut st = init;
+    let mut max_alt = st.pos[1];
+    let mut impulse = 0.0;
+    for _ in 0..steps {
+        impulse += predictor_step(&mut st, params, mass, max_thrust, k_drag, MPC_DT);
+        max_alt = max_alt.max(st.pos[1]);
+    }
+    let mut m = rollout_metrics(&st, target_xz, ux, uz);
+    m.max_alt = max_alt;
+    m.impulse = impulse;
+    m
+}
+
+fn mpc_rollout_cost(
+    metrics: TransitRolloutMetrics,
+    lofted: bool,
+    alt_cap: f64,
+    horizon: f64,
+    needs_gate: bool,
+) -> f64 {
+    let mut cost = 0.0;
+    if needs_gate && metrics.max_alt < GATE_ALT_MIN {
+        cost += W_MPC_GATE * (GATE_ALT_MIN - metrics.max_alt).powi(2);
+    }
+    if metrics.max_alt > alt_cap {
+        cost += W_MPC_OVERLOFT * (metrics.max_alt - alt_cap).powi(2);
+    }
+    cost += W_MPC_RANGE * metrics.range_end;
+    cost += W_MPC_TIME * horizon;
+    if metrics.v_approach_end < 0.0 {
+        cost += W_MPC_OVERSHOOT * (-metrics.v_approach_end).powi(2);
+    }
+    cost += W_MPC_HANDOFF * metrics.handoff_penalty;
+    cost += W_MPC_IMPULSE * metrics.impulse;
+    if lofted && metrics.max_alt < GATE_ALT_MIN - 5.0 {
+        cost += W_MPC_GATE * 0.25;
+    }
+    cost
+}
+
+fn candidate_params(
+    candidate: TransitCandidate,
+    ux: f64,
+    uz: f64,
+    vx: f64,
+    vz: f64,
+    vh: f64,
+    alt: f64,
+    alt_hold: f64,
+    vy: f64,
+    hover: f64,
+    mu_long: f64,
+    in_airplane_range: bool,
+    lofted: bool,
+    burn_up: bool,
+    mass: f64,
+    max_thrust: f64,
+    a_brake_max: f64,
+    brake_mode: LateralThrMode,
+) -> Option<CandidateParams> {
+    let s = vh.max(1.0);
+    match candidate {
+        TransitCandidate::LoftGo => {
+            if lofted && !burn_up {
+                return None;
+            }
+            let lean = LEAN_BURN_MAX + mu_long * (0.90 - LEAN_BURN_MAX);
+            let y_bias = AIM_Y_BIAS - mu_long * 0.55;
+            let k_h = 0.14 + mu_long * 0.35;
+            Some(CandidateParams {
+                aim: [k_h * ux, y_bias.max(0.40), k_h * uz],
+                lean_max: lean.min(LEAN_LONG_MAX),
+                thr: THR_FULL,
+                mode: if in_airplane_range {
+                    LateralThrMode::FullThrottle
+                } else {
+                    LateralThrMode::FullThrottle
+                },
+                coast: false,
+                deep: mu_long > 0.35,
+                force_full_thr: true,
+            })
+        }
+        TransitCandidate::AirplaneHold => {
+            if !in_airplane_range {
+                return None;
+            }
+            let cos_up = long_range_hold_cos(alt, alt_hold, vy, hover);
+            let aim = long_range_go_aim(ux, uz, cos_up);
+            Some(CandidateParams {
+                aim,
+                lean_max: LEAN_LONG_MAX,
+                thr: THR_FULL,
+                mode: LateralThrMode::FullThrottle,
+                coast: false,
+                deep: true,
+                force_full_thr: true,
+            })
+        }
+        TransitCandidate::CruiseGo => {
+            if burn_up {
+                return None;
+            }
+            let go_lean = lean_for_lateral_accel(
+                a_brake_max * 0.35,
+                brake_mode,
+                mass,
+                max_thrust,
+                LEAN_BRAKE_MAX * 0.55,
+            );
+            Some(CandidateParams {
+                aim: [ux, AIM_Y_BIAS, uz],
+                lean_max: go_lean,
+                thr: hover.clamp(0.35, 0.85),
+                mode: LateralThrMode::VerticalNeutral,
+                coast: false,
+                deep: false,
+                force_full_thr: false,
+            })
+        }
+        TransitCandidate::Brake => {
+            let demand = (vh / 55.0).clamp(0.0, 1.0);
+            let brake_lean = lean_for_lateral_accel(
+                a_brake_max * (0.35 + 0.55 * demand),
+                brake_mode,
+                mass,
+                max_thrust,
+                LEAN_BRAKE_MAX,
+            );
+            Some(CandidateParams {
+                aim: [-vx / s, AIM_Y_BIAS, -vz / s],
+                lean_max: brake_lean,
+                thr: if in_airplane_range {
+                    THR_FULL
+                } else {
+                    hover.clamp(0.45, 0.90)
+                },
+                mode: brake_mode,
+                coast: false,
+                deep: true,
+                force_full_thr: in_airplane_range,
+            })
+        }
+        TransitCandidate::Coast => Some(CandidateParams {
+            aim: [0.0, 1.0, 0.0],
+            lean_max: 0.05,
+            thr: 0.0,
+            mode: LateralThrMode::VerticalNeutral,
+            coast: true,
+            deep: false,
+            force_full_thr: false,
+        }),
+        TransitCandidate::SinkGo => {
+            if alt <= CRUISE_ALT_CAP {
+                return None;
+            }
+            let sink_bias = (-0.35 * (alt - CRUISE_ALT_CAP) / 40.0).clamp(-0.55, -0.15);
+            Some(CandidateParams {
+                aim: [0.65 * ux, AIM_Y_BIAS + sink_bias, 0.65 * uz],
+                lean_max: 0.35,
+                thr: hover.clamp(0.40, 0.80),
+                mode: LateralThrMode::VerticalNeutral,
+                coast: false,
+                deep: false,
+                force_full_thr: false,
+            })
+        }
+    }
+}
+
+fn candidate_to_plan(params: CandidateParams) -> TransitMpcPlan {
+    TransitMpcPlan {
+        desired_raw: params.aim,
+        lean_max: params.lean_max,
+        deep: params.deep,
+        force_full_thr: params.force_full_thr,
+    }
+}
+
+fn transit_mpc_select(
+    state: &RocketState,
+    pos: [f64; 3],
+    target_xz: [f64; 2],
+    ux: f64,
+    uz: f64,
+    vx: f64,
+    vz: f64,
+    vh: f64,
+    range: f64,
+    alt_hold: f64,
+    hover: f64,
+    mu_long: f64,
+    in_airplane_range: bool,
+    lofted: bool,
+    burn_up: bool,
+    ballistic: bool,
+    brake_latched: bool,
+    brake_now: bool,
+    hold: TransitCandidate,
+    hold_counter: u32,
+) -> (TransitMpcPlan, TransitCandidate, u32) {
+    let mass = state.params.mass;
+    let max_thrust = state.params.max_thrust;
+    let k_drag = if state.moon_mode {
+        0.0
+    } else {
+        state.params.air_drag_k
+    };
+    let brake_mode = if in_airplane_range || vh > 35.0 {
+        LateralThrMode::FullThrottle
+    } else {
+        LateralThrMode::VerticalNeutral
+    };
+    let a_brake_max = lateral_accel_for_lean(
+        LEAN_BRAKE_PLAN,
+        brake_mode,
+        mass,
+        max_thrust,
+    );
+    let horizon = mpc_horizon_s(range);
+    let alt_cap = if in_airplane_range {
+        LONG_CRUISE_ALT_M + 20.0
+    } else {
+        CRUISE_ALT_CAP
+    };
+    let needs_gate = !lofted;
+    let init = predictor_init(state, pos);
+
+    let airplane_go = in_airplane_range && !brake_latched && !brake_now;
+    let candidates: &[TransitCandidate] = if brake_now {
+        &[TransitCandidate::Brake]
+    } else if airplane_go {
+        &[TransitCandidate::AirplaneHold, TransitCandidate::Brake]
+    } else if !lofted || burn_up {
+        &[
+            TransitCandidate::LoftGo,
+            TransitCandidate::CruiseGo,
+            TransitCandidate::Brake,
+            TransitCandidate::Coast,
+            TransitCandidate::SinkGo,
+        ]
+    } else {
+        &[
+            TransitCandidate::CruiseGo,
+            TransitCandidate::Brake,
+            TransitCandidate::Coast,
+            TransitCandidate::SinkGo,
+            TransitCandidate::AirplaneHold,
+        ]
+    };
+
+    let mut best = hold;
+    let mut best_cost = f64::INFINITY;
+    let mut best_plan = candidate_to_plan(CandidateParams {
+        aim: [ux, AIM_Y_BIAS, uz],
+        lean_max: 0.35,
+        thr: hover,
+        mode: LateralThrMode::VerticalNeutral,
+        coast: false,
+        deep: false,
+        force_full_thr: false,
+    });
+
+    for &cand in candidates {
+        let Some(params) = candidate_params(
+            cand,
+            ux,
+            uz,
+            vx,
+            vz,
+            vh,
+            pos[1],
+            alt_hold,
+            state.velocity[1],
+            hover,
+            mu_long,
+            in_airplane_range,
+            lofted,
+            burn_up,
+            mass,
+            max_thrust,
+            a_brake_max,
+            brake_mode,
+        ) else {
+            continue;
+        };
+        let metrics = transit_rollout(
+            init,
+            params,
+            target_xz,
+            ux,
+            uz,
+            mass,
+            max_thrust,
+            k_drag,
+            horizon,
+        );
+        let mut cost = mpc_rollout_cost(metrics, lofted, alt_cap, horizon, needs_gate);
+        if cand == TransitCandidate::Coast && !ballistic {
+            cost += 25.0;
+        }
+        if cand == TransitCandidate::Coast && range > RANGE_FAR_M {
+            cost += 35.0;
+        }
+        if brake_latched && cand == TransitCandidate::Brake {
+            cost -= MPC_COST_HYSTERESIS;
+        }
+        if cand == hold {
+            cost -= MPC_COST_HYSTERESIS * 0.5;
+        }
+        if cost < best_cost {
+            best_cost = cost;
+            best = cand;
+            best_plan = candidate_to_plan(params);
+        }
+    }
+
+    let replan = hold_counter >= MPC_REPLAN_EVERY;
+    let out_cand = if replan { best } else { hold };
+    let out_counter = if replan { 0 } else { hold_counter + 1 };
+
+    let plan = if let Some(params) = candidate_params(
+        out_cand,
+        ux,
+        uz,
+        vx,
+        vz,
+        vh,
+        pos[1],
+        alt_hold,
+        state.velocity[1],
+        hover,
+        mu_long,
+        in_airplane_range,
+        lofted,
+        burn_up,
+        mass,
+        max_thrust,
+        a_brake_max,
+        brake_mode,
+    ) {
+        candidate_to_plan(params)
+    } else {
+        best_plan
+    };
+
+    (plan, out_cand, out_counter)
 }
 
 /// Horizontal propulsive accel (m/s²) at `lean` rad for the given throttle regime.
@@ -1152,6 +1791,7 @@ fn terminal_settle_aim(
 
 /// Full-T airplane aim: pitch elevator holds `alt_hold` while leaning to pad.
 #[inline]
+#[allow(dead_code)]
 fn airplane_hold_aim(
     ux: f64,
     uz: f64,
@@ -1183,6 +1823,8 @@ fn transit_command(
     terminal_brake_latched: bool,
     terminal_settle_phase: TerminalSettlePhase,
     upright_stable_s: f64,
+    mpc_hold: TransitCandidate,
+    mpc_hold_counter: u32,
     dt: f64,
 ) -> (
     ControlCommand,
@@ -1190,6 +1832,8 @@ fn transit_command(
     bool,
     TerminalSettlePhase,
     f64,
+    TransitCandidate,
+    u32,
 ) {
     let dx = target_xz[0] - pos[0];
     let dz = target_xz[1] - pos[2];
@@ -1208,13 +1852,6 @@ fn transit_command(
     let mass = state.params.mass;
     let max_thrust = state.params.max_thrust;
     let hover = mass * GRAVITY / max_thrust;
-    let brake_mode = LateralThrMode::VerticalNeutral;
-    let a_brake_max = lateral_accel_for_lean(
-        LEAN_BRAKE_PLAN,
-        brake_mode,
-        mass,
-        max_thrust,
-    );
 
     // Short-hop loft apogee (blends toward cruise alt with mu_long). Airplane
     // mode ignores this and stays powered until the altitude gate.
@@ -1224,6 +1861,17 @@ fn transit_command(
 
     let apogee = pos[1] + vy.max(0.0) * vy.max(0.0) / (2.0 * GRAVITY);
     let in_airplane_range = range >= LONG_AIRPLANE_RANGE_M;
+    let brake_mode = if in_airplane_range || vh > 35.0 {
+        LateralThrMode::FullThrottle
+    } else {
+        LateralThrMode::VerticalNeutral
+    };
+    let a_brake_max = lateral_accel_for_lean(
+        LEAN_BRAKE_PLAN,
+        brake_mode,
+        mass,
+        max_thrust,
+    );
     let burn_up = !lofted
         && !(near_handoff && pos[1] >= GATE_ALT_MIN - 40.0)
         && (in_airplane_range || apogee < apogee_target);
@@ -1241,7 +1889,8 @@ fn transit_command(
     let v_approach = vx * ux + vz * uz;
     let v_cheby = chebyshev_closing_rate(pos, target_xz, state.velocity);
 
-    let terminal = lofted && range <= RANGE_TERMINAL_M;
+    let high_pad_pass = cheby <= HANDOFF_CHEBY_MAX_M && pos[1] > CRUISE_ALT_CAP + 20.0;
+    let terminal = lofted && range <= RANGE_TERMINAL_M && !high_pad_pass;
     let range_eff = (range - RANGE_TERMINAL_M).max(0.0);
 
     let plan = (!terminal).then(|| {
@@ -1293,7 +1942,6 @@ fn transit_command(
         let p = plan.unwrap();
         update_brake_latch(brake_latched, terminal, range_eff, p.d_stop, v_approach)
     };
-    let airplane_go = in_airplane_range && !brake;
 
     let v_allow = if terminal {
         // Terminal == careful envelope: creep speed only.
@@ -1320,14 +1968,6 @@ fn transit_command(
     let need_x = ux * v_allow - vx;
     let need_z = uz * v_allow - vz;
 
-    let far = lofted && cruise_w > 0.75 && !terminal && range > RANGE_FAR_M;
-    let far_or_overshoot = far
-        || (lofted
-            && cruise_w > 0.75
-            && !terminal
-            && range > RANGE_TERMINAL_M
-            && v_approach < -1.5);
-
     // Airplane range: hold cruise altitude. Closer in: blend 520→800 m.
     let alt_hold = if in_airplane_range {
         LONG_CRUISE_ALT_M
@@ -1335,25 +1975,12 @@ fn transit_command(
         CRUISE_ALT_CAP + mu_long * (LONG_CRUISE_ALT_M - CRUISE_ALT_CAP)
     };
 
-    // Aim regime (mutually exclusive by range / loft state).
+    // Aim regime: terminal settle (fixed) or MPC-selected transit.
     let mut terminal_settle_out: Option<TerminalSettleOutput> = None;
-    let (desired_raw, lean_max, deep, force_full_thr, terminal_brake_out) = if airplane_go {
-        // Full-T go + pitch elevator (ascent and cruise share one law).
-        let (d, l, de, f) = airplane_hold_aim(ux, uz, pos[1], alt_hold, vy, hover);
-        (d, l, de, f, terminal_brake_latched)
-    } else if burn_up {
-        // Short/mid ascent: modest lean, then upright straighten for coast.
-        let lean = LEAN_BURN_MAX + mu_long * (0.90 - LEAN_BURN_MAX);
-        let y_bias = AIM_Y_BIAS - mu_long * 0.55;
-        let k_h = 0.14 + mu_long * 0.35;
-        (
-            [k_h * need_x, y_bias.max(0.40), k_h * need_z],
-            lean.min(LEAN_LONG_MAX),
-            mu_long > 0.35,
-            false,
-            terminal_brake_latched,
-        )
-    } else if terminal {
+    let mut mpc_out_hold = mpc_hold;
+    let mut mpc_out_counter = mpc_hold_counter;
+    let (desired_raw, lean_max, deep, force_full_thr, terminal_brake_out) =
+        if terminal {
         let hp = handoff_plan.unwrap();
         let up_y = world_up_in_body(&state.motor)[1];
         let om = state.omega;
@@ -1388,92 +2015,84 @@ fn transit_command(
             false,
             out.terminal_brake_latch,
         )
-    } else if far_or_overshoot {
-        // Mid/long range: go uses modest lean; brake scales with stop urgency.
-        let s = vh.max(1.0);
-        let p = plan.unwrap();
-        let stop_urgency = if p.d_stop > 1.0 {
-            ((p.d_stop - range_eff) / p.d_stop).clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        let speed_urgency = (vh / 55.0).clamp(0.0, 1.0);
-        let overshoot_u = if v_approach < -1.5 {
-            ((-v_approach - 1.5) / 10.0).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let demand = stop_urgency.max(speed_urgency).max(overshoot_u);
-        let demand_shaped = (demand * demand).clamp(0.0, 1.0);
-        let go_lean = lean_for_lateral_accel(
-            a_brake_max * (0.25 + 0.25 * speed_urgency),
-            brake_mode,
-            mass,
-            max_thrust,
-            (0.35 + 0.25 * speed_urgency).min(LEAN_BRAKE_MAX * 0.55),
-        );
-        let brake_lean = lean_for_lateral_accel(
-            a_brake_max * (0.25 + 0.75 * demand_shaped),
-            brake_mode,
-            mass,
-            max_thrust,
-            (0.20 + 0.80 * demand_shaped * LEAN_BRAKE_MAX).clamp(0.20, LEAN_BRAKE_MAX),
-        );
-        if brake {
-            (
-                [-vx / s, AIM_Y_BIAS, -vz / s],
-                brake_lean,
-                true,
-                false,
-                terminal_brake_latched,
-            )
-        } else {
-            (
-                [ux, AIM_Y_BIAS, uz],
-                go_lean,
-                true,
-                false,
-                terminal_brake_latched,
-            )
-        }
     } else {
-        // Ballistic / shallow mid: reverse only when latched.
-        let s = vh.max(1.0);
-        let p = plan.as_ref();
-        let demand = p
-            .map(|pl| {
-                let stop_u = if pl.d_stop > 1.0 {
-                    ((pl.d_stop - range_eff) / pl.d_stop).clamp(0.0, 1.0)
-                } else {
-                    0.5
-                };
-                (stop_u.max((vh / 40.0).clamp(0.0, 1.0))).powi(2)
-            })
-            .unwrap_or(0.35);
-        let cruise_lean = lean_for_lateral_accel(
-            a_brake_max * (0.20 + 0.45 * demand),
-            brake_mode,
-            mass,
-            max_thrust,
-            (0.18 + 0.72 * demand * LEAN_BRAKE_MAX).clamp(0.18, LEAN_BRAKE_MAX),
+        let (mut mpc_plan, out_hold, out_counter) = transit_mpc_select(
+            state,
+            pos,
+            target_xz,
+            ux,
+            uz,
+            vx,
+            vz,
+            vh,
+            range,
+            alt_hold,
+            hover,
+            mu_long,
+            in_airplane_range,
+            lofted,
+            burn_up,
+            ballistic,
+            brake_latched,
+            brake,
+            mpc_hold,
+            mpc_hold_counter,
         );
-        if brake && lofted && !terminal {
-            (
-                [-vx / s, AIM_Y_BIAS, -vz / s],
-                cruise_lean,
-                false,
-                false,
-                terminal_brake_latched,
-            )
-        } else {
-            (
-                [ux + 0.05 * need_x, AIM_Y_BIAS, uz + 0.05 * need_z],
-                cruise_lean.min(0.45),
-                false,
-                false,
-                terminal_brake_latched,
-            )
+        mpc_out_hold = out_hold;
+        mpc_out_counter = out_counter;
+
+        if brake {
+            let s = vh.max(1.0);
+            let p = plan.as_ref().unwrap();
+            let stop_urgency = if p.d_stop > 1.0 {
+                ((p.d_stop - range_eff) / p.d_stop).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            let speed_urgency = (vh / 55.0).clamp(0.0, 1.0);
+            let overshoot_u = if v_approach < -1.5 {
+                ((-v_approach - 1.5) / 10.0).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let demand = stop_urgency.max(speed_urgency).max(overshoot_u);
+            let demand_shaped = (demand * demand).clamp(0.0, 1.0);
+            let brake_lean = lean_for_lateral_accel(
+                a_brake_max * (0.25 + 0.75 * demand_shaped),
+                brake_mode,
+                mass,
+                max_thrust,
+                (0.20 + 0.80 * demand_shaped * LEAN_BRAKE_MAX).clamp(0.20, LEAN_BRAKE_MAX),
+            );
+            mpc_plan = TransitMpcPlan {
+                desired_raw: [-vx / s, AIM_Y_BIAS, -vz / s],
+                lean_max: brake_lean,
+                deep: true,
+                force_full_thr: in_airplane_range,
+            };
+            mpc_out_hold = TransitCandidate::Brake;
         }
+
+        if burn_up {
+            let lean = LEAN_BURN_MAX + mu_long * (0.90 - LEAN_BURN_MAX);
+            let y_bias = AIM_Y_BIAS - mu_long * 0.55;
+            let k_h = 0.14 + mu_long * 0.35;
+            mpc_plan.desired_raw = [k_h * need_x, y_bias.max(0.40), k_h * need_z];
+            mpc_plan.lean_max = lean.min(LEAN_LONG_MAX);
+            mpc_plan.deep = mu_long > 0.35;
+            mpc_plan.force_full_thr = true;
+        } else if !mpc_plan.force_full_thr && !brake {
+            mpc_plan.desired_raw[0] += 0.05 * need_x;
+            mpc_plan.desired_raw[2] += 0.05 * need_z;
+        }
+
+        (
+            mpc_plan.desired_raw,
+            mpc_plan.lean_max,
+            mpc_plan.deep,
+            mpc_plan.force_full_thr,
+            terminal_brake_latched,
+        )
     };
 
     // Upright straighten only on short-hop burn (airplane owns altitude by pitch).
@@ -1590,7 +2209,7 @@ fn transit_command(
     let out_upright_s = terminal_settle_out
         .map(|o| o.upright_stable_s)
         .unwrap_or(upright_stable_s);
-    (cmd, brake, terminal_brake_out, out_phase, out_upright_s)
+    (cmd, brake, terminal_brake_out, out_phase, out_upright_s, mpc_out_hold, mpc_out_counter)
 }
 
 /// Attitude PD toward a world-frame desired body +Y via PGA inverse transport.
@@ -2442,6 +3061,163 @@ mod tests {
             0.0,
         );
         assert_eq!(phase.0, TerminalSettlePhase::Upright);
+    }
+
+    #[test]
+    fn airplane_brake_plan_uses_full_throttle_lateral_accel() {
+        let mut state = RocketState::at_altitude(LONG_CRUISE_ALT_M);
+        state.contacting = false;
+        state.velocity = [60.0, 0.0, 0.0];
+        let mass = state.params.mass;
+        let max_thrust = state.params.max_thrust;
+        let plan = HorizontalBrakePlan::evaluate(
+            &state,
+            mass,
+            max_thrust,
+            1.0,
+            0.0,
+            60.0,
+            60.0,
+            true,
+            0.0,
+        );
+        let a_full = lateral_accel_for_lean(
+            LEAN_BRAKE_PLAN,
+            LateralThrMode::FullThrottle,
+            mass,
+            max_thrust,
+        );
+        assert!(
+            (plan.a_prop - a_full).abs() < 1e-9,
+            "airplane stop plan must use full-T lateral accel"
+        );
+    }
+
+    #[test]
+    fn mpc_rollout_loft_go_climbs_from_pad() {
+        let state = RocketState::resting_on_pad();
+        let pos = state.position();
+        let init = predictor_init(&state, pos);
+        let params = CandidateParams {
+            aim: [0.3, 1.0, 0.0],
+            lean_max: LEAN_BURN_MAX,
+            thr: THR_FULL,
+            mode: LateralThrMode::FullThrottle,
+            coast: false,
+            deep: false,
+            force_full_thr: true,
+        };
+        let m = transit_rollout(
+            init,
+            params,
+            [500.0, 0.0],
+            1.0,
+            0.0,
+            state.params.mass,
+            state.params.max_thrust,
+            state.params.air_drag_k,
+            6.0,
+        );
+        assert!(
+            m.max_alt > pos[1] + 40.0,
+            "LoftGo rollout should gain altitude, max_alt={}",
+            m.max_alt
+        );
+    }
+
+    #[test]
+    fn mpc_selects_loft_when_below_gate() {
+        let state = RocketState::resting_on_pad();
+        let pos = state.position();
+        let target = [500.0, 0.0];
+        let dx = target[0] - pos[0];
+        let dz = target[1] - pos[2];
+        let range = (dx * dx + dz * dz).sqrt();
+        let ux = dx / range;
+        let uz = dz / range;
+        let (_, cand, _) = transit_mpc_select(
+            &state,
+            pos,
+            target,
+            ux,
+            uz,
+            0.0,
+            0.0,
+            0.0,
+            range,
+            CRUISE_ALT_CAP,
+            state.params.mass * GRAVITY / state.params.max_thrust,
+            0.0,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            TransitCandidate::CruiseGo,
+            MPC_REPLAN_EVERY,
+        );
+        assert_eq!(
+            cand,
+            TransitCandidate::LoftGo,
+            "below altitude gate MPC should prefer loft"
+        );
+    }
+
+    #[test]
+    fn mpc_brake_only_when_brake_latched() {
+        let mut state = RocketState::at_altitude(LONG_CRUISE_ALT_M);
+        state.contacting = false;
+        state.velocity = [70.0, 0.0, 0.0];
+        let pos = state.position();
+        let (_, cand, _) = transit_mpc_select(
+            &state,
+            pos,
+            [6000.0, 0.0],
+            1.0,
+            0.0,
+            70.0,
+            0.0,
+            70.0,
+            6000.0,
+            LONG_CRUISE_ALT_M,
+            state.params.mass * GRAVITY / state.params.max_thrust,
+            0.0,
+            true,
+            true,
+            false,
+            false,
+            true,
+            true,
+            TransitCandidate::AirplaneHold,
+            MPC_REPLAN_EVERY,
+        );
+        assert_eq!(cand, TransitCandidate::Brake);
+    }
+
+    #[test]
+    fn full_throttle_stop_distance_exceeds_vertical_neutral() {
+        let mass = 1000.0;
+        let max_thrust = mass * GRAVITY * 3.0;
+        let beta = 0.0;
+        let a_neutral = lateral_accel_for_lean(
+            LEAN_BRAKE_PLAN,
+            LateralThrMode::VerticalNeutral,
+            mass,
+            max_thrust,
+        );
+        let a_full = lateral_accel_for_lean(
+            LEAN_BRAKE_PLAN,
+            LateralThrMode::FullThrottle,
+            mass,
+            max_thrust,
+        );
+        let d_neutral = predicted_stop_distance(50.0, VH_HANDOFF_MAX, a_neutral, beta, 0.5);
+        let d_full = predicted_stop_distance(50.0, VH_HANDOFF_MAX, a_full, beta, 0.5);
+        assert!(
+            d_full < d_neutral,
+            "full-T brakes harder → shorter stop distance: neutral={d_neutral} full={d_full}"
+        );
     }
 
 }

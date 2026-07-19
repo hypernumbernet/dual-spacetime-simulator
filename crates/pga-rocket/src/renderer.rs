@@ -4,7 +4,7 @@ use crate::explosion::explosion_fx_mesh;
 use crate::integration::Gui;
 use crate::mesh::{
     CAMERA_NEAR, FxVertex, GRASS_METERS_PER_TILE, GROUND_EDGE_FOG_START, GROUND_HALF_EXTENT,
-    GroundVertex, PAD_METERS_PER_TILE, TARGET_DISTANCE_M, Vertex, camera_far_for_eye_height,
+    GroundVertex, PAD_METERS_PER_TILE, TARGET_DISTANCE_MAX_M, Vertex, camera_far_for_eye_height,
     grass_ground_mesh, ground_half_extent_for_eye_height, ground_plane_scale, rocket_mesh,
 };
 use crate::sim::RocketState;
@@ -235,7 +235,7 @@ impl Renderer {
             desc_pool,
             desc_set,
             ground: None,
-            target_xz: [TARGET_DISTANCE_M, 0.0],
+            target_xz: [TARGET_DISTANCE_MAX_M, 0.0],
             rocket: None,
             fx: None,
             retired: Vec::new(),
@@ -247,7 +247,7 @@ impl Renderer {
         let (gverts, gidx) = grass_ground_mesh(GROUND_HALF_EXTENT, 32);
         renderer.ground = Some(renderer.upload_ground(&gverts, &gidx));
         // Default target on +X; App overwrites with a random bearing at startup / reset.
-        renderer.set_target_xz([TARGET_DISTANCE_M, 0.0]);
+        renderer.set_target_xz([TARGET_DISTANCE_MAX_M, 0.0]);
         renderer
     }
 
