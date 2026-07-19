@@ -9,7 +9,7 @@
 //! predicted stop distance; altitude is pitch only (`long_range_hold_cos` /
 //! `long_range_go_aim`). Hold ~800 m. Same stop-distance gate hands off to
 //! reverse lean. Inside ~55 m: quiet station-keep → Descend via
-//! [`LandingAutopilot`].
+//! [`LandingAutopilot::update_target_descend`] (physics closed-loop suicide burn).
 //!
 //! Attitude: PGA inverse sandwich (`motor_inverse_rotate_vector` /
 //! `world_up_in_body`), desired thrust `clamp_tilt`-ed into the lean cone.
@@ -115,7 +115,7 @@ pub struct TargetLandingAutopilot {
     pub enabled: bool,
     pub complete: bool,
     pub phase: TargetPhase,
-    /// Nested lander used only in [`TargetPhase::Descend`] (pre-tuned gains).
+    /// Nested lander used only in [`TargetPhase::Descend`] (physics closed-loop vertical).
     lander: LandingAutopilot,
     /// Latched reverse-lean brake (hysteresis) — kills go↔brake sway.
     brake_latched: bool,
@@ -232,7 +232,7 @@ impl TargetLandingAutopilot {
             }
             TargetPhase::Descend => {
                 self.brake_latched = false;
-                let cmd = self.lander.update_with_target(state, Some(target_xz), dt);
+                let cmd = self.lander.update_target_descend(state, target_xz, dt);
                 self.complete = self.lander.complete;
                 cmd
             }

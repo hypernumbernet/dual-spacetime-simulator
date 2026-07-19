@@ -110,6 +110,12 @@ const K_VEL_TARGET: f64 = 0.55;
 const TILT_PAD_DONE: f64 = 0.18;
 const OMEGA_PAD_DONE: f64 = 0.22;
 const VH_PAD_DONE: f64 = 1.5;
+/// Altitude margin above the suicide-burn envelope before T-Descend coasts (m).
+const COAST_MARGIN_M: f64 = 12.0;
+/// Pessimism on closed-loop `a_req` (matches [`brake_safe_lean`] 1.15 factor).
+const PHYSICS_A_REQ_SAFETY: f64 = 1.15;
+/// Envelope lateness (m) that forces a hard brake floor (matches fuzzy hard_late).
+const ENVELOPE_LATE_M: f64 = 0.75;
 
 /// Automatic landing autopilot toggled with `L`.
 #[derive(Clone, Debug)]
@@ -154,17 +160,19 @@ impl Default for LandingAutopilot {
 }
 
 impl LandingAutopilot {
-    /// Snappier attitude settle for T-key pad landings (no near-pad walk-in).
+    /// Attitude gains for T-key Descend, derived from [`ALPHA_PLAN`] (same basis as transit).
     pub fn for_target_pad() -> Self {
+        let alpha = ALPHA_PLAN;
+        let theta_ref = std::f64::consts::FRAC_PI_2;
+        let omega_max = (2.0 * alpha * theta_ref).sqrt();
+        let kp_attitude = 2.0 * (2.0 * alpha).sqrt();
+        let kd_attitude = 2.0 * (2.0 * alpha).sqrt();
         Self {
-            kp_attitude: 2.6,
-            kd_attitude: 3.4,
-            kd_roll: 2.4,
-            max_lat_tilt: 0.11,
-            k_h: 0.42,
-            v_max_descent: 2.0,
-            kv_descent: 0.34,
-            omega_max: 2.0,
+            kp_attitude,
+            kd_attitude,
+            kd_roll: kd_attitude * 0.65,
+            max_lat_tilt: LEAN_TERMINAL_VH,
+            omega_max,
             ..Self::default()
         }
     }
@@ -478,6 +486,215 @@ impl LandingAutopilot {
         }
         .clamp()
     }
+
+    /// T-key terminal Descend: same attitude geometry as [`update_with_target`], but
+    /// vertical thrust is a closed-loop suicide burn (`a_req → throttle`) instead of
+    /// √h gains and fuzzy arbitration.
+    pub fn update_target_descend(
+        &mut self,
+        state: &RocketState,
+        target_xz: [f64; 2],
+        _dt: f64,
+    ) -> ControlCommand {
+        if !self.enabled || self.complete || state.destroyed {
+            return ControlCommand::default();
+        }
+
+        let mass = state.params.mass;
+        let max_thrust = state.params.max_thrust;
+        let hover = mass * GRAVITY / max_thrust;
+        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
+
+        let up_body = world_up_in_body(&state.motor);
+        let up_y = up_body[1].clamp(-1.0, 1.0);
+        let tilt = up_y.acos();
+
+        let omega = state.omega;
+        let omega_sq = omega[0] * omega[0] + omega[1] * omega[1] + omega[2] * omega[2];
+        let vh_sq = state.velocity[0] * state.velocity[0] + state.velocity[2] * state.velocity[2];
+        let vh = vh_sq.sqrt();
+        let h = state.lowest_foot_y();
+        let vy = state.velocity[1];
+        let v_down = (-vy).max(0.0);
+        let pos = state.position();
+        let on_pad = on_pad_square(pos, target_xz);
+        let cheby = chebyshev_xz(pos, target_xz);
+        let seeking_center = !state.contacting && h > CENTER_SEEK_MIN_H && cheby > CENTER_TOL_M;
+        let terminal_commit = !state.contacting && h <= CENTER_SEEK_MIN_H;
+        let vh_touch = VH_TOUCH_PAD;
+
+        let h_env = if tilt > TILT_PROBE {
+            state.lowest_probe_y()
+        } else {
+            h
+        };
+        let pad_settle = state.contacting && on_pad;
+
+        let (axis, angle) = if pad_settle {
+            axis_angle_from_cross([up_body[2], 0.0, -up_body[0]], up_y)
+        } else {
+            let vx = state.velocity[0];
+            let vz = state.velocity[2];
+            let lean_in = LeanAimFuzzy {
+                h,
+                vh,
+                vx,
+                vz,
+                vy,
+                v_down,
+                cheby,
+                k_lat: self.k_lat,
+                max_lat_tilt: self.max_lat_tilt,
+                has_pad: true,
+                seeking_center,
+                terminal_commit,
+                vh_touch,
+                lean_max: LEAN_MAX,
+                lean_seek_max: LEAN_SEEK_MAX,
+                lean_terminal_vh: LEAN_TERMINAL_VH,
+                lean_pad_extra_max: LEAN_PAD_EXTRA_MAX,
+                lat_tilt_gain: LAT_TILT_GAIN,
+                h_terminal: H_TERMINAL,
+                k_pos: K_POS_TARGET,
+                k_vel: K_VEL_TARGET,
+                target_xz: if seeking_center { Some(target_xz) } else { None },
+                pos_x: pos[0],
+                pos_z: pos[2],
+            };
+            let lat_tilt = brake_safe_lean(lean_max_nominal(&lean_in), v_down, h_env, a_lift);
+            let lean_desired = clamp_tilt(blend_desired_axis(&lean_in), lat_tilt);
+            let w_flip = flip_aim_weight(tilt, TILT_AIM);
+            let desired = if w_flip >= 1.0 - 1e-9 {
+                [0.0, 1.0, 0.0]
+            } else if w_flip <= 1e-9 {
+                lean_desired
+            } else {
+                clamp_tilt(blend_vec3(lean_desired, [0.0, 1.0, 0.0], w_flip), lat_tilt.max(0.05))
+            };
+            let d = motor_inverse_rotate_vector(&state.motor, desired);
+            axis_angle_from_cross([d[2], 0.0, -d[0]], d[1].clamp(-1.0, 1.0))
+        };
+
+        let g = attitude_gain_scales(state.contacting, on_pad, h);
+        let kp = self.kp_attitude * g.kp;
+        let kd = self.kd_attitude * g.kd;
+        let kd_roll = self.kd_roll * g.kd_roll;
+        let alpha = ALPHA_PLAN * g.alpha;
+        let w_cap = self.omega_max * g.omega_cap;
+        let w_mag = (kp * angle).min((2.0 * alpha * angle).sqrt()).min(w_cap);
+        let rate_err_x = omega[0] - axis[0] * w_mag;
+        let rate_err_z = omega[2] - axis[2] * w_mag;
+        let pitch = saturate(kd * rate_err_x);
+        let yaw = saturate(kd * rate_err_z);
+        let roll = saturate(-kd_roll * omega[1]);
+
+        update_lock_latch(&mut self.attitude_locked, tilt, omega_sq, vh_sq);
+
+        // T-pad: latch complete once feet are on the painted square and motion is
+        // settling — do not wait for a perfect upright lock while thrust keeps
+        // the hull hovering after a light bounce.
+        if on_pad
+            && state.contacting
+            && h < 2.5
+            && vh < VH_PAD_DONE
+            && vy.abs() < 1.0
+            && tilt < 0.25
+        {
+            self.complete = true;
+            return ControlCommand::default();
+        }
+
+        if state.contacting
+            && on_pad
+            && vy.abs() < 0.8
+            && vh < VH_PAD_DONE
+            && tilt < TILT_PAD_DONE
+            && omega_sq < OMEGA_PAD_DONE * OMEGA_PAD_DONE
+        {
+            self.complete = true;
+            return ControlCommand::default();
+        }
+
+        if state.contacting && up_y < 0.5 {
+            return ControlCommand {
+                throttle: 0.0,
+                pitch: 0.0,
+                yaw: 0.0,
+                roll,
+            }
+            .clamp();
+        }
+
+        if pad_settle && up_y >= 0.5 {
+            // Ground reaction supports weight — cut thrust once horizontal motion is
+            // low so a light bounce does not re-launch into a hover loop.
+            if vh <= vh_touch && vy.abs() < 1.0 {
+                let thr = if (tilt > 0.08 || omega_sq > 0.04) && tilt < 0.35 {
+                    attitude_authority_throttle(pitch, yaw, roll, hover)
+                        .min(hover * 0.12)
+                } else {
+                    0.0
+                };
+                return ControlCommand {
+                    throttle: thr,
+                    pitch,
+                    yaw,
+                    roll,
+                }
+                .clamp();
+            }
+            let hover_cmd = (hover / up_y.max(0.35)).clamp(0.0, 0.9);
+            let thr = if tilt > 0.06 || omega_sq > 0.02 {
+                (hover_cmd * 0.45 + 0.15 * (pitch.abs() + yaw.abs() + roll.abs())).min(0.55)
+            } else {
+                0.0
+            };
+            return ControlCommand {
+                throttle: thr,
+                pitch,
+                yaw,
+                roll,
+            }
+            .clamp();
+        }
+
+        let hover_cmd = (hover / up_y.max(0.25)).clamp(0.0, 0.95);
+        let a_brake = (a_lift * up_y.max(0.0) - GRAVITY).max(0.5);
+        let h_lat = (vh * vh) / (2.0 * a_brake.max(1.0) + 4.0 * GRAVITY);
+        let h_need = burn_height(vy, a_brake, V_TOUCH) + H_BURN_MARGIN + T_REACT * v_down + h_lat;
+
+        let t_auth = if up_y < UPY_AUTH {
+            let lag = (rate_err_x.abs().max(rate_err_z.abs()) - 0.15).max(0.0);
+            (0.08 + 1.2 * lag).min(1.0)
+        } else {
+            attitude_authority_throttle(pitch, yaw, roll, hover)
+        };
+
+        let throttle = physics_pad_vertical_throttle(
+            mass,
+            max_thrust,
+            hover_cmd,
+            up_y,
+            a_brake,
+            h,
+            h_env,
+            h_need,
+            v_down,
+            vy,
+            vh,
+            state.contacting,
+            vh_touch,
+            t_auth,
+        );
+
+        ControlCommand {
+            throttle: throttle.clamp(0.0, 1.0),
+            pitch,
+            yaw,
+            roll,
+        }
+        .clamp()
+    }
 }
 
 fn update_lock_latch(locked: &mut bool, tilt: f64, omega_sq: f64, vh_sq: f64) {
@@ -588,6 +805,78 @@ fn brake_safe_lean(nominal: f64, v_down: f64, h_env: f64, a_lift: f64) -> f64 {
     };
     let upy_req = ((a_req + GRAVITY) / a_lift).clamp(0.0, 0.98);
     nominal.min(upy_req.acos())
+}
+
+/// Closed-loop suicide burn for T-Descend: `a_req = (v² − v_touch²)/(2h)` → throttle.
+fn physics_pad_vertical_throttle(
+    mass: f64,
+    max_thrust: f64,
+    hover_cmd: f64,
+    up_y: f64,
+    a_brake: f64,
+    _h: f64,
+    h_env: f64,
+    h_need: f64,
+    v_down: f64,
+    vy: f64,
+    vh: f64,
+    contacting: bool,
+    vh_touch: f64,
+    t_auth: f64,
+) -> f64 {
+    // Pad contact with low horizontal speed: ground carries weight — do not hover.
+    if contacting && vh <= vh_touch {
+        return t_auth.min(0.12);
+    }
+
+    // Near the pad and rising (post-bounce): never loft back up.
+    if h_env < H_TERMINAL && vy > 0.05 {
+        return t_auth.min(hover_cmd * 0.35);
+    }
+
+    // Feet just above the pad, slow drift: hold thrust off until reground.
+    if h_env < 1.2 && vh <= vh_touch && v_down < V_BRAKE_MIN {
+        return t_auth.min(0.08);
+    }
+
+    if contacting && vh > vh_touch {
+        return hover_cmd * 0.55;
+    }
+
+    if h_env > h_need + COAST_MARGIN_M && v_down > V_BRAKE_MIN {
+        return t_auth.max(0.0);
+    }
+
+    let h_eff = h_env.max(0.35);
+    // Constant-decel soft terminal: touch speed ∝ √h below [`H_TERMINAL`].
+    let v_touch_eff = if h_env < H_TERMINAL {
+        V_TOUCH * (h_env / H_TERMINAL).sqrt().max(0.18)
+    } else {
+        V_TOUCH
+    };
+    let v_sq = v_down * v_down - v_touch_eff * v_touch_eff;
+    let a_req = if v_sq > 0.0 {
+        (PHYSICS_A_REQ_SAFETY * v_sq / (2.0 * h_eff)).clamp(0.0, a_brake)
+    } else {
+        0.0
+    };
+
+    let up_y_eff = up_y.max(UPY_BRAKE);
+    let mut t = mass * (a_req + GRAVITY) / (max_thrust * up_y_eff);
+    t = t.clamp(0.0, BURN_PLAN_FRAC).max(t_auth);
+
+    // Hard envelope floor — never arrive late on the suicide-burn curve.
+    if h_env <= h_need + ENVELOPE_LATE_M && v_down > V_BRAKE_MIN && up_y >= UPY_BRAKE {
+        let t_bang = (BURN_PLAN_FRAC + (v_down - V_TOUCH).max(0.0) * 0.015).min(1.0);
+        t = t.max(t_bang);
+    }
+
+    // Terminal taper: once near the target descent rate, do not overshoot into hover.
+    if h_env < H_TERMINAL && v_down < v_touch_eff + 0.25 {
+        t = t.min(hover_cmd * 0.92);
+    }
+
+    t
 }
 
 /// Normalize `v` and limit its angle from +Y to `max_tilt` (uses cos test, no acos).
@@ -766,5 +1055,175 @@ mod tests {
         let err_legacy = motor_inverse_rotate_vector(&m, err_w);
         assert!((err[0] - err_legacy[0]).abs() < 1e-8);
         assert!((err[2] - err_legacy[2]).abs() < 1e-8);
+    }
+
+    #[test]
+    fn physics_vertical_coasts_above_envelope() {
+        let mass = 1000.0;
+        let max_thrust = 3.0 * mass * GRAVITY;
+        let hover_cmd = mass * GRAVITY / max_thrust;
+        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
+        let a_brake = a_lift - GRAVITY;
+        let h_env = 80.0;
+        let h_need = burn_height(-8.0, a_brake, V_TOUCH) + H_BURN_MARGIN + T_REACT * 8.0;
+        let t = physics_pad_vertical_throttle(
+            mass,
+            max_thrust,
+            hover_cmd,
+            1.0,
+            a_brake,
+            h_env,
+            h_env,
+            h_need,
+            8.0,
+            -8.0,
+            0.0,
+            false,
+            VH_TOUCH_PAD,
+            0.0,
+        );
+        assert!(t < 0.05, "expected coast above envelope, t={t}");
+    }
+
+    #[test]
+    fn physics_vertical_brakes_on_envelope() {
+        let mass = 1000.0;
+        let max_thrust = 3.0 * mass * GRAVITY;
+        let hover_cmd = mass * GRAVITY / max_thrust;
+        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
+        let a_brake = a_lift - GRAVITY;
+        let v_down = 20.0;
+        let h_need = burn_height(-v_down, a_brake, V_TOUCH) + H_BURN_MARGIN + T_REACT * v_down;
+        let h_env = h_need * 0.4;
+        let t = physics_pad_vertical_throttle(
+            mass,
+            max_thrust,
+            hover_cmd,
+            1.0,
+            a_brake,
+            h_env,
+            h_env,
+            h_need,
+            v_down,
+            -v_down,
+            0.0,
+            false,
+            VH_TOUCH_PAD,
+            0.0,
+        );
+        assert!(t > 0.85, "expected hard brake when late on envelope, t={t}");
+    }
+
+    #[test]
+    fn physics_vertical_a_req_scales_with_speed_squared() {
+        let mass = 1000.0;
+        let max_thrust = 3.0 * mass * GRAVITY;
+        let hover_cmd = mass * GRAVITY / max_thrust;
+        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
+        let a_brake = a_lift - GRAVITY;
+        let h = 55.0;
+        let h_need = 50.0;
+        let t_slow = physics_pad_vertical_throttle(
+            mass,
+            max_thrust,
+            hover_cmd,
+            1.0,
+            a_brake,
+            h,
+            h,
+            h_need,
+            4.0,
+            -4.0,
+            0.0,
+            false,
+            VH_TOUCH_PAD,
+            0.0,
+        );
+        let t_fast = physics_pad_vertical_throttle(
+            mass,
+            max_thrust,
+            hover_cmd,
+            1.0,
+            a_brake,
+            h,
+            h,
+            h_need,
+            8.0,
+            -8.0,
+            0.0,
+            false,
+            VH_TOUCH_PAD,
+            0.0,
+        );
+        assert!(
+            t_fast > t_slow,
+            "faster fall must need more thrust, slow={t_slow} fast={t_fast}"
+        );
+    }
+
+    #[test]
+    fn physics_vertical_cuts_thrust_on_pad_contact() {
+        let mass = 1000.0;
+        let max_thrust = 3.0 * mass * GRAVITY;
+        let hover_cmd = mass * GRAVITY / max_thrust;
+        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
+        let a_brake = a_lift - GRAVITY;
+        let t = physics_pad_vertical_throttle(
+            mass,
+            max_thrust,
+            hover_cmd,
+            1.0,
+            a_brake,
+            0.5,
+            0.5,
+            5.0,
+            0.0,
+            0.2,
+            0.5,
+            true,
+            VH_TOUCH_PAD,
+            0.0,
+        );
+        assert!(t < 0.15, "pad contact must not hover, t={t}");
+    }
+
+    #[test]
+    fn physics_vertical_does_not_loft_after_bounce() {
+        let mass = 1000.0;
+        let max_thrust = 3.0 * mass * GRAVITY;
+        let hover_cmd = mass * GRAVITY / max_thrust;
+        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
+        let a_brake = a_lift - GRAVITY;
+        let t = physics_pad_vertical_throttle(
+            mass,
+            max_thrust,
+            hover_cmd,
+            1.0,
+            a_brake,
+            2.0,
+            2.0,
+            5.0,
+            0.0,
+            1.5,
+            0.0,
+            false,
+            VH_TOUCH_PAD,
+            0.0,
+        );
+        assert!(
+            t < hover_cmd * 0.5,
+            "rising near pad must not command hover, t={t} hover={hover_cmd}"
+        );
+    }
+
+    #[test]
+    fn target_descend_uses_physics_vertical() {
+        let mut state = RocketState::at_altitude(80.0);
+        state.velocity = [0.0, -2.0, 0.0];
+        state.contacting = false;
+        let mut ap = LandingAutopilot::for_target_pad();
+        ap.enabled = true;
+        let cmd = ap.update_target_descend(&state, [0.0, 0.0], DT);
+        assert!(cmd.throttle < 0.05, "expected coast high above envelope, t={}", cmd.throttle);
     }
 }

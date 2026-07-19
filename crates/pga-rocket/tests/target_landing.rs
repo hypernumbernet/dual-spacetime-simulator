@@ -199,3 +199,29 @@ fn starts_near_target_still_clears_500m_when_low() {
     );
     assert!(!state.destroyed, "impact={}", state.last_impact_speed);
 }
+
+#[test]
+fn target_descend_completes_without_hovering() {
+    let state = RocketState::resting_on_pad();
+    let target = [500.0, 0.0];
+    let (state, ap, _) = run_target(state, target, 8 * 60 * 120);
+
+    assert!(!state.destroyed, "impact={}", state.last_impact_speed);
+    assert!(
+        ap.complete,
+        "must latch complete after pad settle, phase={:?} contacting={} h={}",
+        ap.phase,
+        state.contacting,
+        state.lowest_foot_y()
+    );
+    assert!(
+        state.contacting,
+        "must rest on ground after complete, h={}",
+        state.lowest_foot_y()
+    );
+    assert!(
+        state.last_impact_speed < 4.0,
+        "touchdown should be soft, impact={}",
+        state.last_impact_speed
+    );
+}

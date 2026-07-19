@@ -214,9 +214,13 @@ X' = M X M~      (M~ は反転 reverse)
    - 距離フロアにより、高速で 3 km まで寄っても ballistic thr カット／直立ストレッチに
      落ちず、airplane 法を維持する。
 
-3. **ターミナル（パッド近傍）**
-   - ファジー deep lean ではなく **控えめな velocity-error aim**（Descend の
-     姿勢・レート gate を満たすため）。mid-range 包絡が残差 `vh` の大半を既に落とす。
+3. **ターミナル Descend（パッド上・hand-off 後）**
+   - 垂直: 物理閉ループ自殺バーン — `a_req = clamp((v² − v_touch²)/(2h), 0, a_brake)`、
+     `t = m(a_req + g)/(T_max·up_y)`。包絡より十分上はコースト、包絡上／遅刻は
+     `a_req` 飽和で bang、接地直前は `v_down → v_touch` でホバー相当。√h の
+     `k_h` / `kv` チューニングは使わない（L モードのみ）。
+   - 姿勢: 既存の lean aim + √-profile PD。ゲインは [`ALPHA_PLAN`](src/landing.rs)
+     から導出（`for_target_pad`）。mid-range 包絡が残差 `vh` の大半を既に落とす。
 
 ### 設計上の教訓（要約）
 
