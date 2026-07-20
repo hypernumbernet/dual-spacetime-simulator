@@ -42,11 +42,28 @@ pub struct KeySnapshot {
     pub toggle_moon_mode: bool,
 }
 
+impl KeySnapshot {
+    /// True when any manual flight-control key is active (cancels L/T autopilot).
+    pub fn manual_control_active(&self) -> bool {
+        self.thrust_up
+            || self.thrust_down
+            || self.thrust_full
+            || self.thrust_cut
+            || self.pitch_up
+            || self.pitch_down
+            || self.yaw_left
+            || self.yaw_right
+            || self.roll_left
+            || self.roll_right
+    }
+}
+
 /// Maps key state into incremental control updates.
 ///
 /// - Space / Ctrl: hold to raise / lower throttle
 /// - F / C: edge-triggered latch ramps (full / cut) over [`THROTTLE_LATCH_RAMP_S`]
 /// - W/S pitch, Q/E yaw, A/D roll; R / L / T / M are edge signals for the app
+/// - Any manual flight key cancels L/T autopilot (handled in the app layer)
 #[derive(Clone, Debug)]
 pub struct ControlMapper {
     /// Throttle units per second while Space / Ctrl held.
@@ -192,5 +209,71 @@ mod unit_tests {
         let thr = step_throttle_latch(&mut latch, 0.0, THROTTLE_LATCH_RAMP_S);
         assert!((thr - 1.0).abs() < 1e-12);
         assert_eq!(latch, ThrottleLatch::None);
+    }
+
+    #[test]
+    fn manual_control_active_false_when_idle() {
+        assert!(!KeySnapshot::default().manual_control_active());
+    }
+
+    #[test]
+    fn manual_control_active_true_for_each_flight_key() {
+        let cases = [
+            KeySnapshot {
+                thrust_up: true,
+                ..Default::default()
+            },
+            KeySnapshot {
+                thrust_down: true,
+                ..Default::default()
+            },
+            KeySnapshot {
+                thrust_full: true,
+                ..Default::default()
+            },
+            KeySnapshot {
+                thrust_cut: true,
+                ..Default::default()
+            },
+            KeySnapshot {
+                pitch_up: true,
+                ..Default::default()
+            },
+            KeySnapshot {
+                pitch_down: true,
+                ..Default::default()
+            },
+            KeySnapshot {
+                yaw_left: true,
+                ..Default::default()
+            },
+            KeySnapshot {
+                yaw_right: true,
+                ..Default::default()
+            },
+            KeySnapshot {
+                roll_left: true,
+                ..Default::default()
+            },
+            KeySnapshot {
+                roll_right: true,
+                ..Default::default()
+            },
+        ];
+        for keys in cases {
+            assert!(keys.manual_control_active(), "expected active: {keys:?}");
+        }
+    }
+
+    #[test]
+    fn manual_control_active_ignores_mode_and_reset_keys() {
+        let keys = KeySnapshot {
+            reset: true,
+            toggle_landing: true,
+            toggle_target_landing: true,
+            toggle_moon_mode: true,
+            ..Default::default()
+        };
+        assert!(!keys.manual_control_active());
     }
 }

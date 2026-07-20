@@ -199,6 +199,10 @@ impl App {
                 self.landing.disable();
             }
         }
+        if (self.landing.enabled || self.target_landing.enabled) && keys.manual_control_active() {
+            self.landing.disable();
+            self.target_landing.disable();
+        }
         if keys.toggle_moon_mode {
             self.rocket.moon_mode = !self.rocket.moon_mode;
         }
