@@ -123,6 +123,9 @@ const OMEGA_PAD_DONE: f64 = 0.22;
 const VH_PAD_DONE: f64 = 1.5;
 /// Altitude margin above the suicide-burn envelope before T-Descend coasts (m).
 const COAST_MARGIN_M: f64 = 12.0;
+/// Airborne T-Descend throttle floor. Engine stays lit through coast
+/// (reignition after cut is not modeled).
+const DESCEND_MIN_THROTTLE: f64 = 0.03;
 /// Pessimism on closed-loop `a_req` (matches [`brake_safe_lean`] 1.15 factor).
 const PHYSICS_A_REQ_SAFETY: f64 = 1.15;
 /// Envelope lateness (m) that forces a hard brake floor (matches fuzzy hard_late).
@@ -945,6 +948,7 @@ fn physics_pad_vertical_throttle(
         upy_brake: UPY_BRAKE,
     }
     .arbitrate()
+    .max(if contacting { 0.0 } else { DESCEND_MIN_THROTTLE })
 }
 
 /// Normalize `v` and limit its angle from +Y to `max_tilt` (uses cos test, no acos).
@@ -979,13 +983,72 @@ mod tests {
 
     const DT: f64 = 1.0 / 120.0;
 
-    /// Run the lander for ~1 s so the throttle actuator can spool to the setpoint.
-    fn lander_cmd_after_spool(ap: &mut LandingAutopilot, state: &RocketState) -> ControlCommand {
+    struct PhysicsPadPlant {
+        mass: f64,
+        max_thrust: f64,
+        hover_cmd: f64,
+        a_brake: f64,
+    }
+
+    impl PhysicsPadPlant {
+        fn tw3() -> Self {
+            let mass = 1000.0;
+            let max_thrust = 3.0 * mass * GRAVITY;
+            let hover_cmd = mass * GRAVITY / max_thrust;
+            let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
+            Self {
+                mass,
+                max_thrust,
+                hover_cmd,
+                a_brake: a_lift - GRAVITY,
+            }
+        }
+
+        fn vertical_throttle(
+            &self,
+            up_y: f64,
+            h: f64,
+            h_env: f64,
+            h_need: f64,
+            v_down: f64,
+            vy: f64,
+            vh: f64,
+            contacting: bool,
+            t_auth: f64,
+        ) -> f64 {
+            physics_pad_vertical_throttle(
+                self.mass,
+                self.max_thrust,
+                self.hover_cmd,
+                up_y,
+                self.a_brake,
+                h,
+                h_env,
+                h_need,
+                v_down,
+                vy,
+                vh,
+                contacting,
+                VH_TOUCH_PAD,
+                t_auth,
+            )
+        }
+    }
+
+    fn cmd_after_spool<F>(ap: &mut LandingAutopilot, state: &RocketState, frames: usize, mut step: F) -> ControlCommand
+    where
+        F: FnMut(&mut LandingAutopilot, &RocketState) -> ControlCommand,
+    {
         let mut cmd = ControlCommand::default();
-        for _ in 0..120 {
-            cmd = ap.update(state, DT);
+        for _ in 0..frames {
+            cmd = step(ap, state);
         }
         cmd
+    }
+
+    /// Run the lander for ~1 s so the throttle actuator can spool to the setpoint.
+    fn lander_cmd_after_spool(ap: &mut LandingAutopilot, state: &RocketState) -> ControlCommand {
+        cmd_after_spool(ap, state, 120, |ap, s| ap.update(s, DT))
     }
 
     #[test]
@@ -1136,133 +1199,46 @@ mod tests {
 
     #[test]
     fn physics_vertical_handoff_kills_climb() {
-        let mass = 1000.0;
-        let max_thrust = 3.0 * mass * GRAVITY;
-        let hover_cmd = mass * GRAVITY / max_thrust;
-        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
-        let a_brake = a_lift - GRAVITY;
+        let p = PhysicsPadPlant::tw3();
         let h_env = 640.0;
         let h_need = 25.0;
-        let t = physics_pad_vertical_throttle(
-            mass,
-            max_thrust,
-            hover_cmd,
-            0.98,
-            a_brake,
-            h_env,
-            h_env,
-            h_need,
-            0.0,
-            2.3,
-            0.0,
-            false,
-            VH_TOUCH_PAD,
-            0.0,
-        );
+        let t = p.vertical_throttle(0.98, h_env, h_env, h_need, 0.0, 2.3, 0.0, false, 0.0);
         assert!(
-            t < hover_cmd * 0.25,
-            "T-Descend hand-off with residual climb must coast, t={t} hover={hover_cmd}"
+            t >= DESCEND_MIN_THROTTLE && t < p.hover_cmd * 0.25,
+            "T-Descend hand-off with residual climb must coast, t={t} hover={}",
+            p.hover_cmd
         );
     }
 
     #[test]
     fn physics_vertical_coasts_above_envelope() {
-        let mass = 1000.0;
-        let max_thrust = 3.0 * mass * GRAVITY;
-        let hover_cmd = mass * GRAVITY / max_thrust;
-        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
-        let a_brake = a_lift - GRAVITY;
+        let p = PhysicsPadPlant::tw3();
         let h_env = 80.0;
-        let h_need = burn_height(-8.0, a_brake, V_TOUCH) + H_BURN_MARGIN + T_REACT * 8.0;
-        let t = physics_pad_vertical_throttle(
-            mass,
-            max_thrust,
-            hover_cmd,
-            1.0,
-            a_brake,
-            h_env,
-            h_env,
-            h_need,
-            8.0,
-            -8.0,
-            0.0,
-            false,
-            VH_TOUCH_PAD,
-            0.0,
+        let h_need = burn_height(-8.0, p.a_brake, V_TOUCH) + H_BURN_MARGIN + T_REACT * 8.0;
+        let t = p.vertical_throttle(1.0, h_env, h_env, h_need, 8.0, -8.0, 0.0, false, 0.0);
+        assert!(
+            t >= DESCEND_MIN_THROTTLE && t < 0.15,
+            "expected low coast above envelope, t={t}"
         );
-        assert!(t < 0.15, "expected coast above envelope, t={t}");
     }
 
     #[test]
     fn physics_vertical_brakes_on_envelope() {
-        let mass = 1000.0;
-        let max_thrust = 3.0 * mass * GRAVITY;
-        let hover_cmd = mass * GRAVITY / max_thrust;
-        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
-        let a_brake = a_lift - GRAVITY;
+        let p = PhysicsPadPlant::tw3();
         let v_down = 20.0;
-        let h_need = burn_height(-v_down, a_brake, V_TOUCH) + H_BURN_MARGIN + T_REACT * v_down;
+        let h_need = burn_height(-v_down, p.a_brake, V_TOUCH) + H_BURN_MARGIN + T_REACT * v_down;
         let h_env = h_need * 0.4;
-        let t = physics_pad_vertical_throttle(
-            mass,
-            max_thrust,
-            hover_cmd,
-            1.0,
-            a_brake,
-            h_env,
-            h_env,
-            h_need,
-            v_down,
-            -v_down,
-            0.0,
-            false,
-            VH_TOUCH_PAD,
-            0.0,
-        );
+        let t = p.vertical_throttle(1.0, h_env, h_env, h_need, v_down, -v_down, 0.0, false, 0.0);
         assert!(t > 0.85, "expected hard brake when late on envelope, t={t}");
     }
 
     #[test]
     fn physics_vertical_a_req_scales_with_speed_squared() {
-        let mass = 1000.0;
-        let max_thrust = 3.0 * mass * GRAVITY;
-        let hover_cmd = mass * GRAVITY / max_thrust;
-        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
-        let a_brake = a_lift - GRAVITY;
+        let p = PhysicsPadPlant::tw3();
         let h = 55.0;
         let h_need = 50.0;
-        let t_slow = physics_pad_vertical_throttle(
-            mass,
-            max_thrust,
-            hover_cmd,
-            1.0,
-            a_brake,
-            h,
-            h,
-            h_need,
-            4.0,
-            -4.0,
-            0.0,
-            false,
-            VH_TOUCH_PAD,
-            0.0,
-        );
-        let t_fast = physics_pad_vertical_throttle(
-            mass,
-            max_thrust,
-            hover_cmd,
-            1.0,
-            a_brake,
-            h,
-            h,
-            h_need,
-            8.0,
-            -8.0,
-            0.0,
-            false,
-            VH_TOUCH_PAD,
-            0.0,
-        );
+        let t_slow = p.vertical_throttle(1.0, h, h, h_need, 4.0, -4.0, 0.0, false, 0.0);
+        let t_fast = p.vertical_throttle(1.0, h, h, h_need, 8.0, -8.0, 0.0, false, 0.0);
         assert!(
             t_fast > t_slow,
             "faster fall must need more thrust, slow={t_slow} fast={t_fast}"
@@ -1271,56 +1247,19 @@ mod tests {
 
     #[test]
     fn physics_vertical_cuts_thrust_on_pad_contact() {
-        let mass = 1000.0;
-        let max_thrust = 3.0 * mass * GRAVITY;
-        let hover_cmd = mass * GRAVITY / max_thrust;
-        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
-        let a_brake = a_lift - GRAVITY;
-        let t = physics_pad_vertical_throttle(
-            mass,
-            max_thrust,
-            hover_cmd,
-            1.0,
-            a_brake,
-            0.5,
-            0.5,
-            5.0,
-            0.0,
-            0.2,
-            0.5,
-            true,
-            VH_TOUCH_PAD,
-            0.0,
-        );
+        let p = PhysicsPadPlant::tw3();
+        let t = p.vertical_throttle(1.0, 0.5, 0.5, 5.0, 0.0, 0.2, 0.5, true, 0.0);
         assert!(t < 0.15, "pad contact must not hover, t={t}");
     }
 
     #[test]
     fn physics_vertical_does_not_loft_after_bounce() {
-        let mass = 1000.0;
-        let max_thrust = 3.0 * mass * GRAVITY;
-        let hover_cmd = mass * GRAVITY / max_thrust;
-        let a_lift = BURN_PLAN_FRAC * max_thrust / mass;
-        let a_brake = a_lift - GRAVITY;
-        let t = physics_pad_vertical_throttle(
-            mass,
-            max_thrust,
-            hover_cmd,
-            1.0,
-            a_brake,
-            2.0,
-            2.0,
-            5.0,
-            0.0,
-            1.5,
-            0.0,
-            false,
-            VH_TOUCH_PAD,
-            0.0,
-        );
+        let p = PhysicsPadPlant::tw3();
+        let t = p.vertical_throttle(1.0, 2.0, 2.0, 5.0, 0.0, 1.5, 0.0, false, 0.0);
         assert!(
-            t < hover_cmd * 0.5,
-            "rising near pad must not command hover, t={t} hover={hover_cmd}"
+            t < p.hover_cmd * 0.5,
+            "rising near pad must not command hover, t={t} hover={}",
+            p.hover_cmd
         );
     }
 
@@ -1348,8 +1287,15 @@ mod tests {
         state.contacting = false;
         let mut ap = LandingAutopilot::for_target_pad();
         ap.enabled = true;
-        let cmd = ap.update_target_descend(&state, [0.0, 0.0], DT);
-        assert!(cmd.throttle < 0.05, "expected coast high above envelope, t={}", cmd.throttle);
+        let target_xz = [0.0, 0.0];
+        let cmd = cmd_after_spool(&mut ap, &state, 20, |ap, s| {
+            ap.update_target_descend(s, target_xz, DT)
+        });
+        assert!(
+            cmd.throttle >= DESCEND_MIN_THROTTLE && cmd.throttle < 0.15,
+            "expected low coast high above envelope, t={}",
+            cmd.throttle
+        );
     }
 
     #[test]

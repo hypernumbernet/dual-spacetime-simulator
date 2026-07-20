@@ -286,6 +286,8 @@ X' = M X M~      (M~ は反転 reverse)
      `t = m(a_req + g)/(T_max·up_y)`。コースト／ブレーキ／接地カットは
      [`PhysicsPadThrottleFuzzy`](src/fuzzy.rs) で肩付きブレンド（離散 step なし）。
      包絡遅刻の hard floor のみ離散のまま。
+   - **飛行中の最低推力:** 再点火はモデル化しないため、接地前（`!contacting`）は
+     `DESCEND_MIN_THROTTLE`（0.03）を下回らない。接地 settle / complete 時のゼロカットは従来どおり。
    - **エンジンアクチュエータ:** GNC セットポイントを [`slew_throttle`](src/fuzzy.rs)
      で非対称スプール（上 ~0.9 s、下 ~0.4 s の 0↔1）してから sim に渡す（L/T 共通）。
    - 姿勢: lean aim + √-profile PD + **`brake_safe_lean`**（`LEAN_TERMINAL_VH=0.18`）。
