@@ -21,7 +21,8 @@
 //! as soon as the pad approach is settled (physics closed-loop suicide burn).
 //!
 //! Attitude: PGA inverse sandwich ([`motor_inverse_rotate_vector`] /
-//! [`world_up_in_body`]), desired thrust [`clamp_tilt`]-ed into the lean cone.
+//! [`world_up_in_body`]), desired thrust [`clamp_tilt`]-ed into the lean cone,
+//! then rate-limited (aim slew + gimbal actuator) before the attitude PD.
 
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
@@ -161,6 +162,16 @@ const OMEGA_RATE_KILL_BRAKE: f64 = 1.10;
 /// Vertical component of the free-vector aim (dimensionless relative to |horiz|).
 /// Keeps the thrust axis from going fully horizontal.
 const AIM_Y_BIAS: f64 = 1.0;
+/// Below this horizontal speed (m/s), anti-velocity aim uses the filtered aim
+/// azimuth instead of instantaneous velocity (prevents 180° flip at low vh).
+const VH_AIM_AZIMUTH_HOLD: f64 = 8.0;
+/// Aim slew rate (rad/s) floor — soft brake / terminal settle / upright.
+const AIM_SLEW_SOFT: f64 = 1.0;
+/// Aim slew rate (rad/s) ceiling — hard reverse-brake / deep airplane lean.
+const AIM_SLEW_HARD: f64 = 3.0;
+/// Gimbal command slew (fraction of full deflection per second).
+/// Caps bang-bang pitch/yaw from saturated rate-PD so the nozzle does not chatter.
+const GIMBAL_SLEW_RATE: f64 = 5.0;
 
 /// Anti-velocity brake aim: +Y component so unit horizontal gives tilt ≈ `lean_cap`.
 ///
@@ -191,13 +202,163 @@ struct CruiseBrakeCommand {
     soft_att: bool,
 }
 
+/// Unit-length world-frame vector, or `None` if degenerate.
 #[inline]
-fn cruise_brake_command(vx: f64, vz: f64, vh: f64, v_approach: f64) -> CruiseBrakeCommand {
+fn normalize_vec3(v: [f64; 3]) -> Option<[f64; 3]> {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len < 1e-9 {
+        None
+    } else {
+        Some([v[0] / len, v[1] / len, v[2] / len])
+    }
+}
+
+/// Angle (rad) between two unit vectors via dot product.
+#[inline]
+fn unit_angle(a: [f64; 3], b: [f64; 3]) -> f64 {
+    (a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
+        .clamp(-1.0, 1.0)
+        .acos()
+}
+
+/// Spherical linear interpolation between unit vectors `a` and `b` (t in [0, 1]).
+#[inline]
+fn slerp_unit(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
+    let t = t.clamp(0.0, 1.0);
+    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]).clamp(-1.0, 1.0);
+    if dot > 1.0 - 1e-8 {
+        return b;
+    }
+    // Antipodal: pick any perpendicular and rotate toward it (avoids a 180° snap).
+    let b = if dot < -1.0 + 1e-8 {
+        let ortho = if a[1].abs() < 0.9 {
+            normalize_vec3([-a[2], 0.0, a[0]]).unwrap_or([1.0, 0.0, 0.0])
+        } else {
+            normalize_vec3([1.0, 0.0, 0.0]).unwrap_or([0.0, 0.0, 1.0])
+        };
+        ortho
+    } else {
+        b
+    };
+    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]).clamp(-1.0, 1.0);
+    let omega = dot.acos();
+    let sin_omega = omega.sin();
+    if sin_omega < 1e-8 {
+        return b;
+    }
+    let wa = ((1.0 - t) * omega).sin() / sin_omega;
+    let wb = (t * omega).sin() / sin_omega;
+    normalize_vec3([
+        wa * a[0] + wb * b[0],
+        wa * a[1] + wb * b[1],
+        wa * a[2] + wb * b[2],
+    ])
+    .unwrap_or(b)
+}
+
+/// Rate-limited slew of a world-frame thrust aim unit vector toward `target`.
+#[inline]
+fn slew_aim_world(current: [f64; 3], target: [f64; 3], dt: f64, max_rate: f64) -> [f64; 3] {
+    let dt = dt.max(0.0);
+    let rate = max_rate.max(0.0);
+    let Some(cur) = normalize_vec3(current) else {
+        return normalize_vec3(target).unwrap_or([0.0, 1.0, 0.0]);
+    };
+    let Some(tgt) = normalize_vec3(target) else {
+        return cur;
+    };
+    let angle = unit_angle(cur, tgt);
+    let max_step = rate * dt;
+    if angle <= max_step || max_step <= 1e-12 {
+        return tgt;
+    }
+    slerp_unit(cur, tgt, max_step / angle)
+}
+
+/// Horizontal anti-velocity direction; below [`VH_AIM_AZIMUTH_HOLD`] uses filtered aim.
+#[inline]
+fn brake_anti_horizontal(vx: f64, vz: f64, vh: f64, aim_filtered: [f64; 3]) -> (f64, f64) {
+    if vh < VH_AIM_AZIMUTH_HOLD {
+        let hx = aim_filtered[0];
+        let hz = aim_filtered[2];
+        let h_len = (hx * hx + hz * hz).sqrt();
+        if h_len > 0.05 {
+            return (hx / h_len, hz / h_len);
+        }
+    }
+    let s = vh.max(1.0);
+    (-vx / s, -vz / s)
+}
+
+/// Slew rate (rad/s) for transit aim filtering — continuous soft→hard by authority.
+#[inline]
+fn aim_slew_rate(
+    brake: bool,
+    brake_hardness: f64,
+    deep: bool,
+    terminal: bool,
+    terminal_phase: Option<TerminalSettlePhase>,
+) -> f64 {
+    if matches!(
+        terminal_phase,
+        Some(TerminalSettlePhase::Upright | TerminalSettlePhase::Trim)
+    ) {
+        return AIM_SLEW_SOFT;
+    }
+    let authority = if terminal {
+        0.0
+    } else if deep {
+        1.0
+    } else if brake {
+        brake_hardness.clamp(0.0, 1.0)
+    } else {
+        0.45
+    };
+    AIM_SLEW_SOFT + authority * (AIM_SLEW_HARD - AIM_SLEW_SOFT)
+}
+
+/// Apply aim slew filter; on sync, snap to the first target.
+#[inline]
+fn filter_and_slew_aim(
+    aim_filtered: &mut [f64; 3],
+    aim_filter_sync: &mut bool,
+    target: [f64; 3],
+    dt: f64,
+    max_rate: f64,
+) -> [f64; 3] {
+    if *aim_filter_sync {
+        *aim_filtered = normalize_vec3(target).unwrap_or([0.0, 1.0, 0.0]);
+        *aim_filter_sync = false;
+        return *aim_filtered;
+    }
+    let out = slew_aim_world(*aim_filtered, target, dt, max_rate);
+    *aim_filtered = out;
+    out
+}
+
+/// Rate-limit a signed command in [-1, 1] toward `target`.
+#[inline]
+fn slew_command_axis(current: f64, target: f64, dt: f64, rate: f64) -> f64 {
+    let target = target.clamp(-1.0, 1.0);
+    let current = current.clamp(-1.0, 1.0);
+    let max_step = rate.max(0.0) * dt.max(0.0);
+    let delta = (target - current).clamp(-max_step, max_step);
+    (current + delta).clamp(-1.0, 1.0)
+}
+
+#[inline]
+fn cruise_brake_command(
+    vx: f64,
+    vz: f64,
+    vh: f64,
+    v_approach: f64,
+    aim_filtered: [f64; 3],
+) -> CruiseBrakeCommand {
     let hardness = cruise_brake_hardness(vh, v_approach, VH_BRAKE_SOFT, VH_BRAKE_HARD);
     let (lean_cap, aggressive_att, soft_att) = brake_exec_from_hardness(hardness);
-    let s = vh.max(1.0);
     let y_bias = brake_aim_y_bias(lean_cap);
-    let anti = [-vx / s, y_bias, -vz / s];
+    let (ax, az) = brake_anti_horizontal(vx, vz, vh, aim_filtered);
+    let anti = [ax, y_bias, az];
     let upright = [0.0, 1.0, 0.0];
     let aim = blend_vec3(upright, anti, 0.30 + 0.70 * hardness);
     CruiseBrakeCommand {
@@ -361,6 +522,14 @@ pub struct TargetLandingAutopilot {
     throttle_actuator: f64,
     /// Re-sync actuator from vehicle command on arm / enable.
     throttle_actuator_sync: bool,
+    /// Rate-limited world-frame thrust aim (unit vector).
+    aim_filtered: [f64; 3],
+    /// Re-sync aim filter on arm / reset.
+    aim_filter_sync: bool,
+    /// Delivered gimbal commands (lags GNC pitch/yaw/roll via slew).
+    gimbal_actuator: [f64; 3],
+    /// Re-sync gimbal actuator from vehicle command on arm / enable.
+    gimbal_actuator_sync: bool,
 }
 
 impl Default for TargetLandingAutopilot {
@@ -380,6 +549,10 @@ impl Default for TargetLandingAutopilot {
             mpc_hold_counter: MPC_REPLAN_EVERY,
             throttle_actuator: 0.0,
             throttle_actuator_sync: true,
+            aim_filtered: [0.0, 1.0, 0.0],
+            aim_filter_sync: true,
+            gimbal_actuator: [0.0, 0.0, 0.0],
+            gimbal_actuator_sync: true,
         }
     }
 }
@@ -399,6 +572,8 @@ impl TargetLandingAutopilot {
         self.mpc_hold_counter = MPC_REPLAN_EVERY;
         self.reset_terminal_settle();
         self.throttle_actuator_sync = true;
+        self.aim_filter_sync = true;
+        self.gimbal_actuator_sync = true;
     }
 
     fn finalize_cruise_throttle(
@@ -427,6 +602,51 @@ impl TargetLandingAutopilot {
         self.throttle_actuator
     }
 
+    /// Rate-limit gimbal commands so saturated attitude PD cannot bang-bang the nozzle.
+    fn finalize_gimbal(
+        &mut self,
+        pitch: f64,
+        yaw: f64,
+        roll: f64,
+        dt: f64,
+        state: &RocketState,
+    ) -> (f64, f64, f64) {
+        if self.gimbal_actuator_sync {
+            self.gimbal_actuator = [
+                state.command.pitch.clamp(-1.0, 1.0),
+                state.command.yaw.clamp(-1.0, 1.0),
+                state.command.roll.clamp(-1.0, 1.0),
+            ];
+            self.gimbal_actuator_sync = false;
+        }
+        self.gimbal_actuator[0] =
+            slew_command_axis(self.gimbal_actuator[0], pitch, dt, GIMBAL_SLEW_RATE);
+        self.gimbal_actuator[1] =
+            slew_command_axis(self.gimbal_actuator[1], yaw, dt, GIMBAL_SLEW_RATE);
+        self.gimbal_actuator[2] =
+            slew_command_axis(self.gimbal_actuator[2], roll, dt, GIMBAL_SLEW_RATE);
+        (
+            self.gimbal_actuator[0],
+            self.gimbal_actuator[1],
+            self.gimbal_actuator[2],
+        )
+    }
+
+    /// Spool throttle + gimbal actuators onto a GNC command (Climb / Cruise).
+    fn apply_actuators(
+        &mut self,
+        cmd: &mut ControlCommand,
+        dt: f64,
+        state: &RocketState,
+    ) {
+        cmd.throttle = self.finalize_cruise_throttle(cmd.throttle, dt, state);
+        let (pitch, yaw, roll) =
+            self.finalize_gimbal(cmd.pitch, cmd.yaw, cmd.roll, dt, state);
+        cmd.pitch = pitch;
+        cmd.yaw = yaw;
+        cmd.roll = roll;
+    }
+
     pub fn toggle(&mut self) {
         self.enabled = !self.enabled;
         if self.enabled {
@@ -434,7 +654,6 @@ impl TargetLandingAutopilot {
             self.phase = TargetPhase::Climb;
             self.reset_transit_latches();
             self.lander.disable();
-            self.throttle_actuator_sync = true;
         } else {
             self.lander.disable();
         }
@@ -559,7 +778,7 @@ impl TargetLandingAutopilot {
         match self.phase {
             TargetPhase::Climb => {
                 let mut cmd = climb_command(state, target_xz, pos);
-                cmd.throttle = self.finalize_cruise_throttle(cmd.throttle, dt, state);
+                self.apply_actuators(&mut cmd, dt, state);
                 cmd
             }
             TargetPhase::Cruise => {
@@ -576,8 +795,10 @@ impl TargetLandingAutopilot {
                         self.mpc_hold,
                         self.mpc_hold_counter,
                         dt,
+                        &mut self.aim_filtered,
+                        &mut self.aim_filter_sync,
                     );
-                cmd.throttle = self.finalize_cruise_throttle(cmd.throttle, dt, state);
+                self.apply_actuators(&mut cmd, dt, state);
                 self.brake_latched = brake;
                 self.terminal_brake_latched = terminal_brake;
                 self.terminal_settle_phase = settle_phase;
@@ -1304,7 +1525,9 @@ fn candidate_params(
         }
         TransitCandidate::Brake => {
             let v_approach = vx * ux + vz * uz;
-            let cmd = cruise_brake_command(vx, vz, vh, v_approach);
+            // MPC brake uses instantaneous anti-v only — filtered azimuth is for
+            // the live command path, not the open-loop predictor.
+            let cmd = cruise_brake_command(vx, vz, vh, v_approach, [0.0, 1.0, 0.0]);
             let full_thr = brake_force_full_throttle(
                 in_airplane_range,
                 vh,
@@ -1873,6 +2096,7 @@ fn terminal_brake_aim(
     brake_w: f64,
     freedom: f64,
     aggression: f64,
+    aim_filtered: [f64; 3],
 ) -> ([f64; 3], f64) {
     let pos_urgency = (hp.t_pos / 3.0).clamp(0.0, 1.0);
     let vh_urgency = (hp.t_vh / 3.0).clamp(0.0, 1.0);
@@ -1907,12 +2131,12 @@ fn terminal_brake_aim(
     let mut aim_z = dir_bias * uz + gain_scale * (k_pos * need_z - k_vel * vz / v_ref);
 
     // Blend toward velocity-opposing aim only as hard as demand requires.
-    let s = vh.max(0.9);
     let motion = settle_motion_scale(freedom);
     let anti_w =
         (brake_w * (0.35 + 0.65 * demand_shaped) * motion).clamp(0.0, 1.0);
-    aim_x = (1.0 - anti_w) * aim_x + anti_w * (-vx / s);
-    aim_z = (1.0 - anti_w) * aim_z + anti_w * (-vz / s);
+    let (anti_x, anti_z) = brake_anti_horizontal(vx, vz, vh, aim_filtered);
+    aim_x = (1.0 - anti_w) * aim_x + anti_w * anti_x;
+    aim_z = (1.0 - anti_w) * aim_z + anti_w * anti_z;
 
     let a_req_x = gain_scale * (k_pos * need_x - k_vel * vx) + anti_w * 0.45 * (-vx);
     let a_req_z = gain_scale * (k_pos * need_z - k_vel * vz) + anti_w * 0.45 * (-vz);
@@ -2024,6 +2248,7 @@ fn terminal_settle_aim(
     up_y: f64,
     omega_py: f64,
     aggression: f64,
+    aim_filtered: [f64; 3],
 ) -> TerminalSettleOutput {
     let vh_hot = terminal_vh_hot(cheby, aggression);
     let (brake_w, new_latch) =
@@ -2066,6 +2291,7 @@ fn terminal_settle_aim(
                 brake_w,
                 freedom,
                 aggression,
+                aim_filtered,
             );
             (d, lean)
         }
@@ -2173,8 +2399,9 @@ fn climb_command(
         clamp_tilt([ux, 1.0, uz], lean)
     };
 
-    let soft_att = state.contacting || alt < CLIMB_CLEAR_ALT_M + 15.0;
-    let (pitch, yaw, roll, _) = attitude_toward(state, desired, COS_TILT_AIM, soft_att, false);
+    // Soft PD for the whole climb pitch program — a hard soft→stiff gate at
+    // ~40 m kicked the gimbal while lean was still opening.
+    let (pitch, yaw, roll, _) = attitude_toward(state, desired, COS_TILT_AIM, true, false);
 
     ControlCommand {
         throttle: THR_FULL,
@@ -2204,6 +2431,8 @@ fn transit_command(
     mpc_hold: TransitCandidate,
     mpc_hold_counter: u32,
     dt: f64,
+    aim_filtered: &mut [f64; 3],
+    aim_filter_sync: &mut bool,
 ) -> (
     ControlCommand,
     bool,
@@ -2251,6 +2480,7 @@ fn transit_command(
 
     let terminal = lofted && terminal_latched;
     let range_eff = (range - CAREFUL_NEAR_M).max(0.0);
+    let aim_prev = *aim_filtered;
 
     let plan = (!terminal).then(|| {
         HorizontalBrakePlan::evaluate(
@@ -2371,6 +2601,7 @@ fn transit_command(
             up_y,
             omega_py,
             aggression,
+            aim_prev,
         );
         terminal_settle_out = Some(out);
         (
@@ -2406,7 +2637,7 @@ fn transit_command(
         mpc_out_counter = out_counter;
 
         if brake {
-            let cmd = cruise_brake_command(vx, vz, vh, v_approach);
+            let cmd = cruise_brake_command(vx, vz, vh, v_approach, aim_prev);
             brake_hardness = cmd.hardness;
             cruise_brake = Some(cmd);
             mpc_plan = TransitMpcPlan {
@@ -2443,6 +2674,9 @@ fn transit_command(
         [aim_w * desired_raw[0], desired_raw[1], aim_w * desired_raw[2]],
         lean_max,
     );
+    let terminal_phase = terminal_settle_out.map(|o| o.phase);
+    let slew_rate = aim_slew_rate(brake, brake_hardness, deep, terminal, terminal_phase);
+    let desired = filter_and_slew_aim(aim_filtered, aim_filter_sync, desired, dt, slew_rate);
     // Deep / airplane lean: low flip gate so nose-down is tracked, not "recovered".
     // Once brake hardness fades, restore the upright flip gate for settle.
     let flip_cos = if (force_full_thr || deep) && !(brake && brake_hardness < 0.40) {
@@ -2586,16 +2820,14 @@ fn attitude_toward(
         (KP_ATT, KD_ATT, OMEGA_MAX, OMEGA_RATE_KILL)
     };
 
-    // High residual rate: kill spin first so a lean-direction change cannot
-    // carry the body through upright into continuous tumble.
-    let w_mag = if omega_xy > rate_kill {
-        0.0
-    } else {
-        (kp * angle)
-            .min((2.0 * ALPHA_PLAN * angle).sqrt())
-            .min(w_cap)
-            .min((w_cap - 0.4 * omega_xy).max(0.0))
-    };
+    // Soft fade: kill the position-rate command as residual rate approaches
+    // `rate_kill`, instead of a hard cut that bang-bangs across the threshold.
+    let rate_fade = ramp_down(omega_xy, rate_kill * 0.60, rate_kill);
+    let w_cmd = (kp * angle)
+        .min((2.0 * ALPHA_PLAN * angle).sqrt())
+        .min(w_cap)
+        .min((w_cap - 0.4 * omega_xy).max(0.0));
+    let w_mag = w_cmd * rate_fade;
     let pitch = saturate(kd * (omega[0] - axis[0] * w_mag));
     let yaw = saturate(kd * (omega[2] - axis[2] * w_mag));
     let roll = saturate(-KD_ROLL * omega[1]);
@@ -2649,6 +2881,113 @@ mod tests {
             spooled.throttle > 0.9,
             "long-range cruise should reach near full T after spool, thr={}",
             spooled.throttle
+        );
+    }
+
+    #[test]
+    fn slew_aim_world_respects_rate_limit_per_step() {
+        let current = [0.0, 1.0, 0.0];
+        let target = [1.0, 0.0, 0.0];
+        let dt = TEST_DT;
+        let rate = 2.0;
+        let out = slew_aim_world(current, target, dt, rate);
+        let step = unit_angle(current, out);
+        assert!(
+            step <= rate * dt + 1e-9,
+            "slew step {step} exceeds rate*dt={}",
+            rate * dt
+        );
+        assert!(out[1] > 0.0, "slew should move toward target, got {out:?}");
+    }
+
+    #[test]
+    fn slew_aim_world_antipodal_does_not_snap() {
+        let current = [0.0, 1.0, 0.0];
+        let target = [0.0, -1.0, 0.0];
+        let dt = TEST_DT;
+        let rate = AIM_SLEW_HARD;
+        let out = slew_aim_world(current, target, dt, rate);
+        let step = unit_angle(current, out);
+        assert!(
+            step <= rate * dt + 1e-6,
+            "antipodal slew must not snap, step={step}"
+        );
+        assert!(
+            (out[0] * out[0] + out[1] * out[1] + out[2] * out[2] - 1.0).abs() < 1e-9,
+            "result must stay unit, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn filter_and_slew_aim_limits_flip_on_brake_target() {
+        let mut filtered = [0.0, 1.0, 0.0];
+        let mut sync = false;
+        let dt = TEST_DT;
+        let rate = AIM_SLEW_SOFT;
+        let target_a = normalize_vec3([-1.0, 1.0, 0.0]).unwrap();
+        let target_b = normalize_vec3([1.0, 1.0, 0.0]).unwrap();
+        let first = filter_and_slew_aim(&mut filtered, &mut sync, target_a, dt, rate);
+        let second = filter_and_slew_aim(&mut filtered, &mut sync, target_b, dt, rate);
+        let flip_step = unit_angle(first, second);
+        assert!(
+            flip_step <= rate * dt + 1e-9,
+            "180° brake flip must slew, step={flip_step} max={}",
+            rate * dt
+        );
+    }
+
+    #[test]
+    fn low_vh_brake_anti_uses_filtered_azimuth() {
+        let aim = normalize_vec3([-0.8, 0.6, 0.0]).unwrap();
+        let (ax, az) = brake_anti_horizontal(0.1, 0.0, 3.0, aim);
+        let h_len = (ax * ax + az * az).sqrt();
+        assert!(h_len > 0.9, "filtered azimuth should be unit horizontal, got ({ax},{az})");
+        assert!(ax < -0.5, "should keep filtered -X brake direction, ax={ax}");
+    }
+
+    #[test]
+    fn slew_command_axis_respects_rate_limit() {
+        let dt = TEST_DT;
+        let rate = GIMBAL_SLEW_RATE;
+        let out = slew_command_axis(0.0, 1.0, dt, rate);
+        assert!(
+            out <= rate * dt + 1e-9,
+            "gimbal slew step {out} exceeds rate*dt={}",
+            rate * dt
+        );
+        let flip = slew_command_axis(1.0, -1.0, dt, rate);
+        assert!(
+            (1.0 - flip) <= rate * dt + 1e-9,
+            "gimbal reverse must slew, got {flip}"
+        );
+    }
+
+    #[test]
+    fn gimbal_actuator_limits_saturated_yaw_flips() {
+        let mut state = RocketState::resting_on_pad();
+        let mut ap = TargetLandingAutopilot::default();
+        ap.enabled = true;
+        let target = [500.0, 0.0];
+        let mut prev_y = 0.0f64;
+        let mut hard_flips = 0u32;
+        for _ in 0..120 * 40 {
+            let cmd = ap.update(&state, target, TEST_DT);
+            if prev_y.abs() > 0.85
+                && cmd.yaw.abs() > 0.85
+                && prev_y.signum() != cmd.yaw.signum()
+            {
+                hard_flips += 1;
+            }
+            prev_y = cmd.yaw;
+            state.set_command(cmd);
+            crate::sim::step_rocket(&mut state, TEST_DT);
+            if state.destroyed || ap.complete {
+                break;
+            }
+        }
+        assert!(
+            hard_flips < 8,
+            "saturated yaw must not bang-bang; hard_flips={hard_flips}"
         );
     }
 
@@ -2804,7 +3143,7 @@ mod tests {
 
     #[test]
     fn cruise_brake_full_hardness_reaches_long_range_lean() {
-        let cmd = cruise_brake_command(-40.0, 0.0, 40.0, 40.0);
+        let cmd = cruise_brake_command(-40.0, 0.0, 40.0, 40.0, [0.0, 1.0, 0.0]);
         assert!(
             (cmd.lean_cap - LEAN_LONG_MAX).abs() < 1e-9,
             "full hardness should open to cruise lean cap, got {}",
@@ -2980,6 +3319,20 @@ mod tests {
         );
     }
 
+    /// Advance autopilot without physics so actuators can leave neutral.
+    fn spool_frames(
+        ap: &mut TargetLandingAutopilot,
+        state: &RocketState,
+        target: [f64; 2],
+        frames: u32,
+    ) -> ControlCommand {
+        let mut cmd = ControlCommand::default();
+        for _ in 0..frames {
+            cmd = ap.update(state, target, TEST_DT);
+        }
+        cmd
+    }
+
     #[test]
     fn far_cruise_leans_toward_target_when_underspeed() {
         let mut state = RocketState::at_altitude(500.0);
@@ -2987,7 +3340,7 @@ mod tests {
         state.velocity = [20.0, 0.0, 0.0]; // well under envelope at 500 m range
         let mut ap = TargetLandingAutopilot::default();
         ap.enabled = true;
-        let cmd = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
+        let cmd = spool_frames(&mut ap, &state, [500.0, 0.0], 12);
         assert_eq!(ap.phase, TargetPhase::Cruise);
         // Target on +X → pitch gimbal (about body +X) should be non-trivial lean.
         assert!(
@@ -3007,7 +3360,7 @@ mod tests {
         state.velocity = [80.0, 0.0, 0.0];
         let mut ap = TargetLandingAutopilot::default();
         ap.enabled = true;
-        let cmd = ap.update(&state, [120.0, 0.0], 1.0 / 120.0);
+        let cmd = spool_frames(&mut ap, &state, [120.0, 0.0], 12);
         assert_eq!(ap.phase, TargetPhase::Cruise);
         assert!(
             cmd.pitch.abs() + cmd.yaw.abs() > 0.05,
@@ -3257,6 +3610,7 @@ mod tests {
             0.25,
             settle_lean_freedom(2.5),
             careful_aggression(80.0),
+            [0.0, 1.0, 0.0],
         );
         assert!(
             lean < 0.40,
@@ -3299,6 +3653,7 @@ mod tests {
             1.0,
             settle_lean_freedom(55.0),
             careful_aggression(80.0),
+            [0.0, 1.0, 0.0],
         );
         assert!(
             lean > 0.55,
@@ -3442,6 +3797,7 @@ mod tests {
             world_up_in_body(&state.motor)[1],
             0.08,
             careful_aggression(CAREFUL_NEAR_M),
+            [0.0, 1.0, 0.0],
         );
         assert_eq!(out.phase, TerminalSettlePhase::Upright);
         assert!(
@@ -3495,6 +3851,7 @@ mod tests {
             1.0,
             0.02,
             careful_aggression(CAREFUL_NEAR_M),
+            [0.0, 1.0, 0.0],
         );
         assert_eq!(out.phase, TerminalSettlePhase::Trim);
         assert!(
@@ -3545,6 +3902,7 @@ mod tests {
             1.0,
             0.02,
             careful_aggression(80.0),
+            [0.0, 1.0, 0.0],
         );
         assert_eq!(out.phase, TerminalSettlePhase::Trim);
         assert!(
@@ -3636,6 +3994,7 @@ mod tests {
             0.85,
             settle_lean_freedom(2.5),
             agg,
+            [0.0, 1.0, 0.0],
         );
         state.velocity = [-12.0, 0.0, 0.0];
         let (_, lean_fast) = terminal_brake_aim(
@@ -3656,6 +4015,7 @@ mod tests {
             0.85,
             settle_lean_freedom(55.0),
             agg,
+            [0.0, 1.0, 0.0],
         );
         assert!(
             lean_slow < lean_fast,
