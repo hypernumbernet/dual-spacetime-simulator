@@ -191,6 +191,12 @@ X' = M X M~      (M~ は反転 reverse)
      **ブレーキ安全 lean 上限**（残り高度で垂直成分が足りるか）でハード制限。
    - `flip_aim_weight`: 傾きが `TILT_AIM` 付近で lean aim ↔ 純直立を肩付きで切替。
 
+4. **T-Cruise 垂直スロットル** — `CruiseThrottleFuzzy`
+   - 入力: 各局所指令（`t_hold`, `t_full`, `t_auth`, `t_deep`, `t_settle`, `t_contact`）と
+     レジームフラグ（airplane full-T、deep reverse lean、terminal settle、ballistic 等）。
+   - ファジーは **レジーム境界の肩**のみ: full-T ↔ authority、deep、settle、ballistic 床。
+   - go/brake の aim 選択・Descend ハンドオフ AND は離散のまま。
+
 ### T モード（目標着陸）
 
 0. **Climb（480 m ゲート未満）** — 単純物理のフルスロットル上昇
@@ -208,7 +214,11 @@ X' = M X M~      (M~ は反転 reverse)
      `LoftGo` は MPC 内部のみ）。遠距離 go 中は `AirplaneHold` と `Brake` のみ。
      2 フレームごとに再計画（receding horizon）。
    - コスト: 480 m ロフトゲート未達・過剰ロフト・残距離・オーバーシュート・ハンドオフ余裕・∫throttle dt。
-   - 内ループは従来どおり姿勢 PD + throttle 整形。ターミナル settle / Descend 硬 AND は不変。
+   - 内ループ: 姿勢 PD + 垂直スロットルは hover 保持・full-T・authority・deep/settle などの
+     **局所則**を [`CruiseThrottleFuzzy`](src/fuzzy.rs) で肩付きブレンド（離散 step なし）。
+     ターミナル settle / Descend 硬 AND は不変。
+   - **エンジンアクチュエータ（Climb / Cruise）:** GNC セットポイントを
+     [`slew_throttle`](src/fuzzy.rs) で非対称スプールしてから sim に渡す（Descend と同型）。
 
 1. **中距離 go / brake** — 物理予測停止距離 `d_stop = d_flip + d_burn`
    - 計画 lean は実行天井 **`LEAN_BRAKE_MAX`（0.90 rad）** と同値。`a_lat = g·tan(θ)`（垂直中立）または

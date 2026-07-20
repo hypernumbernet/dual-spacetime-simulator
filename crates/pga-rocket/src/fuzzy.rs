@@ -316,6 +316,130 @@ impl PhysicsPadThrottleFuzzy {
     }
 }
 
+// --- T-Cruise vertical (regime blend + actuator) --------------------------------
+
+/// Fuzzy blend for [`crate::target_landing::transit_command`]: smooths
+/// airplane full-T ↔ authority, deep reverse lean, terminal settle, and
+/// ballistic coast transitions instead of hard `if` steps.
+#[derive(Clone, Copy, Debug)]
+pub struct CruiseThrottleFuzzy {
+    pub force_full_thr: bool,
+    pub deep: bool,
+    pub terminal: bool,
+    pub ballistic: bool,
+    pub contacting: bool,
+    pub brake: bool,
+    pub brake_hardness: f64,
+    pub vy: f64,
+    pub effort: f64,
+    pub t_hold: f64,
+    pub t_full: f64,
+    pub t_auth: f64,
+    pub t_deep: f64,
+    pub t_settle: f64,
+    pub t_contact: f64,
+}
+
+impl CruiseThrottleFuzzy {
+    /// Membership-weighted vertical setpoint in [0, 1].
+    pub fn arbitrate(self) -> f64 {
+        let CruiseThrottleFuzzy {
+            force_full_thr,
+            deep,
+            terminal,
+            ballistic,
+            contacting,
+            brake,
+            brake_hardness,
+            vy,
+            effort,
+            t_hold,
+            t_full,
+            t_auth,
+            t_deep,
+            t_settle,
+            t_contact,
+        } = self;
+
+        // Airplane / hard-brake full-T vs post-decel authority coast.
+        let mu_full_hard = if force_full_thr {
+            or(
+                if brake {
+                    ramp(brake_hardness, 0.35, 0.55)
+                } else {
+                    0.0
+                },
+                ramp_down(vy, 8.0, 14.0),
+            )
+        } else {
+            0.0
+        };
+        let mut t = if force_full_thr {
+            defuzz_weighted(&[(mu_full_hard, t_full), (1.0 - mu_full_hard, t_auth)], t_auth)
+        } else {
+            t_hold
+        };
+
+        // Deep reverse lean: vertical-neutral hover/cos + modest effort torque.
+        let mu_deep = if deep && !force_full_thr {
+            ramp(1.0, 0.0, 1.0)
+        } else {
+            0.0
+        };
+        if mu_deep > 1e-6 {
+            t = defuzz_weighted(&[(mu_deep, t_deep), (1.0 - mu_deep, t)], t);
+        }
+
+        // Terminal settle: phase-specific hover clamps.
+        let mu_settle = if terminal && !force_full_thr && !deep {
+            ramp(1.0, 0.0, 1.0)
+        } else {
+            0.0
+        };
+        if mu_settle > 1e-6 {
+            t = defuzz_weighted(&[(mu_settle, t_settle), (1.0 - mu_settle, t)], t);
+        }
+
+        // Ballistic coast: attitude authority floor without re-lofting.
+        let cruise_w = cruise_w_from_vy(vy);
+        let mu_ballistic = if ballistic && !force_full_thr && !deep && !terminal {
+            ramp_down(cruise_w, 0.0, 0.5)
+        } else {
+            0.0
+        };
+        if mu_ballistic > 1e-6 {
+            t = t.max(defuzz_weighted(&[(mu_ballistic, t_auth), (1.0 - mu_ballistic, t)], t));
+        }
+
+        // Attitude effort floor (mid-range go / soft brake).
+        let t_effort = (0.10 + 0.28 * effort).min(0.95);
+        let mu_effort = if !force_full_thr && !deep && !terminal && effort > 0.04 {
+            ramp(effort, 0.04, 0.25)
+        } else {
+            0.0
+        };
+        if mu_effort > 1e-6 {
+            t = t.max(defuzz_weighted(
+                &[(mu_effort, t_effort), (1.0 - mu_effort, t)],
+                t,
+            ));
+        }
+
+        // Ground contact support (hard floor — same doctrine as Descend hard_late).
+        if contacting {
+            t = t.max(t_contact);
+        }
+
+        t.clamp(0.0, 1.0)
+    }
+}
+
+/// Powered-cruise weight helper: 1 at vy ≤ +3, 0 at vy ≥ +8.
+#[inline]
+fn cruise_w_from_vy(vy: f64) -> f64 {
+    (1.0 - (vy - 3.0) / 5.0).clamp(0.0, 1.0)
+}
+
 /// Asymmetric main-engine throttle slew (fraction per second).
 ///
 /// Pump-fed stages spool up slower than they throttle down; this models the
@@ -1062,6 +1186,115 @@ mod tests {
         assert!(hot > 0.95, "hot={hot}");
         assert!(overshoot > 0.6, "overshoot should keep hardness, got {overshoot}");
         assert!(quiet < mid && mid < hot);
+    }
+
+    #[test]
+    fn cruise_throttle_fuzzy_airplane_full_vs_auth() {
+        let t_full = 0.97;
+        let t_auth = 0.25;
+        let base = CruiseThrottleFuzzy {
+            force_full_thr: true,
+            deep: false,
+            terminal: false,
+            ballistic: false,
+            contacting: false,
+            brake: true,
+            brake_hardness: 0.7,
+            vy: 5.0,
+            effort: 0.3,
+            t_hold: 0.4,
+            t_full,
+            t_auth,
+            t_deep: 0.5,
+            t_settle: 0.5,
+            t_contact: 0.6,
+        };
+        let hot = base.arbitrate();
+        assert!(
+            hot > 0.9,
+            "hard brake + low vy should stay near full T, got {hot}"
+        );
+
+        let soft = CruiseThrottleFuzzy {
+            brake: false,
+            brake_hardness: 0.1,
+            vy: 18.0,
+            ..base
+        }
+        .arbitrate();
+        assert!(
+            (soft - t_auth).abs() < 0.05,
+            "post-decel coast should use authority, got {soft}"
+        );
+        assert!(
+            (hot - soft).abs() > 0.4,
+            "must not average full T with hover: hot={hot} soft={soft}"
+        );
+    }
+
+    #[test]
+    fn cruise_throttle_fuzzy_deep_and_settle() {
+        let hover: f64 = 0.33;
+        let t_deep = (hover + 0.08 * 0.2).clamp(hover * 0.92, hover + 0.12);
+        let deep_base = CruiseThrottleFuzzy {
+            force_full_thr: false,
+            deep: true,
+            terminal: false,
+            ballistic: false,
+            contacting: false,
+            brake: true,
+            brake_hardness: 0.5,
+            vy: -2.0,
+            effort: 0.2,
+            t_hold: 0.5,
+            t_full: 0.97,
+            t_auth: 0.15,
+            t_deep,
+            t_settle: hover,
+            t_contact: 0.6,
+        };
+        let deep = deep_base.arbitrate();
+        assert!(
+            (deep - t_deep).abs() < 0.02,
+            "deep reverse lean should track t_deep, got {deep}"
+        );
+
+        let t_settle = hover * 0.93;
+        let settle = CruiseThrottleFuzzy {
+            deep: false,
+            terminal: true,
+            t_hold: 0.55,
+            t_settle,
+            ..deep_base
+        }
+        .arbitrate();
+        assert!(
+            (settle - t_settle).abs() < 0.03,
+            "terminal settle should track t_settle, got {settle}"
+        );
+    }
+
+    #[test]
+    fn cruise_throttle_fuzzy_contact_floor() {
+        let base = CruiseThrottleFuzzy {
+            force_full_thr: false,
+            deep: false,
+            terminal: false,
+            ballistic: false,
+            contacting: true,
+            brake: false,
+            brake_hardness: 0.0,
+            vy: 0.0,
+            effort: 0.0,
+            t_hold: 0.2,
+            t_full: 0.97,
+            t_auth: 0.1,
+            t_deep: 0.3,
+            t_settle: 0.3,
+            t_contact: 0.65,
+        }
+        .arbitrate();
+        assert!(base >= 0.65, "contact floor must apply, got {base}");
     }
 
     #[test]

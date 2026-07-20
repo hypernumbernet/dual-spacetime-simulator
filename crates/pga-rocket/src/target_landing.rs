@@ -26,7 +26,7 @@ use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
     blend_vec3, careful_aggression, careful_terminal_latch, cruise_brake_hardness,
     long_range_go_aim, long_range_hold_cos, long_range_weight, ramp, ramp_down,
-    CAREFUL_NEAR_M, CAREFUL_RANGE_M, LONG_CRUISE_ALT_M,
+    slew_throttle, CruiseThrottleFuzzy, CAREFUL_NEAR_M, CAREFUL_RANGE_M, LONG_CRUISE_ALT_M,
 };
 use crate::landing::{
     axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_target_success_square, saturate,
@@ -122,6 +122,12 @@ const VH_BRAKE_FULL_THR: f64 = 20.0;
 const VH_BRAKE_SOFT: f64 = 6.0;
 /// Hard shoulder: at/above this vh, reverse brake runs at full lean / full-T.
 const VH_BRAKE_HARD: f64 = 22.0;
+/// Main-engine throttle spool-up rate (0→1 in ~0.9 s) — matches Descend actuator.
+const THROTTLE_SPOOL_UP: f64 = 1.1;
+/// Faster spool when GNC requests a large step (airplane / brake engagement).
+const THROTTLE_SPOOL_UP_EMERGENCY: f64 = 4.0;
+/// Main-engine throttle spool-down rate (1→0 in ~0.4 s).
+const THROTTLE_SPOOL_DOWN: f64 = 2.5;
 /// Quiet reverse-brake lean floor (rad) once horizontal speed is bled off.
 const LEAN_BRAKE_SOFT: f64 = 0.22;
 /// Downrange speed built during the ascent burn (m/s). Ballistic coast keeps
@@ -302,6 +308,10 @@ pub struct TargetLandingAutopilot {
     /// Held MPC candidate between replans (receding-horizon hysteresis).
     mpc_hold: TransitCandidate,
     mpc_hold_counter: u32,
+    /// Delivered throttle state (lags the GNC setpoint via [`slew_throttle`]).
+    throttle_actuator: f64,
+    /// Re-sync actuator from vehicle command on arm / enable.
+    throttle_actuator_sync: bool,
 }
 
 impl Default for TargetLandingAutopilot {
@@ -319,6 +329,8 @@ impl Default for TargetLandingAutopilot {
             upright_stable_s: 0.0,
             mpc_hold: TransitCandidate::CruiseGo,
             mpc_hold_counter: MPC_REPLAN_EVERY,
+            throttle_actuator: 0.0,
+            throttle_actuator_sync: true,
         }
     }
 }
@@ -337,6 +349,33 @@ impl TargetLandingAutopilot {
         self.mpc_hold = TransitCandidate::CruiseGo;
         self.mpc_hold_counter = MPC_REPLAN_EVERY;
         self.reset_terminal_settle();
+        self.throttle_actuator_sync = true;
+    }
+
+    fn finalize_cruise_throttle(
+        &mut self,
+        target: f64,
+        dt: f64,
+        state: &RocketState,
+    ) -> f64 {
+        if self.throttle_actuator_sync {
+            self.throttle_actuator = state.command.throttle.clamp(0.0, 1.0);
+            self.throttle_actuator_sync = false;
+        }
+        let target = target.clamp(0.0, 1.0);
+        let spool_up = if target - self.throttle_actuator > 0.35 {
+            THROTTLE_SPOOL_UP_EMERGENCY
+        } else {
+            THROTTLE_SPOOL_UP
+        };
+        self.throttle_actuator = slew_throttle(
+            self.throttle_actuator,
+            target,
+            dt,
+            spool_up,
+            THROTTLE_SPOOL_DOWN,
+        );
+        self.throttle_actuator
     }
 
     pub fn toggle(&mut self) {
@@ -346,6 +385,7 @@ impl TargetLandingAutopilot {
             self.phase = TargetPhase::Climb;
             self.reset_transit_latches();
             self.lander.disable();
+            self.throttle_actuator_sync = true;
         } else {
             self.lander.disable();
         }
@@ -470,9 +510,13 @@ impl TargetLandingAutopilot {
         }
 
         match self.phase {
-            TargetPhase::Climb => climb_command(state, target_xz, pos),
+            TargetPhase::Climb => {
+                let mut cmd = climb_command(state, target_xz, pos);
+                cmd.throttle = self.finalize_cruise_throttle(cmd.throttle, dt, state);
+                cmd
+            }
             TargetPhase::Cruise => {
-                let (cmd, brake, terminal_brake, settle_phase, upright_s, mpc_hold, mpc_counter) =
+                let (mut cmd, brake, terminal_brake, settle_phase, upright_s, mpc_hold, mpc_counter) =
                     transit_command(
                         state,
                         target_xz,
@@ -486,6 +530,7 @@ impl TargetLandingAutopilot {
                         self.mpc_hold_counter,
                         dt,
                     );
+                cmd.throttle = self.finalize_cruise_throttle(cmd.throttle, dt, state);
                 self.brake_latched = brake;
                 self.terminal_brake_latched = terminal_brake;
                 self.terminal_settle_phase = settle_phase;
@@ -1966,6 +2011,41 @@ fn smoothstep01(t: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Terminal-settle vertical setpoint (local law before fuzzy arbitration).
+fn terminal_settle_throttle(
+    phase: TerminalSettlePhase,
+    quiet: bool,
+    hover: f64,
+    _hover_cmd: f64,
+    up_y: f64,
+    effort: f64,
+    t_hold: f64,
+    t_neutral: f64,
+    t_motion: f64,
+) -> f64 {
+    match phase {
+        TerminalSettlePhase::Upright => {
+            let tilt_cap = hover * (0.92 + 0.06 * up_y.clamp(0.70, 1.0));
+            (hover + 0.08 * effort).clamp(tilt_cap * 0.96, (hover + 0.04).min(0.78))
+        }
+        TerminalSettlePhase::Trim => {
+            let t_trim = hover * (0.96 + 0.03 * up_y.clamp(0.90, 1.0));
+            if quiet {
+                t_hold.clamp(t_trim * 0.97, t_trim + 0.02)
+            } else {
+                t_hold.clamp(t_trim * 0.95, t_trim + 0.03)
+            }
+        }
+        TerminalSettlePhase::Brake => {
+            if quiet {
+                t_hold.clamp(t_neutral * 0.90, t_neutral * 0.94)
+            } else {
+                t_hold.clamp(t_motion * 0.92, (t_motion + 0.08).min(0.85))
+            }
+        }
+    }
+}
+
 /// Climb-phase guidance: always full throttle, upright through liftoff, then an
 /// open-loop pitch program toward the pad (no MPC / velocity-feedback lean).
 fn climb_command(
@@ -2297,87 +2377,75 @@ fn transit_command(
     let upy_floor = if deep { 0.45 } else { 0.40 };
     let hover_cmd = (hover / up_y.max(upy_floor)).clamp(0.0, 0.95);
 
-    let mut throttle = if force_full_thr {
-        THR_FULL
+    let v_damp = if up_y < 0.92 {
+        motor_inverse_rotate_vector(&state.motor, state.velocity)[1]
     } else {
-        let v_damp = if up_y < 0.92 {
-            motor_inverse_rotate_vector(&state.motor, state.velocity)[1]
-        } else {
-            vy
-        };
-        let v_des_y = if lofted {
-            cruise_v_des_y(pos[1], vy, terminal)
-        } else {
-            kill_climb_vy(vy)
-        };
-        let kv = if lofted { 0.12 } else { 0.08 };
-        let base = hover_cmd + kv * (v_des_y - vy) - 0.03 * v_damp.clamp(-5.0, 5.0);
-        cruise_w * base.max(hover_cmd * 0.65)
+        vy
     };
+    let v_des_y = if lofted {
+        cruise_v_des_y(pos[1], vy, terminal)
+    } else {
+        kill_climb_vy(vy)
+    };
+    let kv = if lofted { 0.12 } else { 0.08 };
+    let base = hover_cmd + kv * (v_des_y - vy) - 0.03 * v_damp.clamp(-5.0, 5.0);
+    let t_hold = cruise_w * base.max(hover_cmd * 0.65);
 
     let effort = pitch.abs() + yaw.abs() + 0.35 * roll.abs();
+    let t_auth = (0.9 * (effort - 0.15).max(0.0)).min(0.35);
+
+    let climb_cut = if !brake && pos[1] > CRUISE_ALT_CAP + 50.0 && vy > 1.5 {
+        (0.04 * (vy - 1.5)).min(0.08)
+    } else {
+        0.0
+    };
+    let t_neutral = hover_cmd * (1.0 - climb_cut);
+    let t_deep = (t_neutral + 0.08 * effort).clamp(t_neutral * 0.92, t_neutral + 0.12);
+
     let hp = handoff_plan;
-    if force_full_thr {
-        // Do not demote airplane full-T to hover/cos — pitch owns altitude.
-        // Exception: while post-burn climb rate remains, coast the pitch-over
-        // (rate-kill bursts only) — full-T through half-vertical attitudes
-        // re-injects the vy the apogee cutoff just removed and balloons the
-        // hold altitude. Hard reverse lean keeps full T; soft post-decel does not.
-        throttle = if (brake && brake_hardness > 0.55) || vy < 12.0 {
-            THR_FULL
-        } else {
-            (0.9 * (effort - 0.15).max(0.0)).min(0.35)
-        };
-    } else if deep {
-        // Reverse lean: vertical-neutral hover/cos + modest effort torque.
-        // During brake, skip climb_cut — lateral authority is the priority.
-        let climb_cut = if !brake && pos[1] > CRUISE_ALT_CAP + 50.0 && vy > 1.5 {
-            (0.04 * (vy - 1.5)).min(0.08)
-        } else {
-            0.0
-        };
-        let t_neutral = hover_cmd * (1.0 - climb_cut);
-        throttle = (t_neutral + 0.08 * effort).clamp(t_neutral * 0.92, t_neutral + 0.12);
-    } else if terminal {
+    let t_settle = if terminal {
         let p = hp.unwrap();
         let settle = terminal_settle_out.as_ref().unwrap();
         let quiet = p.cleared() || p.t_settle < 0.35;
-        let t_neutral = hover_cmd;
-        match settle.phase {
-            TerminalSettlePhase::Upright => {
-                // Near-hover only: avoid hover/cos lateral thrust while damping rate.
-                let tilt_cap = hover * (0.92 + 0.06 * up_y.clamp(0.70, 1.0));
-                throttle = (hover + 0.08 * effort)
-                    .clamp(tilt_cap * 0.96, (hover + 0.04).min(0.78));
-            }
-            TerminalSettlePhase::Trim => {
-                // Quiet hover — trim lean is tiny; don't amplify lateral with hover/cos.
-                let t_hold = hover * (0.96 + 0.03 * up_y.clamp(0.90, 1.0));
-                throttle = if quiet {
-                    throttle.clamp(t_hold * 0.97, t_hold + 0.02)
-                } else {
-                    throttle.clamp(t_hold * 0.95, t_hold + 0.03)
-                };
-            }
-            TerminalSettlePhase::Brake => {
-                let motion_blend = (p.t_pos.max(p.t_vh) / 3.5).clamp(0.0, 0.45);
-                let t_motion = (t_neutral * (0.94 - 0.06 * motion_blend))
-                    .clamp(t_neutral * 0.86, t_neutral + 0.05);
-                throttle = if quiet {
-                    throttle.clamp(t_neutral * 0.90, t_neutral * 0.94)
-                } else {
-                    throttle.clamp(t_motion * 0.92, (t_motion + 0.08).min(0.85))
-                };
-            }
-        }
-    } else if ballistic {
-        throttle = throttle.max((0.9 * (effort - 0.15).max(0.0)).min(0.35));
-    } else if effort > 0.04 {
-        throttle = throttle.max(0.10 + 0.28 * effort);
+        let t_neutral_settle = hover_cmd;
+        let motion_blend = (p.t_pos.max(p.t_vh) / 3.5).clamp(0.0, 0.45);
+        let t_motion = (t_neutral_settle * (0.94 - 0.06 * motion_blend))
+            .clamp(t_neutral_settle * 0.86, t_neutral_settle + 0.05);
+        terminal_settle_throttle(
+            settle.phase,
+            quiet,
+            hover,
+            hover_cmd,
+            up_y,
+            effort,
+            t_hold,
+            t_neutral_settle,
+            t_motion,
+        )
+    } else {
+        t_hold
+    };
+
+    let t_contact = hover_cmd.mul_add(1.45, 0.0).max(0.60);
+
+    let throttle = CruiseThrottleFuzzy {
+        force_full_thr,
+        deep,
+        terminal,
+        ballistic,
+        contacting: state.contacting,
+        brake,
+        brake_hardness,
+        vy,
+        effort,
+        t_hold,
+        t_full: THR_FULL,
+        t_auth,
+        t_deep,
+        t_settle,
+        t_contact,
     }
-    if state.contacting {
-        throttle = throttle.max(hover_cmd * 1.45).max(0.60);
-    }
+    .arbitrate();
 
     let cmd = ControlCommand {
         throttle: throttle.clamp(0.0, 1.0),
@@ -2453,6 +2521,50 @@ mod tests {
     use crate::fuzzy::CAREFUL_AGGRESSION_MIN;
     use crate::landing::TARGET_SUCCESS_HALF_M;
 
+    const TEST_DT: f64 = 1.0 / 120.0;
+
+    /// Advance the autopilot until the throttle actuator reaches `min_throttle`.
+    fn spool_autopilot(
+        ap: &mut TargetLandingAutopilot,
+        state: &RocketState,
+        target: [f64; 2],
+        min_throttle: f64,
+        max_steps: u32,
+    ) -> ControlCommand {
+        let mut cmd = ControlCommand::default();
+        for _ in 0..max_steps {
+            cmd = ap.update(state, target, TEST_DT);
+            if cmd.throttle >= min_throttle {
+                break;
+            }
+        }
+        cmd
+    }
+
+    #[test]
+    fn cruise_throttle_slew_limits_step_changes() {
+        let mut state = RocketState::at_altitude(LONG_CRUISE_ALT_M);
+        state.contacting = false;
+        state.velocity = [40.0, 0.0, 0.0];
+        let mut ap = TargetLandingAutopilot::default();
+        ap.enabled = true;
+        let target = [6000.0, 0.0];
+        let first = ap.update(&state, target, TEST_DT);
+        let second = ap.update(&state, target, TEST_DT);
+        assert!(
+            (second.throttle - first.throttle).abs() <= THROTTLE_SPOOL_UP_EMERGENCY * TEST_DT + 1e-9,
+            "cruise throttle must slew, first={} second={}",
+            first.throttle,
+            second.throttle
+        );
+        let spooled = spool_autopilot(&mut ap, &state, target, THR_FULL - 0.05, 60);
+        assert!(
+            spooled.throttle > 0.9,
+            "long-range cruise should reach near full T after spool, thr={}",
+            spooled.throttle
+        );
+    }
+
     #[test]
     fn toggle_enables_and_disables() {
         let mut ap = TargetLandingAutopilot::default();
@@ -2503,9 +2615,9 @@ mod tests {
         state.velocity[1] = 40.0;
         let mut ap = TargetLandingAutopilot::default();
         ap.enabled = true;
-        let cmd = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
+        let cmd = spool_autopilot(&mut ap, &state, [500.0, 0.0], THR_FULL - 0.02, 80);
         assert_eq!(ap.phase, TargetPhase::Climb);
-        assert!((cmd.throttle - THR_FULL).abs() < 0.01);
+        assert!((cmd.throttle - THR_FULL).abs() < 0.02);
     }
 
     #[test]
@@ -2513,10 +2625,10 @@ mod tests {
         let state = RocketState::resting_on_pad();
         let mut ap = TargetLandingAutopilot::default();
         ap.enabled = true;
-        let cmd = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
+        let cmd = spool_autopilot(&mut ap, &state, [500.0, 0.0], THR_FULL - 0.02, 80);
         assert_eq!(ap.phase, TargetPhase::Climb);
         assert!(
-            (cmd.throttle - THR_FULL).abs() < 0.01,
+            (cmd.throttle - THR_FULL).abs() < 0.02,
             "climb must be full throttle, thr={}",
             cmd.throttle
         );
@@ -2534,10 +2646,10 @@ mod tests {
         state.contacting = false;
         let mut ap = TargetLandingAutopilot::default();
         ap.enabled = true;
-        let cmd = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
+        let cmd = spool_autopilot(&mut ap, &state, [500.0, 0.0], THR_FULL - 0.02, 80);
         assert_eq!(ap.phase, TargetPhase::Climb);
         assert!(
-            (cmd.throttle - THR_FULL).abs() < 0.01,
+            (cmd.throttle - THR_FULL).abs() < 0.02,
             "climb must be full throttle, thr={}",
             cmd.throttle
         );
@@ -2736,7 +2848,7 @@ mod tests {
         ap.enabled = true;
         // Fast close inside predicted stop distance + engage margin.
         let target = [250.0, 0.0];
-        let cmd = ap.update(&state, target, 1.0 / 120.0);
+        let cmd = spool_autopilot(&mut ap, &state, target, 0.92, 80);
         assert_eq!(ap.phase, TargetPhase::Cruise);
         assert!(
             !ap.is_long_range_cruise(state.position(), target),
@@ -2801,7 +2913,7 @@ mod tests {
         let mut ap = TargetLandingAutopilot::default();
         ap.enabled = true;
         let target = [6000.0, 0.0];
-        let cmd = ap.update(&state, target, 1.0 / 120.0);
+        let cmd = spool_autopilot(&mut ap, &state, target, 0.9, 80);
         assert_eq!(ap.phase, TargetPhase::Cruise);
         assert!(
             cmd.throttle > 0.9,
@@ -2936,7 +3048,7 @@ mod tests {
         state.motor = crate::euclidean_pga::motor_from_pose(520.0, 500.0, 0.0, 0.05, 0.0, 0.0);
         let mut ap = TargetLandingAutopilot::default();
         ap.enabled = true;
-        let cmd = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
+        let cmd = spool_autopilot(&mut ap, &state, [500.0, 0.0], 0.26, 40);
         assert_eq!(ap.phase, TargetPhase::Cruise);
         // Lower bound leaves room for the terminal-approach sink bias
         // (cruise_v_des_y with terminal=true trims ~0.05 off hover).
@@ -3539,7 +3651,7 @@ mod tests {
         let mut ap = TargetLandingAutopilot::default();
         ap.enabled = true;
         let target = [200.0, 0.0];
-        let cmd = ap.update(&state, target, 1.0 / 120.0);
+        let cmd = spool_autopilot(&mut ap, &state, target, 0.92, 80);
         assert_eq!(ap.phase, TargetPhase::Cruise);
         let mass = state.params.mass;
         let max_thrust = state.params.max_thrust;
