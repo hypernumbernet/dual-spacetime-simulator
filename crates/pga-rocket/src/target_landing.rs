@@ -26,7 +26,8 @@ use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
     blend_vec3, careful_aggression, careful_terminal_latch, cruise_brake_hardness,
     long_range_go_aim, long_range_hold_cos, long_range_weight, ramp, ramp_down,
-    slew_throttle, CruiseThrottleFuzzy, CAREFUL_NEAR_M, CAREFUL_RANGE_M, LONG_CRUISE_ALT_M,
+    settle_lean_freedom, slew_throttle, CruiseThrottleFuzzy, CAREFUL_NEAR_M, CAREFUL_RANGE_M,
+    LONG_CRUISE_ALT_M, SETTLE_LEAN_V_FREE, SETTLE_LEAN_V_STRICT,
 };
 use crate::landing::{
     axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_target_success_square, saturate,
@@ -78,6 +79,8 @@ const TRIM_DEADZONE_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M * 0.60;
 // Unscaled bases; runtime values multiply by distance-dependent aggression.
 const TRIM_LEAN_CAP_BASE: f64 = 0.15;
 const TRIM_LEAN_NEAR_BASE: f64 = 0.032;
+const TRIM_LEAN_STRICT_BASE: f64 = 0.018;
+const SETTLE_LEAN_FLOOR_FRAC: f64 = 0.20;
 const TRIM_V_CREEP_PER_M_BASE: f64 = 0.26;
 const TRIM_V_CREEP_MAX_BASE: f64 = 6.00;
 const TRIM_V_CREEP_MIN_BASE: f64 = 1.3;
@@ -1823,7 +1826,8 @@ fn terminal_brake_aim(
 
     // Blend toward velocity-opposing aim only as hard as demand requires.
     let s = vh.max(0.9);
-    let anti_w = (brake_w * (0.35 + 0.65 * demand_shaped)).clamp(0.0, 1.0);
+    let f = settle_lean_freedom(vh, SETTLE_LEAN_V_STRICT, SETTLE_LEAN_V_FREE);
+    let anti_w = (brake_w * (0.35 + 0.65 * demand_shaped) * (0.35 + 0.65 * f)).clamp(0.0, 1.0);
     aim_x = (1.0 - anti_w) * aim_x + anti_w * (-vx / s);
     aim_z = (1.0 - anti_w) * aim_z + anti_w * (-vz / s);
 
@@ -1844,12 +1848,14 @@ fn terminal_brake_aim(
     let a_scale = careful(0.12 + 0.55 * demand_shaped, aggression);
     let a_cmd = (a_lat.max(overshoot_boost) * a_scale)
         .max(careful(0.05, aggression) * demand_shaped);
+    let lean_scale = SETTLE_LEAN_FLOOR_FRAC + (1.0 - SETTLE_LEAN_FLOOR_FRAC) * f;
+    let effective_cap = lean_cap.clamp(careful(0.05, aggression), LEAN_BRAKE_MAX) * lean_scale;
     let lean = lean_for_lateral_accel(
         a_cmd,
         brake_mode,
         mass,
         max_thrust,
-        lean_cap.clamp(careful(0.05, aggression), LEAN_BRAKE_MAX),
+        effective_cap,
     );
 
     ([aim_x, AIM_Y_BIAS, aim_z], lean)
@@ -1881,14 +1887,19 @@ fn terminal_trim_aim(
     let err_vx = ux * v_creep - vx;
     let err_vz = uz * v_creep - vz;
 
+    let f = settle_lean_freedom(vh, SETTLE_LEAN_V_STRICT, SETTLE_LEAN_V_FREE);
     let dist_scale = (cheby / CAREFUL_RANGE_M).clamp(0.10, 1.0);
-    let rate_gate = (1.0 - (omega_py / OMEGA_HANDOFF_MAX).clamp(0.0, 1.0)).powi(2);
+    let rate_gate_base = (1.0 - (omega_py / OMEGA_HANDOFF_MAX).clamp(0.0, 1.0)).powi(2);
+    let rate_gate = rate_gate_base.powf(1.0 + 1.5 * (1.0 - f));
     let lean_near = careful(TRIM_LEAN_NEAR_BASE, aggression);
     let lean_far = careful(TRIM_LEAN_CAP_BASE, aggression);
-    let lean_cap = (lean_near + (lean_far - lean_near) * dist_scale) * rate_gate;
+    let lean_dist = lean_near + (lean_far - lean_near) * dist_scale;
+    let lean_strict = careful(TRIM_LEAN_STRICT_BASE, aggression);
+    let lean_cap = (lean_strict + (lean_dist - lean_strict) * f) * rate_gate;
 
-    let k_vel = careful(0.38 + 0.12 * dist_scale, aggression);
-    let k_pos = careful(0.008 * dist_scale, aggression);
+    let gain_scale = 0.35 + 0.65 * f;
+    let k_vel = careful(0.38 + 0.12 * dist_scale, aggression) * gain_scale;
+    let k_pos = careful(0.008 * dist_scale, aggression) * gain_scale;
     let a_req_x = k_pos * ux * cheby + k_vel * err_vx;
     let a_req_z = k_pos * uz * cheby + k_vel * err_vz;
     let a_lat = (a_req_x * a_req_x + a_req_z * a_req_z).sqrt();
@@ -1896,10 +1907,15 @@ fn terminal_trim_aim(
 
     let aim_scale = careful(0.06 + 0.14 * dist_scale, aggression);
     let v_ref = vh.max(0.6);
-    let aim_x = aim_scale * (ux * 0.30 + err_vx / v_ref);
-    let aim_z = aim_scale * (uz * 0.30 + err_vz / v_ref);
+    let pos_aim = [
+        aim_scale * (ux * 0.30 + err_vx / v_ref),
+        AIM_Y_BIAS,
+        aim_scale * (uz * 0.30 + err_vz / v_ref),
+    ];
+    let upright = [0.0, 1.0, 0.0];
+    let blended = blend_vec3(upright, pos_aim, 0.25 + 0.75 * f);
 
-    ([aim_x, AIM_Y_BIAS, aim_z], lean)
+    (blended, lean)
 }
 
 /// Sequenced terminal settle: Brake → Upright → Trim (no simultaneous pos+att blend).
@@ -3425,9 +3441,107 @@ mod tests {
             out.lean_max
         );
         assert!(
-            out.lean_max < careful(0.045, agg),
-            "near-pad trim must stay shallow, lean={}",
+            out.lean_max < careful(TRIM_LEAN_STRICT_BASE, agg) + 0.012,
+            "low-vh trim must stay near strict floor, lean={}",
             out.lean_max
+        );
+    }
+
+    #[test]
+    fn terminal_trim_lean_freedom_opens_at_speed() {
+        let agg = careful_aggression(80.0);
+        let cheby = 30.0;
+        let omega = 0.02;
+        let (_, lean_slow) = terminal_trim_aim(
+            -1.0,
+            0.0,
+            -0.5,
+            0.0,
+            4.0,
+            cheby,
+            4.0,
+            omega,
+            agg,
+        );
+        let (_, lean_fast) = terminal_trim_aim(
+            -1.0,
+            0.0,
+            -30.0,
+            0.0,
+            55.0,
+            cheby,
+            55.0,
+            omega,
+            agg,
+        );
+        assert!(
+            lean_slow < lean_fast,
+            "trim lean must open with vh: slow={lean_slow} fast={lean_fast}"
+        );
+    }
+
+    #[test]
+    fn terminal_brake_freedom_opens_at_speed() {
+        let mut state = RocketState::at_altitude(500.0);
+        state.contacting = false;
+        state.motor = crate::euclidean_pga::motor_from_pose(530.0, 500.0, 0.0, 0.0, 0.0, 0.0);
+        let pos = state.position();
+        let v_cheby = chebyshev_closing_rate(pos, [500.0, 0.0], state.velocity);
+        let hp = HandoffSettlePlan::evaluate(
+            &state,
+            pos,
+            [500.0, 0.0],
+            12.0,
+            v_cheby,
+            0.5,
+            0.0,
+        );
+        let agg = careful_aggression(80.0);
+        state.velocity = [-2.5, 0.0, 0.0];
+        let (_, lean_slow) = terminal_brake_aim(
+            -1.0,
+            0.0,
+            -2.5,
+            0.0,
+            2.5,
+            v_cheby,
+            2.5,
+            30.0,
+            hp,
+            2.0,
+            0.0,
+            state.params.mass,
+            state.params.max_thrust,
+            LateralThrMode::VerticalNeutral,
+            0.85,
+            agg,
+        );
+        state.velocity = [-12.0, 0.0, 0.0];
+        let (_, lean_fast) = terminal_brake_aim(
+            -1.0,
+            0.0,
+            -55.0,
+            0.0,
+            55.0,
+            v_cheby,
+            -40.0,
+            30.0,
+            hp,
+            2.0,
+            0.0,
+            state.params.mass,
+            state.params.max_thrust,
+            LateralThrMode::VerticalNeutral,
+            0.85,
+            agg,
+        );
+        assert!(
+            lean_slow < lean_fast,
+            "brake lean must open with vh: slow={lean_slow} fast={lean_fast}"
+        );
+        assert!(
+            lean_fast > 0.35,
+            "fast terminal brake should retain decel authority, lean={lean_fast}"
         );
     }
 

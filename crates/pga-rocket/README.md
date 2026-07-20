@@ -268,6 +268,10 @@ X' = M X M~      (M~ は反転 reverse)
    - `t_settle ≈ 0`（閾値目前）だけ静かな lean に戻し、go↔brake チャタを抑える。
    - ターミナル域では `vh` 過大・オーバーシュート・Chebyshev 超過時に **逆リーン
      ブレーキ**を再投入。`a_stop = vh²/(2Δcheby)` から lean を逆算して位置収束を加速。
+   - **姿勢 vs 減速の仲裁:** [`settle_lean_freedom(vh)`](src/fuzzy.rs) が横速
+     **40 m/s → 60 m/s** の肩で指数関数的に **lean 自由度 0.1→1** を開く（厳格側でも
+     0.1 の最低自由度を保持）。低速 Trim/Brake では lean 床を厳格化し aim を
+     直立寄りにして振り子揺れを抑え、高速では既存の深リーン減速権威を維持する。
 
 3. **ターミナル Descend（パッド上・hand-off 後）**
    - 垂直: 物理閉ループ自殺バーン — `a_req = clamp((v² − v_touch²)/(2h), 0, a_brake)`、

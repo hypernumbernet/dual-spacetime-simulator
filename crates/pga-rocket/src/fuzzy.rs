@@ -773,6 +773,33 @@ pub fn cruise_brake_hardness(vh: f64, v_approach: f64, v_soft: f64, v_hard: f64)
     mu_speed.max(mu_overshoot).clamp(0.0, 1.0)
 }
 
+/// Lean freedom for terminal settle: min = attitude-strict, 1 = full decel lean.
+///
+/// Shoulders `[v_strict, v_free]`: below strict → [`SETTLE_LEAN_FREEDOM_MIN`],
+/// above free → 1. Inside the shoulder, membership ramps linearly then maps through
+/// an exponential curve so freedom stays near the floor and opens quickly near 1.
+pub const SETTLE_LEAN_FREEDOM_MIN: f64 = 0.10;
+/// Horizontal speed (m/s) below which settle lean stays at the strict floor.
+pub const SETTLE_LEAN_V_STRICT: f64 = 40.0;
+/// Horizontal speed (m/s) above which settle lean reaches full freedom.
+pub const SETTLE_LEAN_V_FREE: f64 = 60.0;
+
+#[inline]
+pub fn settle_lean_freedom(vh: f64, v_strict: f64, v_free: f64) -> f64 {
+    const ALPHA: f64 = 2.75;
+    let min_f = SETTLE_LEAN_FREEDOM_MIN;
+    let mu = ramp(vh.max(0.0), v_strict, v_free.max(v_strict + 1e-6));
+    if mu <= 0.0 {
+        return min_f;
+    }
+    if mu >= 1.0 {
+        return 1.0;
+    }
+    let exp_a = ALPHA.exp();
+    let curve = ((ALPHA * mu).exp() - 1.0) / (exp_a - 1.0);
+    min_f + (1.0 - min_f) * curve
+}
+
 // --- T-cruise careful envelope (Cruise→Descend hand-off approach) -----------
 
 /// Nominal careful-envelope centre (~legacy 100 m gate).
@@ -1171,6 +1198,23 @@ mod tests {
         let c = cruise_brake_weight(2.0, 1.0, -2.0);
         assert!(a < b && b < c);
         assert!(a < 0.05 && c > 0.95);
+    }
+
+    #[test]
+    fn settle_lean_freedom_endpoints_and_shape() {
+        let v_strict = SETTLE_LEAN_V_STRICT;
+        let v_free = SETTLE_LEAN_V_FREE;
+        assert!((settle_lean_freedom(0.0, v_strict, v_free) - SETTLE_LEAN_FREEDOM_MIN).abs() < 1e-9);
+        assert!((settle_lean_freedom(40.0, v_strict, v_free) - SETTLE_LEAN_FREEDOM_MIN).abs() < 1e-9);
+        assert!((settle_lean_freedom(60.0, v_strict, v_free) - 1.0).abs() < 1e-9);
+        assert!((settle_lean_freedom(80.0, v_strict, v_free) - 1.0).abs() < 1e-9);
+        let mid = settle_lean_freedom(50.0, v_strict, v_free);
+        let linear_mid = SETTLE_LEAN_FREEDOM_MIN + (1.0 - SETTLE_LEAN_FREEDOM_MIN) * 0.5;
+        assert!(mid > SETTLE_LEAN_FREEDOM_MIN + 0.01 && mid < linear_mid, "mid={mid}");
+        let a = settle_lean_freedom(45.0, v_strict, v_free);
+        let b = settle_lean_freedom(50.0, v_strict, v_free);
+        let c = settle_lean_freedom(55.0, v_strict, v_free);
+        assert!(a < b && b < c, "monotone: {a} {b} {c}");
     }
 
     #[test]
