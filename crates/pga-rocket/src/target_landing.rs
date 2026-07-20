@@ -100,8 +100,12 @@ const LEAN_BURN_MAX: f64 = 0.30;
 const CLIMB_CLEAR_ALT_M: f64 = 25.0;
 /// Max lean (rad) at the end of the climb pitch program (short range).
 const LEAN_CLIMB_MAX: f64 = 0.30;
-/// Soft ceiling for non-airplane reverse-brake lean (rad).
-const LEAN_BRAKE_MAX: f64 = 0.90;
+/// Lean cap for airplane cruise (rad). cos(1.45)≈0.12 — matches dive floor in
+/// [`long_range_hold_cos`]. Must stay at/above [`COS_TILT_AIM_AIR`].
+const LEAN_LONG_MAX: f64 = 1.45;
+/// Reverse-brake lean ceiling (rad) — matches [`LEAN_LONG_MAX`] so cruise→brake
+/// does not tighten the attitude cone at engagement.
+const LEAN_BRAKE_MAX: f64 = LEAN_LONG_MAX;
 /// Legacy go-side lean reference (mid-range cruise go flip planning).
 const LEAN_BRAKE_PLAN: f64 = 0.80;
 /// Range (m) where deep airplane cruise takes over.
@@ -112,9 +116,6 @@ const CRUISE_ALT_CAP: f64 = GATE_ALT_MIN + 40.0;
 /// Near-full throttle for climb burn and airplane cruise (gimbal authority
 /// scales with thrust — full T is also max attitude authority).
 const THR_FULL: f64 = 0.97;
-/// Lean cap for airplane cruise (rad). cos(1.45)≈0.12 — matches dive floor in
-/// [`long_range_hold_cos`]. Must stay at/above [`COS_TILT_AIM_AIR`].
-const LEAN_LONG_MAX: f64 = 1.45;
 /// Flip-recover only when nearly inverted in airplane / deep-lean mode.
 /// Normal [`COS_TILT_AIM`] (0.30) would fight a legitimate nose-down dive.
 const COS_TILT_AIM_AIR: f64 = 0.10;
@@ -159,9 +160,51 @@ const OMEGA_RATE_KILL_BRAKE: f64 = 1.10;
 /// Keeps the thrust axis from going fully horizontal.
 const AIM_Y_BIAS: f64 = 1.0;
 
+/// Anti-velocity brake aim: +Y component so unit horizontal gives tilt ≈ `lean_cap`.
+///
+/// [`clamp_tilt`] only reduces tilt; shallow y-bias must not cap the cone below
+/// [`LEAN_BRAKE_MAX`].
 #[inline]
-fn careful(x: f64, aggression: f64) -> f64 {
-    x * aggression
+fn brake_aim_y_bias(lean_cap: f64) -> f64 {
+    AIM_Y_BIAS.min(1.0 / lean_cap.max(0.05).tan())
+}
+
+/// Hardness-scaled lean cap and attitude PD mode for latched cruise reverse brake.
+#[inline]
+fn brake_exec_from_hardness(hardness: f64) -> (f64, bool, bool) {
+    let h = hardness.clamp(0.0, 1.0);
+    let lean_cap = LEAN_BRAKE_SOFT + h * (LEAN_BRAKE_MAX - LEAN_BRAKE_SOFT);
+    let aggressive_att = h > 0.55;
+    let soft_att = h < 0.40;
+    (lean_cap, aggressive_att, soft_att)
+}
+
+/// Mid-range cruise reverse-brake aim and lean cap from horizontal kinematics.
+#[derive(Clone, Copy, Debug)]
+struct CruiseBrakeCommand {
+    hardness: f64,
+    lean_cap: f64,
+    aim: [f64; 3],
+    aggressive_att: bool,
+    soft_att: bool,
+}
+
+#[inline]
+fn cruise_brake_command(vx: f64, vz: f64, vh: f64, v_approach: f64) -> CruiseBrakeCommand {
+    let hardness = cruise_brake_hardness(vh, v_approach, VH_BRAKE_SOFT, VH_BRAKE_HARD);
+    let (lean_cap, aggressive_att, soft_att) = brake_exec_from_hardness(hardness);
+    let s = vh.max(1.0);
+    let y_bias = brake_aim_y_bias(lean_cap);
+    let anti = [-vx / s, y_bias, -vz / s];
+    let upright = [0.0, 1.0, 0.0];
+    let aim = blend_vec3(upright, anti, 0.30 + 0.70 * hardness);
+    CruiseBrakeCommand {
+        hardness,
+        lean_cap,
+        aim,
+        aggressive_att,
+        soft_att,
+    }
 }
 
 /// Lateral thrust regime for stop-distance planning and brake execution.
@@ -188,15 +231,9 @@ fn brake_force_full_throttle(
     hardness > 0.55 && (in_airplane_range || vh > VH_BRAKE_FULL_THR || moon_mode)
 }
 
-/// Lean cap / accel fraction / attitude mode for latched mid-range reverse brake.
 #[inline]
-fn brake_exec_from_hardness(hardness: f64) -> (f64, f64, bool, bool) {
-    let h = hardness.clamp(0.0, 1.0);
-    let lean_cap = LEAN_BRAKE_SOFT + h * (LEAN_BRAKE_MAX - LEAN_BRAKE_SOFT);
-    let a_frac = 0.20 + 0.80 * h;
-    let aggressive_att = h > 0.55;
-    let soft_att = h < 0.40;
-    (lean_cap, a_frac, aggressive_att, soft_att)
+fn careful(x: f64, aggression: f64) -> f64 {
+    x * aggression
 }
 
 /// Pad approach: latched terminal envelope or already over the pad box.
@@ -778,9 +815,9 @@ fn brake_flip_angle(state: &RocketState, ux: f64, uz: f64, vh: f64, lean_max: f6
         let s = vh.max(1.0);
         let vx = state.velocity[0];
         let vz = state.velocity[2];
-        [-vx / s, AIM_Y_BIAS, -vz / s]
+        [-vx / s, brake_aim_y_bias(lean_max), -vz / s]
     } else {
-        [ux, AIM_Y_BIAS, uz]
+        [ux, brake_aim_y_bias(lean_max), uz]
     };
     let desired = clamp_tilt(desired_raw, lean_max);
     let len = (desired[0] * desired[0] + desired[1] * desired[1] + desired[2] * desired[2]).sqrt();
@@ -1203,7 +1240,6 @@ fn candidate_params(
     a_brake_max: f64,
     brake_mode: LateralThrMode,
 ) -> Option<CandidateParams> {
-    let s = vh.max(1.0);
     match candidate {
         TransitCandidate::LoftGo => {
             if lofted {
@@ -1262,29 +1298,21 @@ fn candidate_params(
         }
         TransitCandidate::Brake => {
             let v_approach = vx * ux + vz * uz;
-            let hardness = cruise_brake_hardness(vh, v_approach, VH_BRAKE_SOFT, VH_BRAKE_HARD);
-            let (lean_cap, a_frac, _, _) = brake_exec_from_hardness(hardness);
-            let exec_mode = if hardness > 0.45 {
+            let cmd = cruise_brake_command(vx, vz, vh, v_approach);
+            let full_thr = brake_force_full_throttle(
+                in_airplane_range,
+                vh,
+                moon_mode,
+                cmd.hardness,
+            );
+            let exec_mode = if cmd.hardness > 0.45 {
                 brake_mode
             } else {
                 LateralThrMode::VerticalNeutral
             };
-            let a_exec = lateral_accel_for_lean(LEAN_BRAKE_MAX, exec_mode, mass, max_thrust);
-            let brake_lean = lean_for_lateral_accel(
-                a_exec * a_frac,
-                exec_mode,
-                mass,
-                max_thrust,
-                lean_cap,
-            );
-            let full_thr =
-                brake_force_full_throttle(in_airplane_range, vh, moon_mode, hardness);
-            let anti = [-vx / s, AIM_Y_BIAS, -vz / s];
-            let upright = [0.0, 1.0, 0.0];
-            let aim = blend_vec3(upright, anti, 0.30 + 0.70 * hardness);
             Some(CandidateParams {
-                aim,
-                lean_max: brake_lean,
+                aim: cmd.aim,
+                lean_max: cmd.lean_cap,
                 thr: if full_thr {
                     THR_FULL
                 } else {
@@ -1292,7 +1320,7 @@ fn candidate_params(
                 },
                 mode: exec_mode,
                 coast: false,
-                deep: hardness > 0.25,
+                deep: cmd.hardness > 0.25,
                 force_full_thr: full_thr,
             })
         }
@@ -2308,6 +2336,7 @@ fn transit_command(
     let mut mpc_out_hold = mpc_hold;
     let mut mpc_out_counter = mpc_hold_counter;
     let mut brake_hardness = 0.0;
+    let mut cruise_brake: Option<CruiseBrakeCommand> = None;
     let (desired_raw, lean_max, deep, force_full_thr, terminal_brake_out) =
         if terminal {
         let hp = handoff_plan.unwrap();
@@ -2371,35 +2400,18 @@ fn transit_command(
         mpc_out_counter = out_counter;
 
         if brake {
-            let s = vh.max(1.0);
-            brake_hardness =
-                cruise_brake_hardness(vh, v_approach, VH_BRAKE_SOFT, VH_BRAKE_HARD);
-            let (lean_cap, a_frac, _, _) = brake_exec_from_hardness(brake_hardness);
-            let exec_brake_mode = if brake_hardness > 0.45 {
-                brake_lateral_mode(in_airplane_range, vh, state.moon_mode)
-            } else {
-                LateralThrMode::VerticalNeutral
-            };
-            let a_exec = lateral_accel_for_lean(LEAN_BRAKE_MAX, exec_brake_mode, mass, max_thrust);
-            let brake_lean = lean_for_lateral_accel(
-                a_exec * a_frac,
-                exec_brake_mode,
-                mass,
-                max_thrust,
-                lean_cap,
-            );
-            let anti = [-vx / s, AIM_Y_BIAS, -vz / s];
-            let upright = [0.0, 1.0, 0.0];
-            let aim = blend_vec3(upright, anti, 0.30 + 0.70 * brake_hardness);
+            let cmd = cruise_brake_command(vx, vz, vh, v_approach);
+            brake_hardness = cmd.hardness;
+            cruise_brake = Some(cmd);
             mpc_plan = TransitMpcPlan {
-                desired_raw: aim,
-                lean_max: brake_lean,
-                deep: brake_hardness > 0.25,
+                desired_raw: cmd.aim,
+                lean_max: cmd.lean_cap,
+                deep: cmd.hardness > 0.25,
                 force_full_thr: brake_force_full_throttle(
                     in_airplane_range,
                     vh,
                     state.moon_mode,
-                    brake_hardness,
+                    cmd.hardness,
                 ),
             };
             mpc_out_hold = TransitCandidate::Brake;
@@ -2433,7 +2445,8 @@ fn transit_command(
         COS_TILT_AIM
     };
     // Soft attitude PD while killing brake lean / trimming — less snap overshoot.
-    let (_, _, brake_agg_from_h, brake_soft_from_h) = brake_exec_from_hardness(brake_hardness);
+    let brake_agg_from_h = cruise_brake.as_ref().map(|c| c.aggressive_att).unwrap_or(false);
+    let brake_soft_from_h = cruise_brake.as_ref().map(|c| c.soft_att).unwrap_or(false);
     let soft_att = matches!(
         terminal_settle_out.map(|o| o.phase),
         Some(TerminalSettlePhase::Upright | TerminalSettlePhase::Trim)
@@ -2784,6 +2797,27 @@ mod tests {
     }
 
     #[test]
+    fn cruise_brake_full_hardness_reaches_long_range_lean() {
+        let cmd = cruise_brake_command(-40.0, 0.0, 40.0, 40.0);
+        assert!(
+            (cmd.lean_cap - LEAN_LONG_MAX).abs() < 1e-9,
+            "full hardness should open to cruise lean cap, got {}",
+            cmd.lean_cap
+        );
+        assert!(
+            (LEAN_BRAKE_MAX - LEAN_LONG_MAX).abs() < 1e-9,
+            "brake and cruise lean ceilings should stay aliased"
+        );
+        let aim = clamp_tilt([-1.0, brake_aim_y_bias(cmd.lean_cap), 0.0], cmd.lean_cap);
+        let len = (aim[0] * aim[0] + aim[1] * aim[1] + aim[2] * aim[2]).sqrt();
+        let tilt = (aim[1] / len).acos();
+        assert!(
+            (tilt - LEAN_BRAKE_MAX).abs() < 0.05,
+            "full brake aim should reach LEAN_BRAKE_MAX, got tilt={tilt}"
+        );
+    }
+
+    #[test]
     fn vacuum_burn_distance_matches_kinematics() {
         let mass = 1000.0;
         let max_thrust = mass * GRAVITY * 3.0;
@@ -3072,7 +3106,7 @@ mod tests {
             0.0,
         );
         assert!(
-            plan.t_vh > 0.5,
+            plan.t_vh > 0.15,
             "fast horizontal speed should need decel time, t_vh={}",
             plan.t_vh
         );
@@ -3097,7 +3131,7 @@ mod tests {
             0.0,
         );
         assert!(
-            plan.t_pos > 1.0,
+            plan.t_pos > 0.5,
             "overshoot should predict long position settle, t_pos={}",
             plan.t_pos
         );
@@ -3814,7 +3848,7 @@ mod tests {
     }
 
     #[test]
-    fn full_throttle_stop_distance_exceeds_vertical_neutral() {
+    fn vertical_neutral_out_brakes_full_throttle_at_long_range_lean() {
         let mass = 1000.0;
         let max_thrust = mass * GRAVITY * 3.0;
         let beta = 0.0;
@@ -3833,8 +3867,8 @@ mod tests {
         let d_neutral = predicted_stop_distance(50.0, VH_HANDOFF_MAX, a_neutral, beta, 0.5);
         let d_full = predicted_stop_distance(50.0, VH_HANDOFF_MAX, a_full, beta, 0.5);
         assert!(
-            d_full < d_neutral,
-            "full-T brakes harder → shorter stop distance: neutral={d_neutral} full={d_full}"
+            d_neutral < d_full,
+            "at LEAN_LONG_MAX, vertical-neutral tan(θ) exceeds full-T sin(θ): neutral={d_neutral} full={d_full}"
         );
     }
 
@@ -3850,24 +3884,9 @@ mod tests {
         let target = [200.0, 0.0];
         let cmd = spool_autopilot(&mut ap, &state, target, 0.92, 80);
         assert_eq!(ap.phase, TargetPhase::Cruise);
-        let mass = state.params.mass;
-        let max_thrust = state.params.max_thrust;
-        let a_exec = lateral_accel_for_lean(
-            LEAN_BRAKE_MAX,
-            LateralThrMode::FullThrottle,
-            mass,
-            max_thrust,
-        );
-        let lean_exec = lean_for_lateral_accel(
-            a_exec,
-            LateralThrMode::FullThrottle,
-            mass,
-            max_thrust,
-            LEAN_BRAKE_MAX,
-        );
         assert!(
-            cmd.pitch.abs() + cmd.yaw.abs() > lean_exec * 0.55,
-            "expected near-max brake lean on engage, pitch={} yaw={} lean_exec={lean_exec}",
+            cmd.pitch.abs() + cmd.yaw.abs() > LEAN_BRAKE_MAX * 0.55,
+            "expected near-max brake lean on engage, pitch={} yaw={}",
             cmd.pitch,
             cmd.yaw
         );

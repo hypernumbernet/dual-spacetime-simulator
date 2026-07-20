@@ -760,7 +760,7 @@ pub fn cruise_brake_hardness(vh: f64, v_approach: f64, v_soft: f64, v_hard: f64)
 // --- Terminal settle lean freedom (Cruise final alignment) -------------------
 
 /// Minimum lean freedom at strict speeds (attitude-priority floor).
-pub const SETTLE_LEAN_FREEDOM_MIN: f64 = 0.15;
+pub const SETTLE_LEAN_FREEDOM_MIN: f64 = 0.30;
 /// Horizontal speed (m/s) below which settle lean stays at the strict floor.
 pub const SETTLE_LEAN_V_STRICT: f64 = 4.0;
 /// Horizontal speed (m/s) above which settle lean reaches full freedom.

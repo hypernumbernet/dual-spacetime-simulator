@@ -225,7 +225,7 @@ X' = M X M~      (M~ は反転 reverse)
      [`slew_throttle`](src/fuzzy.rs) で非対称スプールしてから sim に渡す（Descend と同型）。
 
 1. **中距離 go / brake** — 物理予測停止距離 `d_stop = d_flip + d_burn`
-   - 計画 lean は実行天井 **`LEAN_BRAKE_MAX`（0.90 rad）** と同値。`a_lat = g·tan(θ)`（垂直中立）または
+   - 計画 lean は実行天井 **`LEAN_BRAKE_MAX`（= [`LEAN_LONG_MAX`](src/target_landing.rs) 1.45 rad）** と同値。`a_lat = g·tan(θ)`（垂直中立）または
      **airplane 域 / Moon / vh≳20 m/s** では full-T 時 `(T/m)·thr·sin(θ)`。
    - 二次抗力 `β = k/m`（Moon は `β=0`）。`d_burn = (1/2β) ln((a+βv²)/(a+βv_end²))`。
    - 減速時間 `t_decel` も同型の閉形式（`a_eff` 近似は廃止）。
@@ -267,7 +267,7 @@ X' = M X M~      (M~ は反転 reverse)
      - `t_pos`: Chebyshev 残差 → `HANDOFF_CHEBY_MAX`（**Chebyshev 接近率**
      `v_cheby` —  diverging 時は減速＋反転時間を加算）
      - `t_settle = max(t_att, t_vh, t_pos)` — 大きいほど lean / aim ゲインを上げる。
-   - lean 上限は固定 `LEAN_MID`/`LEAN_CRUISE` ではなく **物理逆算 + `LEAN_BRAKE_MAX` ソフト天井**。
+   - lean 上限は固定 `LEAN_MID`/`LEAN_CRUISE` ではなく **物理逆算 + `LEAN_BRAKE_MAX`（= `LEAN_LONG_MAX` 1.45 rad）ソフト天井**。
    - `t_att` 支配時は aim を直立寄りにし、**スロットルを hover/cos 付近まで上げて
      ジンバルトルクを優先**（深リーン中の 0.35–0.55 上限は撤廃）。
    - `t_settle ≈ 0`（閾値目前）だけ静かな lean に戻し、go↔brake チャタを抑える。
@@ -276,7 +276,7 @@ X' = M X M~      (M~ は反転 reverse)
    - **姿勢 vs 減速の仲裁:** [`settle_lean_freedom(vh)`](src/fuzzy.rs) とその派生ヘルパ
      （`settle_motion_scale` / `settle_aim_blend` / `settle_brake_lean_scale` /
      `settle_trim_rate_gate`）が横速 **3 m/s → 14 m/s** の肩で指数関数的に
-     **lean 自由度 0.15→1** を開く。定数は [`fuzzy.rs`](src/fuzzy.rs) に集約。
+     **lean 自由度 0.3→1** を開く。定数は [`fuzzy.rs`](src/fuzzy.rs) に集約。
      静かな姿勢（`t_att≈0`）では Upright 最低待ちを **0.25 s** に短縮（深リーン復帰後は 0.45 s）。
      低速 Trim/Brake では lean 床を厳格化し aim を直立寄りにして振り子揺れを抑え、
      高速では既存の深リーン減速権威を維持する。
@@ -299,8 +299,23 @@ X' = M X M~      (M~ は反転 reverse)
 
 ### 設計上の教訓（要約）
 
+**ルールでの制限を増やすほど挙動は不自然になり、物理計算を精密にするほど制御はうまくいく。**
+これが本クレートの GNC 設計の基本方針です。
+
+lean 上限・速度キャップ・aim の人工クランプ・「安全のため」の後付けヒューリスティックを
+積み重ねると、意図した安全より先に副作用（通り過ぎ、姿勢の頭打ち、go↔brake チャタ、
+巡航→減速の不連続）が出やすくなります。定数やクランプを足すだけでは、aim 幾何と
+実行推力が噛み合わず、上限を上げても実際の姿勢が変わらない、といった齟齬も起きます。
+
+一方、停止距離 `d_stop = d_flip + d_burn`、横加速度 `a_lat ≈ g·tan(θ)` または
+full-T 時 `(T/m)·thr·sin(θ)`、√-profile 反転時間、二次抗力込みの減速時間など、
+**植物モデルに沿った閉形式を権威**にすると、同じ定数でもシミュレーション上のロケットは
+減速・整列・ハンドオフが一貫します。ファジー層はこの物理スケジューラを置き換えるのではなく、
+レジーム境界の肩付き接続だけに使います（次表）。
+
 | やってよい | やってはいけない |
 |---|---|
+| 物理から逆算した lean / aim / 停止距離 | 物理と無関係な lean・速度の頭打ちルール |
 | 投入量・ゲイン・aim 混合の連続化 | 安全ゲート自体をソフトブレンド |
 | go / brake の **選択**を離散＋ヒステリシス | go と brake の自由ベクトルを平均 |
 | フル T 巡航で高度を pitch で取る | 高度不足を thr 床で補ってロフト |
