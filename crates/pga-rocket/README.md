@@ -218,9 +218,10 @@ X' = M X M~      (M~ は反転 reverse)
    - 姿勢反転 `d_flip = v·t_flip`（現姿勢→逆リーン aim の角度から √-profile で `t_flip`）。
    - **開始条件:** `range_eff ≤ d_stop + BRAKE_ENGAGE_MARGIN`（25 m 早め開始。ターミナル station-keep を除く）。
      幾何ヒステリシス `BRAKE_RELEASE_MARGIN` で go↔brake チャタを抑止。オーバーシュート（`v_approach < 0`）も即 brake。
-   - **実行:** ラッチ直後から `LEAN_BRAKE_MAX` 逆リーン。Moon / 高速 / airplane では full-T ブレーキ。
-     demand ランプによる浅ブレーキは廃止。ブレーキ中は rate-kill 閾値を緩和（`OMEGA_RATE_KILL_BRAKE`）。
-   - **aim 方向は離散**（go 自由ベクトル or 反速度ブレーキ）。ベクトル平均はしない。
+   - **実行:** 高速時は `LEAN_BRAKE_MAX` 逆リーン + Moon / vh≳20 / airplane で full-T。
+     減速後は [`cruise_brake_hardness`](src/fuzzy.rs)（vh 6→22 m/s 肩 + オーバーシュート）で
+     lean・full-T・aim・rate-kill を連続減衰し、低速では直立寄り + soft PD で姿勢安定化。
+   - **aim:** 高速は反速度ブレーキ、低速は upright とファジーブレンド（go/brake の離散選択は維持）。
    - go 側の目標接近速度は同じ式の逆算（`allowed_approach_speed`、engage margin 込み）— ハード速度キャップなし。
 
 2. **遠距離 airplane 巡航**（水平距離 ≳ 1.5 km）

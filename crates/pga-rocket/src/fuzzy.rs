@@ -638,6 +638,17 @@ pub fn cruise_brake_weight(delta_v: f64, v_brake_enter: f64, v_brake_exit: f64) 
     ramp(delta_v, lo, hi)
 }
 
+/// Mid-range reverse-brake authority (1 = hard full lean/full-T, 0 = quiet settle).
+///
+/// Soft-OR of horizontal speed and overshoot memberships so aggressiveness fades
+/// once `vh` is near hand-off and the vehicle is no longer diverging.
+#[inline]
+pub fn cruise_brake_hardness(vh: f64, v_approach: f64, v_soft: f64, v_hard: f64) -> f64 {
+    let mu_speed = ramp(vh.max(0.0), v_soft, v_hard.max(v_soft + 1e-6));
+    let mu_overshoot = ramp((-v_approach).max(0.0), 0.8, 8.0);
+    mu_speed.max(mu_overshoot).clamp(0.0, 1.0)
+}
+
 // --- T-cruise careful envelope (Cruise→Descend hand-off approach) -----------
 
 /// Nominal careful-envelope centre (~legacy 100 m gate).
@@ -1036,6 +1047,21 @@ mod tests {
         let c = cruise_brake_weight(2.0, 1.0, -2.0);
         assert!(a < b && b < c);
         assert!(a < 0.05 && c > 0.95);
+    }
+
+    #[test]
+    fn cruise_brake_hardness_fades_at_low_speed() {
+        let soft = 6.0;
+        let hard = 22.0;
+        let quiet = cruise_brake_hardness(3.0, 2.0, soft, hard);
+        let mid = cruise_brake_hardness(14.0, 10.0, soft, hard);
+        let hot = cruise_brake_hardness(40.0, 30.0, soft, hard);
+        let overshoot = cruise_brake_hardness(3.0, -6.0, soft, hard);
+        assert!(quiet < 0.05, "quiet={quiet}");
+        assert!(mid > 0.3 && mid < 0.9, "mid={mid}");
+        assert!(hot > 0.95, "hot={hot}");
+        assert!(overshoot > 0.6, "overshoot should keep hardness, got {overshoot}");
+        assert!(quiet < mid && mid < hot);
     }
 
     #[test]
