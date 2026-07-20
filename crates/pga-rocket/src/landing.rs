@@ -34,7 +34,7 @@
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
     attitude_gain_scales, blend_desired_axis, blend_vec3, flip_aim_weight, lean_max_nominal,
-    LandingThrottleFuzzy, LeanAimFuzzy, PhysicsPadThrottleFuzzy, slew_throttle,
+    ramp_down, LandingThrottleFuzzy, LeanAimFuzzy, PhysicsPadThrottleFuzzy, slew_throttle,
 };
 use crate::sim::{ControlCommand, GRAVITY, RocketState};
 
@@ -136,6 +136,28 @@ const THROTTLE_SPOOL_UP: f64 = 1.1;
 const THROTTLE_SPOOL_UP_EMERGENCY: f64 = 4.0;
 /// Main-engine throttle spool-down rate (1→0 in ~0.4 s).
 const THROTTLE_SPOOL_DOWN: f64 = 2.5;
+/// L-mode brake→upright counter: nearly upright before resuming lean/trim mix.
+const COS_TILT_L_SETTLE: f64 = 0.95;
+/// L-mode upright counter: pitch/yaw rate gate (rad/s).
+const OMEGA_L_SETTLE: f64 = 0.12;
+/// Seconds upright gates must hold before resuming normal lean mix (quiet).
+const UPRIGHT_STABLE_QUIET_S: f64 = 0.25;
+/// Longer hold when attitude effort is still non-trivial.
+const UPRIGHT_STABLE_MIN_S: f64 = 0.45;
+/// Pitch/yaw rate (rad/s) above which the soft PD fades the rate command.
+const OMEGA_RATE_KILL: f64 = 0.80;
+
+/// L-mode lateral settle sub-phase after brake lean (free-field only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum LatSettlePhase {
+    /// Normal continuous lean / trim mix.
+    #[default]
+    Active,
+    /// Anti-velocity lean to kill horizontal speed.
+    Brake,
+    /// Pure upright recovery — damps brake lean without position PD.
+    Upright,
+}
 
 /// Automatic landing autopilot toggled with `L`.
 #[derive(Clone, Debug)]
@@ -160,6 +182,12 @@ pub struct LandingAutopilot {
     throttle_actuator: f64,
     /// Re-sync actuator from vehicle command on arm / enable.
     throttle_actuator_sync: bool,
+    /// Free-field L-mode: Brake → Upright counter after lateral decel.
+    lat_settle_phase: LatSettlePhase,
+    /// Seconds upright gates have held during [`LatSettlePhase::Upright`].
+    upright_stable_s: f64,
+    /// Re-sync [`lat_settle_phase`] from vehicle state on arm / enable.
+    lat_settle_sync: bool,
 }
 
 impl Default for LandingAutopilot {
@@ -181,6 +209,9 @@ impl Default for LandingAutopilot {
             attitude_locked: false,
             throttle_actuator: 0.0,
             throttle_actuator_sync: true,
+            lat_settle_phase: LatSettlePhase::Active,
+            upright_stable_s: 0.0,
+            lat_settle_sync: true,
         }
     }
 }
@@ -211,6 +242,7 @@ impl LandingAutopilot {
         // Hand-off from transit: don't inherit cruise thrust into Descend.
         self.throttle_actuator = 0.0;
         self.throttle_actuator_sync = false;
+        self.lat_settle_sync = true;
     }
 
     /// Arm from T transit hand-off — inherit cruise throttle to avoid a
@@ -221,6 +253,7 @@ impl LandingAutopilot {
         self.attitude_locked = false;
         self.throttle_actuator = state.command.throttle.clamp(0.0, 1.0);
         self.throttle_actuator_sync = true;
+        self.lat_settle_sync = true;
     }
 
     pub fn toggle(&mut self) {
@@ -229,6 +262,7 @@ impl LandingAutopilot {
             self.complete = false;
             self.attitude_locked = false;
             self.throttle_actuator_sync = true;
+            self.lat_settle_sync = true;
         }
     }
 
@@ -237,6 +271,7 @@ impl LandingAutopilot {
         self.complete = false;
         self.attitude_locked = false;
         self.throttle_actuator_sync = true;
+        self.lat_settle_sync = true;
     }
 
     pub fn status_label(&self) -> &'static str {
@@ -303,10 +338,53 @@ impl LandingAutopilot {
         // envelope on the true lowest hull point so an inverted fall brakes early.
         let h_env = if tilt > TILT_PROBE { state.lowest_probe_y() } else { h };
         let pad_settle = state.contacting && on_pad;
+        let omega_py = (omega[0] * omega[0] + omega[2] * omega[2]).sqrt();
+
+        // Free-field L-mode: explicit brake lean → upright counter (no trim skip).
+        // Only in the moderate-tilt band — flip / tumble use the normal lean blend.
+        let lat_settle_enabled = lat_settle_enabled(
+            tilt,
+            up_y,
+            omega_py,
+            self.lat_settle_phase,
+        );
+        if !has_pad && lat_settle_enabled {
+            if self.lat_settle_sync {
+                self.lat_settle_phase = if l_needs_brake(vh, v_down, vh_touch) {
+                    LatSettlePhase::Brake
+                } else if up_y < COS_TILT_L_SETTLE || omega_py > OMEGA_L_SETTLE {
+                    LatSettlePhase::Upright
+                } else {
+                    LatSettlePhase::Active
+                };
+                self.upright_stable_s = 0.0;
+                self.lat_settle_sync = false;
+            } else {
+                let (phase, stable) = update_l_lat_settle_phase(
+                    self.lat_settle_phase,
+                    self.upright_stable_s,
+                    dt,
+                    up_y,
+                    omega_py,
+                    vh,
+                    v_down,
+                    vh_touch,
+                );
+                self.lat_settle_phase = phase;
+                self.upright_stable_s = stable;
+            }
+        } else if !has_pad {
+            self.lat_settle_phase = LatSettlePhase::Active;
+            self.upright_stable_s = 0.0;
+        }
+
+        let upright_counter = !has_pad
+            && lat_settle_enabled
+            && self.lat_settle_phase == LatSettlePhase::Upright;
 
         // Desired body +Y: pad settle is hard upright; otherwise continuous lean/aim
         // mix with a soft flip shoulder around TILT_AIM (reduces aim snap / wobble).
-        let (axis, angle) = if pad_settle {
+        let (axis, angle) = if pad_settle || upright_counter {
             axis_angle_from_cross([up_body[2], 0.0, -up_body[0]], up_y)
         } else {
             let vx = state.velocity[0];
@@ -364,12 +442,30 @@ impl LandingAutopilot {
         let kd_roll = self.kd_roll * g.kd_roll;
         let alpha = ALPHA_PLAN * g.alpha;
         let w_cap = self.omega_max * g.omega_cap;
-        let w_mag = (kp * angle).min((2.0 * alpha * angle).sqrt()).min(w_cap);
-        let rate_err_x = omega[0] - axis[0] * w_mag;
-        let rate_err_z = omega[2] - axis[2] * w_mag;
-        let pitch = saturate(kd * rate_err_x);
-        let yaw = saturate(kd * rate_err_z);
-        let roll = saturate(-kd_roll * omega[1]);
+        let attitude_busy = angle > ERR_PHASE || omega_sq > OMEGA_PHASE * OMEGA_PHASE;
+        let soft_att = upright_counter
+            || (!has_pad
+                && lat_settle_enabled
+                && self.lat_settle_phase == LatSettlePhase::Active
+                && attitude_busy);
+        // Authority throttle uses the nominal (non-soft) rate error — do not
+        // derive it from saturated gimbal commands.
+        let w_mag_auth = (kp * angle)
+            .min((2.0 * alpha * angle).sqrt())
+            .min(w_cap);
+        let rate_err_x = omega[0] - axis[0] * w_mag_auth;
+        let rate_err_z = omega[2] - axis[2] * w_mag_auth;
+        let (pitch, yaw, roll) = attitude_gimbal_pd(
+            axis,
+            angle,
+            omega,
+            kp,
+            kd,
+            kd_roll,
+            alpha,
+            w_cap,
+            soft_att,
+        );
 
         update_lock_latch(&mut self.attitude_locked, tilt, omega_sq, vh_sq);
 
@@ -413,8 +509,6 @@ impl LandingAutopilot {
             };
             return self.emit_command(state, dt, thr, pitch, yaw, roll);
         }
-
-        let attitude_busy = angle > ERR_PHASE || omega_sq > OMEGA_PHASE * OMEGA_PHASE;
 
         // --- Vertical channel (always live; attitude never gates the brake) ---
         let hover_cmd = (hover / up_y.max(0.25)).clamp(0.0, 0.95);
@@ -751,6 +845,117 @@ impl LandingAutopilot {
 
         self.emit_command(state, dt, throttle, pitch, yaw, roll)
     }
+}
+
+/// Free-field L-mode: horizontal decel still needs brake lean.
+fn l_needs_brake(vh: f64, v_down: f64, vh_touch: f64) -> bool {
+    vh > vh_touch - 0.5 || (v_down > V_BRAKE_MIN && vh > 1.0)
+}
+
+/// Whether the brake→upright counter should run (moderate tilt band only).
+fn lat_settle_enabled(tilt: f64, up_y: f64, omega_py: f64, phase: LatSettlePhase) -> bool {
+    if tilt > TILT_AIM || up_y < 0.30 || omega_py > 0.35 {
+        return false;
+    }
+    if matches!(phase, LatSettlePhase::Brake | LatSettlePhase::Upright) {
+        return true;
+    }
+    // Start counter only from attitudes typical of lateral brake lean.
+    tilt <= 0.55
+}
+
+/// Advance L-mode Brake → Upright → Active (never skip Upright after brake).
+fn update_l_lat_settle_phase(
+    phase: LatSettlePhase,
+    upright_stable_s: f64,
+    dt: f64,
+    up_y: f64,
+    omega_py: f64,
+    vh: f64,
+    v_down: f64,
+    vh_touch: f64,
+) -> (LatSettlePhase, f64) {
+    let needs_brake = l_needs_brake(vh, v_down, vh_touch);
+    let needs_upright = up_y < COS_TILT_L_SETTLE || omega_py > OMEGA_L_SETTLE;
+
+    match phase {
+        LatSettlePhase::Brake => {
+            if needs_brake {
+                (LatSettlePhase::Brake, 0.0)
+            } else {
+                (LatSettlePhase::Upright, 0.0)
+            }
+        }
+        LatSettlePhase::Upright => {
+            if needs_brake {
+                (LatSettlePhase::Brake, 0.0)
+            } else if needs_upright {
+                (LatSettlePhase::Upright, 0.0)
+            } else {
+                let stable = upright_stable_s + dt;
+                let upright_min = if omega_py <= OMEGA_L_SETTLE * 0.5 {
+                    UPRIGHT_STABLE_QUIET_S
+                } else {
+                    UPRIGHT_STABLE_MIN_S
+                };
+                if stable >= upright_min {
+                    (LatSettlePhase::Active, 0.0)
+                } else {
+                    (LatSettlePhase::Upright, stable)
+                }
+            }
+        }
+        LatSettlePhase::Active => {
+            if needs_brake {
+                (LatSettlePhase::Brake, 0.0)
+            } else {
+                (LatSettlePhase::Active, 0.0)
+            }
+        }
+    }
+}
+
+/// √-profile rate command → gimbal PD. `soft` lowers command rate and raises damping
+/// so brake→upright recovery does not overshoot into a pendulum half-cycle.
+fn attitude_gimbal_pd(
+    axis: [f64; 3],
+    angle: f64,
+    omega: [f64; 3],
+    kp: f64,
+    kd: f64,
+    kd_roll: f64,
+    alpha: f64,
+    w_cap: f64,
+    soft: bool,
+) -> (f64, f64, f64) {
+    let omega_xy = (omega[0] * omega[0] + omega[2] * omega[2]).sqrt();
+    let (kp, kd, w_cap, rate_kill) = if soft {
+        (
+            kp * 0.55,
+            kd * 1.35,
+            w_cap * 0.45,
+            OMEGA_RATE_KILL * 0.45,
+        )
+    } else {
+        (kp, kd, w_cap, OMEGA_RATE_KILL)
+    };
+    let w_cmd = (kp * angle)
+        .min((2.0 * alpha * angle).sqrt())
+        .min(w_cap);
+    let w_cmd = if soft {
+        w_cmd.min((w_cap - 0.4 * omega_xy).max(0.0))
+    } else {
+        w_cmd
+    };
+    let w_mag = if soft {
+        w_cmd * ramp_down(omega_xy, rate_kill * 0.60, rate_kill)
+    } else {
+        w_cmd
+    };
+    let pitch = saturate(kd * (omega[0] - axis[0] * w_mag));
+    let yaw = saturate(kd * (omega[2] - axis[2] * w_mag));
+    let roll = saturate(-kd_roll * omega[1]);
+    (pitch, yaw, roll)
 }
 
 fn update_lock_latch(locked: &mut bool, tilt: f64, omega_sq: f64, vh_sq: f64) {
@@ -1322,5 +1527,66 @@ mod tests {
             ap.complete,
             "painted-pad touchdown must complete without inner-box convergence"
         );
+    }
+
+    #[test]
+    fn l_lat_settle_brake_always_enters_upright() {
+        let (phase, _) = update_l_lat_settle_phase(
+            LatSettlePhase::Brake,
+            0.0,
+            DT,
+            0.98,
+            0.05,
+            1.0,
+            5.0,
+            VH_TOUCH,
+        );
+        assert_eq!(phase, LatSettlePhase::Upright);
+    }
+
+    #[test]
+    fn l_lat_settle_upright_holds_while_tilted() {
+        let (phase, stable) = update_l_lat_settle_phase(
+            LatSettlePhase::Upright,
+            0.0,
+            DT,
+            0.90,
+            0.05,
+            1.0,
+            2.0,
+            VH_TOUCH,
+        );
+        assert_eq!(phase, LatSettlePhase::Upright);
+        assert!(stable < 1e-6);
+    }
+
+    #[test]
+    fn l_lat_settle_upright_advances_after_stable() {
+        let (phase, _) = update_l_lat_settle_phase(
+            LatSettlePhase::Upright,
+            UPRIGHT_STABLE_QUIET_S,
+            DT,
+            0.98,
+            0.04,
+            1.0,
+            2.0,
+            VH_TOUCH,
+        );
+        assert_eq!(phase, LatSettlePhase::Active);
+    }
+
+    #[test]
+    fn l_lat_settle_active_reenters_brake_when_fast() {
+        let (phase, _) = update_l_lat_settle_phase(
+            LatSettlePhase::Active,
+            0.0,
+            DT,
+            0.98,
+            0.04,
+            VH_TOUCH + 1.0,
+            2.0,
+            VH_TOUCH,
+        );
+        assert_eq!(phase, LatSettlePhase::Brake);
     }
 }

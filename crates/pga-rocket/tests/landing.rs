@@ -246,3 +246,83 @@ fn landing_toggle_rearms() {
     assert!(ap.enabled);
     assert!(!ap.complete);
 }
+
+#[test]
+fn l_mode_brake_upright_counter_limits_pendulum() {
+    let mut state = RocketState::at_altitude(60.0);
+    state.motor = motor_from_pose(0.0, 60.0, 0.0, 0.25, 0.0, 0.0);
+    state.velocity = [6.0, -4.0, -3.0];
+    state.contacting = false;
+
+    let mut ap = LandingAutopilot::default();
+    ap.enabled = true;
+
+    let mut sway_reversals = 0u32;
+    let mut prev_wx_sign = 0i32;
+    let mut saw_upright_counter = false;
+    let mut max_throttle_on_envelope = 0.0_f64;
+
+    for _ in 0..(45 * 120) {
+        let cmd = ap.update(&state, DT);
+        let tilt = tilt_of(&state);
+        let vh = (state.velocity[0] * state.velocity[0]
+            + state.velocity[2] * state.velocity[2])
+            .sqrt();
+
+        let s = if state.omega[0] > 0.05 {
+            1
+        } else if state.omega[0] < -0.05 {
+            -1
+        } else {
+            0
+        };
+        if s != 0 && prev_wx_sign != 0 && s != prev_wx_sign && tilt > 0.04 {
+            sway_reversals += 1;
+        }
+        if s != 0 {
+            prev_wx_sign = s;
+        }
+
+        // Upright counter: brake done, still recovering attitude.
+        if vh < 3.0 && tilt > 0.06 && tilt < 0.35 {
+            saw_upright_counter = true;
+        }
+
+        // Descent must not wait for attitude settle.
+        if state.lowest_foot_y() < 50.0 && cmd.throttle > max_throttle_on_envelope {
+            max_throttle_on_envelope = cmd.throttle;
+        }
+
+        state.set_command(cmd);
+        step_rocket(&mut state, DT);
+        if ap.complete {
+            break;
+        }
+    }
+
+    assert!(
+        saw_upright_counter,
+        "expected brake→upright counter phase during lateral decel"
+    );
+    assert!(
+        sway_reversals <= 12,
+        "pendulum reversals should stay bounded, got {sway_reversals}"
+    );
+    assert!(
+        max_throttle_on_envelope > 0.5,
+        "descent must not wait for attitude settle, max_thr={max_throttle_on_envelope}"
+    );
+}
+
+#[test]
+fn l_mode_lateral_decel_lands_intact() {
+    let mut state = RocketState::at_altitude(55.0);
+    state.motor = motor_from_pose(0.0, 55.0, 0.0, 0.30, 0.10, 0.0);
+    state.velocity = [5.0, -3.0, 2.0];
+    state.contacting = false;
+
+    let (state, ap) = run_landing(state, 50 * 120);
+    assert!(!state.destroyed, "impact={}", state.last_impact_speed);
+    assert!(ap.complete, "expected touchdown, h={}", state.lowest_foot_y());
+    assert!(tilt_of(&state) < 0.15, "expected near-upright rest");
+}
