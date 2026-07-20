@@ -26,8 +26,9 @@ use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
     blend_vec3, careful_aggression, careful_terminal_latch, cruise_brake_hardness,
     long_range_go_aim, long_range_hold_cos, long_range_weight, ramp, ramp_down,
-    settle_lean_freedom, slew_throttle, CruiseThrottleFuzzy, CAREFUL_NEAR_M, CAREFUL_RANGE_M,
-    LONG_CRUISE_ALT_M, SETTLE_LEAN_V_FREE, SETTLE_LEAN_V_STRICT,
+    settle_aim_blend, settle_brake_lean_scale, settle_lean_freedom, settle_motion_scale,
+    settle_trim_rate_gate, slew_throttle, CruiseThrottleFuzzy, CAREFUL_NEAR_M, CAREFUL_RANGE_M,
+    CAREFUL_TERMINAL_ENTER_M, LONG_CRUISE_ALT_M,
 };
 use crate::landing::{
     axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_target_success_square, saturate,
@@ -57,10 +58,10 @@ const COS_TILT_HANDOFF: f64 = 0.95;
 /// one-frame chatter at the pad edge.
 const HANDOFF_SETTLE_MIN_S: f64 = 0.25;
 /// Allowed touchdown drift (m) when already centered: bounds `vh · t_drift`.
-const HANDOFF_DRIFT_NEAR_M: f64 = 7.0;
+const HANDOFF_DRIFT_NEAR_M: f64 = 9.0;
 /// Allowed drift (m) while still closing — larger, because the predicted-miss
 /// term below cancels most of the along-track component.
-const HANDOFF_DRIFT_CLOSING_M: f64 = 9.5;
+const HANDOFF_DRIFT_CLOSING_M: f64 = 12.0;
 /// Max predicted touchdown miss (m) for the closing-branch arm (half of the
 /// ±12 m success box, leaving room for cross-track drift).
 const HANDOFF_MISS_MAX_M: f64 = 6.0;
@@ -72,6 +73,8 @@ const TERMINAL_EXIT_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M + 35.0;
 // --- Terminal settle (Brake → Upright → Trim) --------------------------------
 /// Upright attitude must hold this long (s) before terminal position trim.
 const UPRIGHT_STABLE_MIN_S: f64 = 0.45;
+/// Shorter upright hold when already quiet (no attitude recovery pending).
+const UPRIGHT_STABLE_QUIET_S: f64 = 0.25;
 /// Max pitch/yaw rate (rad/s) allowed before leaving Upright for Trim.
 const OMEGA_TRIM_ENTER: f64 = OMEGA_HANDOFF_MAX * 0.50;
 /// Inside this Chebyshev (m) with quiet vh, Trim holds upright (no chase).
@@ -80,7 +83,6 @@ const TRIM_DEADZONE_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M * 0.60;
 const TRIM_LEAN_CAP_BASE: f64 = 0.15;
 const TRIM_LEAN_NEAR_BASE: f64 = 0.032;
 const TRIM_LEAN_STRICT_BASE: f64 = 0.018;
-const SETTLE_LEAN_FLOOR_FRAC: f64 = 0.20;
 const TRIM_V_CREEP_PER_M_BASE: f64 = 0.26;
 const TRIM_V_CREEP_MAX_BASE: f64 = 6.00;
 const TRIM_V_CREEP_MIN_BASE: f64 = 1.3;
@@ -225,7 +227,7 @@ fn cheby_near_pad_blend(cheby: f64, pad_near: f64, outer: f64) -> f64 {
 fn cheby_creep_cap(cheby: f64) -> f64 {
     // Pad-near slope keeps creep just under the closing-branch hand-off vh
     // bound (`HANDOFF_DRIFT_CLOSING_M / t_drift`) so Descend arms on the fly.
-    let pad_near = (0.35 + 0.10 * cheby).min(2.20);
+    let pad_near = (0.45 + 0.12 * cheby).min(2.60);
     let outer = 4.50 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 2.00;
     cheby_near_pad_blend(cheby, pad_near, outer)
 }
@@ -581,6 +583,10 @@ const W_MPC_RANGE: f64 = 0.07;
 const W_MPC_TIME: f64 = 0.015;
 const W_MPC_OVERSHOOT: f64 = 16.0;
 const W_MPC_HANDOFF: f64 = 18.0;
+/// Range (m) below which MPC hand-off cost is boosted toward terminal entry.
+const MPC_HANDOFF_BOOST_RANGE_M: f64 = 200.0;
+/// Hand-off weight multiplier at the pad (× at [`MPC_HANDOFF_BOOST_RANGE_M`] = 1).
+const MPC_HANDOFF_BOOST_MAX: f64 = 2.5;
 const W_MPC_IMPULSE: f64 = 0.12;
 
 /// High-level transit action evaluated by the receding-horizon MPC sampler.
@@ -1061,6 +1067,7 @@ fn rollout_metrics(
     target_xz: [f64; 2],
     ux: f64,
     uz: f64,
+    approach_range: f64,
 ) -> TransitRolloutMetrics {
     let dx = target_xz[0] - st.pos[0];
     let dz = target_xz[1] - st.pos[2];
@@ -1081,6 +1088,23 @@ fn rollout_metrics(
     if v_approach_end < -0.5 {
         handoff_penalty += (-v_approach_end).powi(2);
     }
+    // Drift / miss / diverging terms mirror the hard hand-off AND gates — only
+    // inside the terminal envelope so mid-range MPC ranking stays stable.
+    if approach_range <= CAREFUL_TERMINAL_ENTER_M {
+        let v_cheby_end = chebyshev_closing_rate(st.pos, target_xz, st.vel);
+        let t_drift = (2.0 * st.pos[1].max(0.0) / GRAVITY).sqrt().clamp(8.0, 16.0);
+        let miss_pred = (cheby_end - v_cheby_end * t_drift).abs();
+        if v_cheby_end < -0.25 {
+            handoff_penalty += (-v_cheby_end - 0.25).powi(2);
+        }
+        let vh_drift_max = HANDOFF_DRIFT_CLOSING_M / t_drift;
+        if vh_end > vh_drift_max {
+            handoff_penalty += (vh_end - vh_drift_max).powi(2);
+        }
+        if miss_pred > HANDOFF_MISS_MAX_M {
+            handoff_penalty += (miss_pred - HANDOFF_MISS_MAX_M).powi(2);
+        }
+    }
     TransitRolloutMetrics {
         max_alt: st.pos[1],
         range_end,
@@ -1100,6 +1124,7 @@ fn transit_rollout(
     max_thrust: f64,
     k_drag: f64,
     horizon: f64,
+    approach_range: f64,
 ) -> TransitRolloutMetrics {
     let steps = (horizon / MPC_DT).ceil() as u32;
     let mut st = init;
@@ -1109,7 +1134,7 @@ fn transit_rollout(
         impulse += predictor_step(&mut st, params, mass, max_thrust, k_drag, MPC_DT);
         max_alt = max_alt.max(st.pos[1]);
     }
-    let mut m = rollout_metrics(&st, target_xz, ux, uz);
+    let mut m = rollout_metrics(&st, target_xz, ux, uz, approach_range);
     m.max_alt = max_alt;
     m.impulse = impulse;
     m
@@ -1121,6 +1146,7 @@ fn mpc_rollout_cost(
     alt_cap: f64,
     horizon: f64,
     needs_gate: bool,
+    approach_range: f64,
 ) -> f64 {
     let mut cost = 0.0;
     if needs_gate && metrics.max_alt < GATE_ALT_MIN {
@@ -1134,7 +1160,14 @@ fn mpc_rollout_cost(
     if metrics.v_approach_end < 0.0 {
         cost += W_MPC_OVERSHOOT * (-metrics.v_approach_end).powi(2);
     }
-    cost += W_MPC_HANDOFF * metrics.handoff_penalty;
+    let handoff_boost = 1.0
+        + (MPC_HANDOFF_BOOST_MAX - 1.0)
+            * ramp(
+                MPC_HANDOFF_BOOST_RANGE_M - approach_range.max(0.0),
+                0.0,
+                MPC_HANDOFF_BOOST_RANGE_M,
+            );
+    cost += W_MPC_HANDOFF * handoff_boost * metrics.handoff_penalty;
     cost += W_MPC_IMPULSE * metrics.impulse;
     if lofted && metrics.max_alt < GATE_ALT_MIN - 5.0 {
         cost += W_MPC_GATE * 0.25;
@@ -1403,8 +1436,9 @@ fn transit_mpc_select(
             max_thrust,
             k_drag,
             horizon,
+            range,
         );
-        let mut cost = mpc_rollout_cost(metrics, lofted, alt_cap, horizon, needs_gate);
+        let mut cost = mpc_rollout_cost(metrics, lofted, alt_cap, horizon, needs_gate, range);
         if cand == TransitCandidate::Coast && !ballistic {
             cost += 25.0;
         }
@@ -1752,7 +1786,12 @@ fn update_terminal_settle_phase(
                 (TerminalSettlePhase::Upright, 0.0)
             } else {
                 let stable = upright_stable_s + dt;
-                if stable >= UPRIGHT_STABLE_MIN_S {
+                let upright_min = if t_att <= 0.02 && omega_py <= OMEGA_TRIM_ENTER {
+                    UPRIGHT_STABLE_QUIET_S
+                } else {
+                    UPRIGHT_STABLE_MIN_S
+                };
+                if stable >= upright_min {
                     (TerminalSettlePhase::Trim, 0.0)
                 } else {
                     (TerminalSettlePhase::Upright, stable)
@@ -1790,6 +1829,7 @@ fn terminal_brake_aim(
     max_thrust: f64,
     brake_mode: LateralThrMode,
     brake_w: f64,
+    freedom: f64,
     aggression: f64,
 ) -> ([f64; 3], f64) {
     let pos_urgency = (hp.t_pos / 3.0).clamp(0.0, 1.0);
@@ -1826,8 +1866,9 @@ fn terminal_brake_aim(
 
     // Blend toward velocity-opposing aim only as hard as demand requires.
     let s = vh.max(0.9);
-    let f = settle_lean_freedom(vh, SETTLE_LEAN_V_STRICT, SETTLE_LEAN_V_FREE);
-    let anti_w = (brake_w * (0.35 + 0.65 * demand_shaped) * (0.35 + 0.65 * f)).clamp(0.0, 1.0);
+    let motion = settle_motion_scale(freedom);
+    let anti_w =
+        (brake_w * (0.35 + 0.65 * demand_shaped) * motion).clamp(0.0, 1.0);
     aim_x = (1.0 - anti_w) * aim_x + anti_w * (-vx / s);
     aim_z = (1.0 - anti_w) * aim_z + anti_w * (-vz / s);
 
@@ -1848,8 +1889,8 @@ fn terminal_brake_aim(
     let a_scale = careful(0.12 + 0.55 * demand_shaped, aggression);
     let a_cmd = (a_lat.max(overshoot_boost) * a_scale)
         .max(careful(0.05, aggression) * demand_shaped);
-    let lean_scale = SETTLE_LEAN_FLOOR_FRAC + (1.0 - SETTLE_LEAN_FLOOR_FRAC) * f;
-    let effective_cap = lean_cap.clamp(careful(0.05, aggression), LEAN_BRAKE_MAX) * lean_scale;
+    let effective_cap =
+        lean_cap.clamp(careful(0.05, aggression), LEAN_BRAKE_MAX) * settle_brake_lean_scale(freedom);
     let lean = lean_for_lateral_accel(
         a_cmd,
         brake_mode,
@@ -1871,6 +1912,7 @@ fn terminal_trim_aim(
     cheby: f64,
     v_cheby: f64,
     omega_py: f64,
+    freedom: f64,
     aggression: f64,
 ) -> ([f64; 3], f64) {
     // Quiet and already in the hand-off box: hold upright. Must sit below the
@@ -1887,17 +1929,16 @@ fn terminal_trim_aim(
     let err_vx = ux * v_creep - vx;
     let err_vz = uz * v_creep - vz;
 
-    let f = settle_lean_freedom(vh, SETTLE_LEAN_V_STRICT, SETTLE_LEAN_V_FREE);
     let dist_scale = (cheby / CAREFUL_RANGE_M).clamp(0.10, 1.0);
     let rate_gate_base = (1.0 - (omega_py / OMEGA_HANDOFF_MAX).clamp(0.0, 1.0)).powi(2);
-    let rate_gate = rate_gate_base.powf(1.0 + 1.5 * (1.0 - f));
+    let rate_gate = settle_trim_rate_gate(rate_gate_base, freedom);
     let lean_near = careful(TRIM_LEAN_NEAR_BASE, aggression);
     let lean_far = careful(TRIM_LEAN_CAP_BASE, aggression);
     let lean_dist = lean_near + (lean_far - lean_near) * dist_scale;
     let lean_strict = careful(TRIM_LEAN_STRICT_BASE, aggression);
-    let lean_cap = (lean_strict + (lean_dist - lean_strict) * f) * rate_gate;
+    let lean_cap = (lean_strict + (lean_dist - lean_strict) * freedom) * rate_gate;
 
-    let gain_scale = 0.35 + 0.65 * f;
+    let gain_scale = settle_motion_scale(freedom);
     let k_vel = careful(0.38 + 0.12 * dist_scale, aggression) * gain_scale;
     let k_pos = careful(0.008 * dist_scale, aggression) * gain_scale;
     let a_req_x = k_pos * ux * cheby + k_vel * err_vx;
@@ -1913,7 +1954,7 @@ fn terminal_trim_aim(
         aim_scale * (uz * 0.30 + err_vz / v_ref),
     ];
     let upright = [0.0, 1.0, 0.0];
-    let blended = blend_vec3(upright, pos_aim, 0.25 + 0.75 * f);
+    let blended = blend_vec3(upright, pos_aim, settle_aim_blend(freedom));
 
     (blended, lean)
 }
@@ -1945,6 +1986,8 @@ fn terminal_settle_aim(
     let vh_hot = terminal_vh_hot(cheby, aggression);
     let (brake_w, new_latch) =
         terminal_brake_blend(v_cheby, vh, v_approach, cheby, terminal_brake_latched, vh_hot);
+
+    let freedom = settle_lean_freedom(vh);
 
     let (phase, upright_stable_s) = update_terminal_settle_phase(
         phase,
@@ -1979,6 +2022,7 @@ fn terminal_settle_aim(
                 max_thrust,
                 brake_mode,
                 brake_w,
+                freedom,
                 aggression,
             );
             (d, lean)
@@ -1986,7 +2030,7 @@ fn terminal_settle_aim(
         TerminalSettlePhase::Upright => ([0.0, 1.0, 0.0], 0.0),
         TerminalSettlePhase::Trim => {
             let (d, lean) =
-                terminal_trim_aim(ux, uz, vx, vz, vh, cheby, v_cheby, omega_py, aggression);
+                terminal_trim_aim(ux, uz, vx, vz, vh, cheby, v_cheby, omega_py, freedom, aggression);
             (d, lean)
         }
     };
@@ -3139,6 +3183,7 @@ mod tests {
             state.params.max_thrust,
             LateralThrMode::VerticalNeutral,
             0.25,
+            settle_lean_freedom(2.5),
             careful_aggression(80.0),
         );
         assert!(
@@ -3151,7 +3196,7 @@ mod tests {
     fn terminal_hard_brake_can_use_deep_lean() {
         let mut state = RocketState::at_altitude(500.0);
         state.contacting = false;
-        state.velocity = [20.0, 0.0, 0.0];
+        state.velocity = [55.0, 0.0, 0.0];
         state.motor = crate::euclidean_pga::motor_from_pose(540.0, 500.0, 0.0, 0.0, 0.0, 0.0);
         let pos = state.position();
         let v_cheby = chebyshev_closing_rate(pos, [500.0, 0.0], state.velocity);
@@ -3159,7 +3204,7 @@ mod tests {
             &state,
             pos,
             [500.0, 0.0],
-            20.0,
+            55.0,
             v_cheby,
             LEAN_BRAKE_MAX,
             0.0,
@@ -3167,11 +3212,11 @@ mod tests {
         let (_aim, lean) = terminal_brake_aim(
             -1.0,
             0.0,
-            20.0,
+            55.0,
             0.0,
-            20.0,
+            55.0,
             v_cheby,
-            -20.0,
+            -40.0,
             40.0,
             hp,
             -15.0,
@@ -3180,6 +3225,7 @@ mod tests {
             state.params.max_thrust,
             LateralThrMode::VerticalNeutral,
             1.0,
+            settle_lean_freedom(55.0),
             careful_aggression(80.0),
         );
         assert!(
@@ -3269,7 +3315,7 @@ mod tests {
     fn terminal_settle_upright_advances_to_trim_after_stable() {
         let phase = update_terminal_settle_phase(
             TerminalSettlePhase::Upright,
-            UPRIGHT_STABLE_MIN_S - 0.01,
+            UPRIGHT_STABLE_QUIET_S - 0.01,
             0.02,
             0.98,
             OMEGA_TRIM_ENTER * 0.5,
@@ -3461,6 +3507,7 @@ mod tests {
             cheby,
             4.0,
             omega,
+            settle_lean_freedom(4.0),
             agg,
         );
         let (_, lean_fast) = terminal_trim_aim(
@@ -3472,6 +3519,7 @@ mod tests {
             cheby,
             55.0,
             omega,
+            settle_lean_freedom(55.0),
             agg,
         );
         assert!(
@@ -3514,6 +3562,7 @@ mod tests {
             state.params.max_thrust,
             LateralThrMode::VerticalNeutral,
             0.85,
+            settle_lean_freedom(2.5),
             agg,
         );
         state.velocity = [-12.0, 0.0, 0.0];
@@ -3533,6 +3582,7 @@ mod tests {
             state.params.max_thrust,
             LateralThrMode::VerticalNeutral,
             0.85,
+            settle_lean_freedom(55.0),
             agg,
         );
         assert!(
@@ -3654,6 +3704,7 @@ mod tests {
             state.params.max_thrust,
             state.params.air_drag_k,
             6.0,
+            500.0,
         );
         assert!(
             m.max_alt > pos[1] + 40.0,

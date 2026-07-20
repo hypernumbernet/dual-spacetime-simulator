@@ -71,11 +71,7 @@ pub fn defuzz_weighted(pairs: &[(f64, f64)], default: f64) -> f64 {
         num += w * y;
         den += w;
     }
-    if den < 1e-12 {
-        default
-    } else {
-        num / den
-    }
+    if den < 1e-12 { default } else { num / den }
 }
 
 /// Soft maximum of positive channel commands with membership weights.
@@ -160,10 +156,8 @@ impl LandingThrottleFuzzy {
         //
         //   use_coast_burn = h_env >= H_COAST || h_need+1 >= h_env
         //   soft = upright && (contacting || h < H_TERMINAL || !use_coast_burn)
-        let use_coast_burn =
-            h_env >= h_coast_enable || h_need + 1.0 >= h_env;
-        let soft_regime =
-            up_y >= upy_soft && (contacting || h < h_terminal || !use_coast_burn);
+        let use_coast_burn = h_env >= h_coast_enable || h_need + 1.0 >= h_env;
+        let soft_regime = up_y >= upy_soft && (contacting || h < h_terminal || !use_coast_burn);
 
         // Smooth bang engagement (replaces hard AND of three thresholds).
         let mu_can_brake = ramp(up_y, upy_brake - 0.06, upy_brake + 0.02);
@@ -256,10 +250,7 @@ impl PhysicsPadThrottleFuzzy {
         );
         let mu_coast = or(and(mu_coast_above, mu_coast_rate), mu_coast_handoff);
         let mu_brake = ramp_down(dh, coast_margin - 6.0, coast_margin + 4.0);
-        let mut t = defuzz_weighted(
-            &[(mu_coast, t_coast), (mu_brake, t_brake)],
-            t_brake,
-        );
+        let mut t = defuzz_weighted(&[(mu_coast, t_coast), (mu_brake, t_brake)], t_brake);
 
         // Pad skid: contacting with residual horizontal speed.
         let mu_skid = if contacting {
@@ -375,7 +366,10 @@ impl CruiseThrottleFuzzy {
             0.0
         };
         let mut t = if force_full_thr {
-            defuzz_weighted(&[(mu_full_hard, t_full), (1.0 - mu_full_hard, t_auth)], t_auth)
+            defuzz_weighted(
+                &[(mu_full_hard, t_full), (1.0 - mu_full_hard, t_auth)],
+                t_auth,
+            )
         } else {
             t_hold
         };
@@ -408,7 +402,10 @@ impl CruiseThrottleFuzzy {
             0.0
         };
         if mu_ballistic > 1e-6 {
-            t = t.max(defuzz_weighted(&[(mu_ballistic, t_auth), (1.0 - mu_ballistic, t)], t));
+            t = t.max(defuzz_weighted(
+                &[(mu_ballistic, t_auth), (1.0 - mu_ballistic, t)],
+                t,
+            ));
         }
 
         // Attitude effort floor (mid-range go / soft brake).
@@ -509,12 +506,8 @@ pub fn attitude_gain_scales(contacting: bool, on_pad: bool, h: f64) -> AttitudeG
     };
     let w_free = (1.0 - w_settle - w_near).max(0.0);
 
-    let blend = |a: f64, b: f64, c: f64| {
-        defuzz_weighted(
-            &[(w_settle, a), (w_near, b), (w_free, c)],
-            c,
-        )
-    };
+    let blend =
+        |a: f64, b: f64, c: f64| defuzz_weighted(&[(w_settle, a), (w_near, b), (w_free, c)], c);
     AttitudeGainScale {
         kp: blend(
             AttitudeGainScale::SETTLE.kp,
@@ -588,17 +581,13 @@ pub fn lean_max_nominal(f: &LeanAimFuzzy) -> f64 {
     // Extra lean for near-pad drift kill fades with altitude so soft approach
     // does not keep a deep lean (rocket-sled / wobble limit cycle).
     let h_lean_fade = ramp(f.h, 3.0, 18.0);
-    let lean_near_drift = f.max_lat_tilt
-        + (f.lat_tilt_gain * f.vh).min(f.lean_pad_extra_max) * h_lean_fade;
+    let lean_near_drift =
+        f.max_lat_tilt + (f.lat_tilt_gain * f.vh).min(f.lean_pad_extra_max) * h_lean_fade;
     let lean_near_quiet = f.max_lat_tilt;
 
     // Soft regime weights (hard seeking/terminal flags still dominate when set).
     let w_seek = if f.seeking_center { 1.0 } else { 0.0 };
-    let w_term = if f.terminal_commit {
-        1.0 - w_seek
-    } else {
-        0.0
-    };
+    let w_term = if f.terminal_commit { 1.0 - w_seek } else { 0.0 };
     // High vs near-pad free-field (and quiet pad above terminal).
     let mu_high = ramp(f.h, f.h_terminal + 2.0, f.h_terminal + 12.0);
     let mu_near_drift = and(
@@ -678,16 +667,8 @@ pub fn blend_desired_axis(f: &LeanAimFuzzy) -> [f64; 3] {
         0.0
     };
     // Terminal commit with residual vh: anti-v; quiet terminal: upright.
-    let w_upright_term = if f.terminal_commit {
-        mu_quiet
-    } else {
-        0.0
-    };
-    let w_antiv_term = if f.terminal_commit {
-        mu_fast_h
-    } else {
-        0.0
-    };
+    let w_upright_term = if f.terminal_commit { mu_quiet } else { 0.0 };
+    let w_antiv_term = if f.terminal_commit { mu_fast_h } else { 0.0 };
     // Position seek only while high-seeking.
     let w_pos = if f.seeking_center { 1.0 } else { 0.0 };
     // Free-field / non-seek: trim when low or slow, else anti-v (brake form when falling).
@@ -703,8 +684,7 @@ pub fn blend_desired_axis(f: &LeanAimFuzzy) -> [f64; 3] {
     let mu_low_commit = ramp_down(f.h, 10.0, 22.0) * ramp_down(f.v_down, 2.5, 7.0);
     let w_upright_free = w_free * or(mu_hoverish * 0.7, mu_low_commit * 0.85);
     let w_trim = w_free * or(mu_low, mu_slow);
-    let w_antiv_free =
-        (w_free * (1.0 - or(mu_low, mu_slow)) - w_upright_free).max(0.0);
+    let w_antiv_free = (w_free * (1.0 - or(mu_low, mu_slow)) - w_upright_free).max(0.0);
     let w_antiv = w_antiv_term + w_antiv_free * (1.0 - mu_brake_axis);
     let w_antiv_b = w_antiv_free * mu_brake_axis;
     let w_upright = w_upright_pad + w_upright_term + w_upright_free;
@@ -745,7 +725,11 @@ pub fn flip_aim_weight(tilt: f64, tilt_aim: f64) -> f64 {
 pub fn blend_vec3(a: [f64; 3], b: [f64; 3], w_b: f64) -> [f64; 3] {
     let w = w_b.clamp(0.0, 1.0);
     let u = 1.0 - w;
-    [u * a[0] + w * b[0], u * a[1] + w * b[1], u * a[2] + w * b[2]]
+    [
+        u * a[0] + w * b[0],
+        u * a[1] + w * b[1],
+        u * a[2] + w * b[2],
+    ]
 }
 
 // --- T-cruise go / brake lean mix --------------------------------------------
@@ -773,31 +757,64 @@ pub fn cruise_brake_hardness(vh: f64, v_approach: f64, v_soft: f64, v_hard: f64)
     mu_speed.max(mu_overshoot).clamp(0.0, 1.0)
 }
 
-/// Lean freedom for terminal settle: min = attitude-strict, 1 = full decel lean.
-///
-/// Shoulders `[v_strict, v_free]`: below strict → [`SETTLE_LEAN_FREEDOM_MIN`],
-/// above free → 1. Inside the shoulder, membership ramps linearly then maps through
-/// an exponential curve so freedom stays near the floor and opens quickly near 1.
-pub const SETTLE_LEAN_FREEDOM_MIN: f64 = 0.10;
+// --- Terminal settle lean freedom (Cruise final alignment) -------------------
+
+/// Minimum lean freedom at strict speeds (attitude-priority floor).
+pub const SETTLE_LEAN_FREEDOM_MIN: f64 = 0.15;
 /// Horizontal speed (m/s) below which settle lean stays at the strict floor.
-pub const SETTLE_LEAN_V_STRICT: f64 = 40.0;
+pub const SETTLE_LEAN_V_STRICT: f64 = 4.0;
 /// Horizontal speed (m/s) above which settle lean reaches full freedom.
 pub const SETTLE_LEAN_V_FREE: f64 = 60.0;
+/// Brake lean-cap scale at minimum freedom (keeps residual decel authority).
+pub const SETTLE_LEAN_CAP_FLOOR_FRAC: f64 = 0.20;
 
+const SETTLE_LEAN_CURVE_ALPHA: f64 = 2.75;
+
+/// Lean freedom for terminal settle: [`SETTLE_LEAN_FREEDOM_MIN`] at strict speeds, 1 at full decel.
+///
+/// Shoulders [`SETTLE_LEAN_V_STRICT`, `SETTLE_LEAN_V_FREE`]: membership ramps linearly then
+/// maps through an exponential curve so freedom stays near the floor and opens quickly near 1.
 #[inline]
-pub fn settle_lean_freedom(vh: f64, v_strict: f64, v_free: f64) -> f64 {
-    const ALPHA: f64 = 2.75;
+pub fn settle_lean_freedom(vh: f64) -> f64 {
     let min_f = SETTLE_LEAN_FREEDOM_MIN;
-    let mu = ramp(vh.max(0.0), v_strict, v_free.max(v_strict + 1e-6));
+    let mu = ramp(
+        vh.max(0.0),
+        SETTLE_LEAN_V_STRICT,
+        SETTLE_LEAN_V_FREE.max(SETTLE_LEAN_V_STRICT + 1e-6),
+    );
     if mu <= 0.0 {
         return min_f;
     }
     if mu >= 1.0 {
         return 1.0;
     }
-    let exp_a = ALPHA.exp();
-    let curve = ((ALPHA * mu).exp() - 1.0) / (exp_a - 1.0);
+    let exp_a = SETTLE_LEAN_CURVE_ALPHA.exp();
+    let curve = ((SETTLE_LEAN_CURVE_ALPHA * mu).exp() - 1.0) / (exp_a - 1.0);
     min_f + (1.0 - min_f) * curve
+}
+
+/// Position/anti-v gain scale from freedom (floor → 1.0 at full).
+#[inline]
+pub fn settle_motion_scale(freedom: f64) -> f64 {
+    0.35 + 0.65 * freedom.clamp(0.0, 1.0)
+}
+
+/// Trim aim blend weight toward the position axis (floor → 1.0 at full).
+#[inline]
+pub fn settle_aim_blend(freedom: f64) -> f64 {
+    0.25 + 0.75 * freedom.clamp(0.0, 1.0)
+}
+
+/// Brake lean-cap multiplier from freedom (floor → 1.0 at full).
+#[inline]
+pub fn settle_brake_lean_scale(freedom: f64) -> f64 {
+    SETTLE_LEAN_CAP_FLOOR_FRAC + (1.0 - SETTLE_LEAN_CAP_FLOOR_FRAC) * freedom.clamp(0.0, 1.0)
+}
+
+/// Trim rate gate: tighter attitude lock when freedom is low.
+#[inline]
+pub fn settle_trim_rate_gate(rate_gate_base: f64, freedom: f64) -> f64 {
+    rate_gate_base.powf(1.0 + 1.5 * (1.0 - freedom.clamp(0.0, 1.0)))
 }
 
 // --- T-cruise careful envelope (Cruise→Descend hand-off approach) -----------
@@ -1089,7 +1106,10 @@ mod tests {
         let t_mid = b.arbitrate();
         b.h_env = 38.0;
         let t_brake = b.arbitrate();
-        assert!(t_coast < 0.15, "high above envelope should coast, t={t_coast}");
+        assert!(
+            t_coast < 0.15,
+            "high above envelope should coast, t={t_coast}"
+        );
         assert!(t_brake > 0.5, "on envelope should brake, t={t_brake}");
         assert!(
             t_mid > t_coast && t_mid < t_brake + 0.05,
@@ -1202,19 +1222,39 @@ mod tests {
 
     #[test]
     fn settle_lean_freedom_endpoints_and_shape() {
-        let v_strict = SETTLE_LEAN_V_STRICT;
-        let v_free = SETTLE_LEAN_V_FREE;
-        assert!((settle_lean_freedom(0.0, v_strict, v_free) - SETTLE_LEAN_FREEDOM_MIN).abs() < 1e-9);
-        assert!((settle_lean_freedom(40.0, v_strict, v_free) - SETTLE_LEAN_FREEDOM_MIN).abs() < 1e-9);
-        assert!((settle_lean_freedom(60.0, v_strict, v_free) - 1.0).abs() < 1e-9);
-        assert!((settle_lean_freedom(80.0, v_strict, v_free) - 1.0).abs() < 1e-9);
-        let mid = settle_lean_freedom(50.0, v_strict, v_free);
+        assert!((settle_lean_freedom(0.0) - SETTLE_LEAN_FREEDOM_MIN).abs() < 1e-9);
+        assert!((settle_lean_freedom(SETTLE_LEAN_V_STRICT) - SETTLE_LEAN_FREEDOM_MIN).abs() < 1e-9);
+        assert!((settle_lean_freedom(SETTLE_LEAN_V_FREE) - 1.0).abs() < 1e-9);
+        assert!((settle_lean_freedom(80.0) - 1.0).abs() < 1e-9);
+        let mid = settle_lean_freedom(8.0);
         let linear_mid = SETTLE_LEAN_FREEDOM_MIN + (1.0 - SETTLE_LEAN_FREEDOM_MIN) * 0.5;
-        assert!(mid > SETTLE_LEAN_FREEDOM_MIN + 0.01 && mid < linear_mid, "mid={mid}");
-        let a = settle_lean_freedom(45.0, v_strict, v_free);
-        let b = settle_lean_freedom(50.0, v_strict, v_free);
-        let c = settle_lean_freedom(55.0, v_strict, v_free);
+        assert!(
+            mid > SETTLE_LEAN_FREEDOM_MIN + 0.01 && mid < linear_mid,
+            "mid={mid}"
+        );
+        let a = settle_lean_freedom(6.0);
+        let b = settle_lean_freedom(8.0);
+        let c = settle_lean_freedom(10.0);
         assert!(a < b && b < c, "monotone: {a} {b} {c}");
+    }
+
+    #[test]
+    fn settle_freedom_helpers_endpoints() {
+        let f_min = SETTLE_LEAN_FREEDOM_MIN;
+        let f_full = 1.0;
+        assert!((settle_motion_scale(f_min) - (0.35 + 0.65 * f_min)).abs() < 1e-9);
+        assert!((settle_motion_scale(f_full) - 1.0).abs() < 1e-9);
+        assert!((settle_aim_blend(f_min) - (0.25 + 0.75 * f_min)).abs() < 1e-9);
+        assert!((settle_aim_blend(f_full) - 1.0).abs() < 1e-9);
+        assert!(
+            (settle_brake_lean_scale(f_min)
+                - (SETTLE_LEAN_CAP_FLOOR_FRAC + (1.0 - SETTLE_LEAN_CAP_FLOOR_FRAC) * f_min))
+                .abs()
+                < 1e-9
+        );
+        assert!((settle_brake_lean_scale(f_full) - 1.0).abs() < 1e-9);
+        assert!((settle_trim_rate_gate(1.0, f_min) - 1.0).abs() < 1e-9);
+        assert!(settle_trim_rate_gate(0.5, f_min) < settle_trim_rate_gate(0.5, f_full));
     }
 
     #[test]
@@ -1228,7 +1268,10 @@ mod tests {
         assert!(quiet < 0.05, "quiet={quiet}");
         assert!(mid > 0.3 && mid < 0.9, "mid={mid}");
         assert!(hot > 0.95, "hot={hot}");
-        assert!(overshoot > 0.6, "overshoot should keep hardness, got {overshoot}");
+        assert!(
+            overshoot > 0.6,
+            "overshoot should keep hardness, got {overshoot}"
+        );
         assert!(quiet < mid && mid < hot);
     }
 
@@ -1356,8 +1399,7 @@ mod tests {
         let cos_low = long_range_hold_cos(LONG_CRUISE_ALT_M - 300.0, LONG_CRUISE_ALT_M, 0.0, hover);
         let cos_at = long_range_hold_cos(LONG_CRUISE_ALT_M, LONG_CRUISE_ALT_M, 0.0, hover);
         let cos_hi = long_range_hold_cos(LONG_CRUISE_ALT_M + 300.0, LONG_CRUISE_ALT_M, 5.0, hover);
-        let cos_climb_thru =
-            long_range_hold_cos(LONG_CRUISE_ALT_M, LONG_CRUISE_ALT_M, 20.0, hover);
+        let cos_climb_thru = long_range_hold_cos(LONG_CRUISE_ALT_M, LONG_CRUISE_ALT_M, 20.0, hover);
         // Below → nose-up (higher cos); above → dive lean (lower cos).
         assert!(cos_low > cos_at, "cos_low={cos_low} cos_at={cos_at}");
         assert!(cos_hi < cos_at, "cos_hi={cos_hi} cos_at={cos_at}");
@@ -1401,4 +1443,3 @@ mod tests {
         assert!(mid > 0.4 && mid < 0.7, "mid={mid}");
     }
 }
-

@@ -213,7 +213,9 @@ X' = M X M~      (M~ は反転 reverse)
    - 候補: `CruiseGo` / `Brake` / `Coast` / `SinkGo` / `AirplaneHold`（低高度安全網として
      `LoftGo` は MPC 内部のみ）。遠距離 go 中は `AirplaneHold` と `Brake` のみ。
      2 フレームごとに再計画（receding horizon）。
-   - コスト: 480 m ロフトゲート未達・過剰ロフト・残距離・オーバーシュート・ハンドオフ余裕・∫throttle dt。
+   - コスト: 480 m ロフトゲート未達・過剰ロフト・残距離・オーバーシュート・**ハンドオフ可行性**
+     （高度・Chebyshev・vh；残距離 ≲90 m では発散 `v_cheby`・drift 予算・予測ミスも追加）・∫throttle dt。
+     残距離 ≲200 m ではハンドオフ重みを連続ブースト（×1→×2.5）。
    - 内ループ: 姿勢 PD + 垂直スロットルは hover 保持・full-T・authority・deep/settle などの
      **局所則**を [`CruiseThrottleFuzzy`](src/fuzzy.rs) で肩付きブレンド（離散 step なし）。
      ターミナル settle / Descend 硬 AND は不変。
@@ -268,10 +270,13 @@ X' = M X M~      (M~ は反転 reverse)
    - `t_settle ≈ 0`（閾値目前）だけ静かな lean に戻し、go↔brake チャタを抑える。
    - ターミナル域では `vh` 過大・オーバーシュート・Chebyshev 超過時に **逆リーン
      ブレーキ**を再投入。`a_stop = vh²/(2Δcheby)` から lean を逆算して位置収束を加速。
-   - **姿勢 vs 減速の仲裁:** [`settle_lean_freedom(vh)`](src/fuzzy.rs) が横速
-     **40 m/s → 60 m/s** の肩で指数関数的に **lean 自由度 0.1→1** を開く（厳格側でも
-     0.1 の最低自由度を保持）。低速 Trim/Brake では lean 床を厳格化し aim を
-     直立寄りにして振り子揺れを抑え、高速では既存の深リーン減速権威を維持する。
+   - **姿勢 vs 減速の仲裁:** [`settle_lean_freedom(vh)`](src/fuzzy.rs) とその派生ヘルパ
+     （`settle_motion_scale` / `settle_aim_blend` / `settle_brake_lean_scale` /
+     `settle_trim_rate_gate`）が横速 **3 m/s → 14 m/s** の肩で指数関数的に
+     **lean 自由度 0.15→1** を開く。定数は [`fuzzy.rs`](src/fuzzy.rs) に集約。
+     静かな姿勢（`t_att≈0`）では Upright 最低待ちを **0.25 s** に短縮（深リーン復帰後は 0.45 s）。
+     低速 Trim/Brake では lean 床を厳格化し aim を直立寄りにして振り子揺れを抑え、
+     高速では既存の深リーン減速権威を維持する。
 
 3. **ターミナル Descend（パッド上・hand-off 後）**
    - 垂直: 物理閉ループ自殺バーン — `a_req = clamp((v² − v_touch²)/(2h), 0, a_brake)`、
