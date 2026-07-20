@@ -15,9 +15,10 @@
 //! short-hop cruise cap). The climb apogee target soft-blends toward 480 m via
 //! [`long_range_weight`]. Same stop-distance gate hands off to reverse lean. Inside
 //! the terminal-settle envelope (enter ~90 m, exit ~140 m): sequenced
-//! Brake → Upright → Trim drives lean and throttle until hard AND gates arm
+//! Brake → Upright → Trim drives lean and throttle while sinking toward
+//! [`HANDOFF_ALT_M`] (~300 m). Hard AND gates (position / attitude only) arm
 //! [`TargetPhase::Descend`] via [`LandingAutopilot::update_target_descend`]
-//! (physics closed-loop suicide burn).
+//! as soon as the pad approach is settled (physics closed-loop suicide burn).
 //!
 //! Attitude: PGA inverse sandwich ([`motor_inverse_rotate_vector`] /
 //! [`world_up_in_body`]), desired thrust [`clamp_tilt`]-ed into the lean cone.
@@ -31,7 +32,7 @@ use crate::fuzzy::{
     CAREFUL_TERMINAL_ENTER_M, LONG_CRUISE_ALT_M,
 };
 use crate::landing::{
-    axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_target_success_square, saturate,
+    axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_pad_square, saturate,
     LandingAutopilot, PAD_HALF_M,
 };
 use crate::sim::{ControlCommand, GRAVITY, RocketState};
@@ -63,8 +64,12 @@ const HANDOFF_DRIFT_NEAR_M: f64 = 9.0;
 /// term below cancels most of the along-track component.
 const HANDOFF_DRIFT_CLOSING_M: f64 = 12.0;
 /// Max predicted touchdown miss (m) for the closing-branch arm (half of the
-/// ±12 m success box, leaving room for cross-track drift).
+/// ±12 m inner guidance box, leaving room for cross-track drift).
 const HANDOFF_MISS_MAX_M: f64 = 6.0;
+/// Target altitude (m) during terminal settle — sink while trimming position/attitude.
+pub const HANDOFF_ALT_M: f64 = 300.0;
+/// Near-handoff loft floor (m) — stay in Cruise while settling over the pad.
+const HANDOFF_ALT_MIN_M: f64 = 260.0;
 /// Chebyshev (m) within which near-handoff altitude gate applies.
 const NEAR_HANDOFF_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M + 20.0;
 /// Chebyshev (m) beyond which terminal latch may release on range exit.
@@ -211,7 +216,7 @@ fn ballistic_apogee(alt: f64, vy: f64) -> f64 {
 #[inline]
 fn transit_lofted(alt: f64, vy: f64, near_handoff: bool) -> bool {
     alt >= GATE_ALT_MIN
-        || (near_handoff && alt >= GATE_ALT_MIN - 40.0)
+        || (near_handoff && alt >= HANDOFF_ALT_MIN_M)
         || ballistic_apogee(alt, vy) >= CLIMB_ALT_M
 }
 
@@ -488,12 +493,10 @@ impl TargetLandingAutopilot {
         let v_cheby_handoff = chebyshev_closing_rate(pos, target_xz, state.velocity);
         // Drift budget: hand-off drift persists through the unpowered coast
         // (the lander's burn then trims it), so end miss ≈ cheby − vh·t_drift.
-        // The coast time scales with hand-off altitude — Descend can arm at
-        // long-range cruise altitude, so the vh budget tightens as alt grows.
+        // The coast time scales with hand-off altitude.
         let t_drift = (2.0 * alt.max(0.0) / GRAVITY).sqrt().clamp(8.0, 16.0);
         let miss_pred = (cheby - v_cheby_handoff * t_drift).abs();
-        let handoff_ready = self.phase != TargetPhase::Descend
-            && alt >= GATE_ALT_MIN
+        let handoff_ready = self.phase == TargetPhase::Cruise
             && cheby <= HANDOFF_CHEBY_MAX_M
             && vh <= VH_HANDOFF_MAX
             && v_cheby_handoff > -0.25
@@ -555,10 +558,10 @@ impl TargetLandingAutopilot {
     }
 }
 
-/// True when CoM XZ lies inside the T-mode success box (inner target, not painted pad).
+/// True when CoM XZ lies inside the painted target platform (complete region).
 #[inline]
 pub fn inside_target_pad(pos: [f64; 3], target_xz: [f64; 2]) -> bool {
-    on_target_success_square(pos, target_xz)
+    on_pad_square(pos, target_xz)
 }
 
 /// Throttle regime for lateral propulsion planning.
@@ -659,14 +662,19 @@ fn kill_climb_vy(vy: f64) -> f64 {
 }
 
 /// Vertical rate target for lofted cruise / far burn (altitude-hold).
-/// Never commands climb; above [`CRUISE_ALT_CAP`] asks for a gentle sink.
-/// `terminal`: inside the settle envelope, hold the current altitude band —
-/// Descend arms at whatever altitude the settle finishes at and the lander
-/// owns the entire descent (no pre-hand-off approach sink).
+/// Never commands climb; above [`CRUISE_ALT_CAP`] (non-terminal) or
+/// [`HANDOFF_ALT_M`] (terminal settle) asks for a gentle sink.
+/// `terminal`: inside the settle envelope, sink toward [`HANDOFF_ALT_M`]
+/// while Brake → Upright → Trim adjusts position and attitude in parallel.
 #[inline]
 fn cruise_v_des_y(alt: f64, vy: f64, terminal: bool) -> f64 {
     let sink = if terminal {
-        0.0
+        if alt > HANDOFF_ALT_M {
+            // Bleed toward hand-off altitude (~1–8 m/s) during terminal settle.
+            (-0.08 * (alt - HANDOFF_ALT_M)).clamp(-8.0, -0.8)
+        } else {
+            0.0
+        }
     } else if alt > CRUISE_ALT_CAP {
         // Bleed excess altitude while translating (~1–8 m/s sink; deep only
         // when returning from long-range cruise altitude). Gain sets the
@@ -2724,18 +2732,23 @@ mod tests {
     #[test]
     fn pad_square_uses_chebyshev_half_extent() {
         assert!(inside_target_pad([500.0, 10.0, 0.0], [500.0, 0.0]));
+        // Complete region is the painted pad (±TARGET_PAD_HALF_M), not the inner aim box.
         assert!(inside_target_pad(
-            [500.0 + TARGET_SUCCESS_HALF_M, 0.0, 0.0],
+            [500.0 + TARGET_PAD_HALF_M, 0.0, 0.0],
             [500.0, 0.0]
         ));
         assert!(!inside_target_pad(
+            [500.0 + TARGET_PAD_HALF_M + 0.1, 0.0, 0.0],
+            [500.0, 0.0]
+        ));
+        // Outside the inner aim box but still on the painted pad counts as on-pad.
+        assert!(inside_target_pad(
             [500.0 + TARGET_SUCCESS_HALF_M + 0.1, 0.0, 0.0],
             [500.0, 0.0]
         ));
-        // Painted pad is wider than the success box.
         assert!(
             TARGET_PAD_HALF_M > TARGET_SUCCESS_HALF_M,
-            "visual pad should exceed success box"
+            "visual pad should exceed inner guidance box"
         );
     }
 
@@ -3101,6 +3114,25 @@ mod tests {
     }
 
     #[test]
+    fn cruise_v_des_y_terminal_sinks_toward_handoff_alt() {
+        let sink_high = cruise_v_des_y(520.0, 0.0, true);
+        assert!(
+            sink_high <= -0.8,
+            "terminal settle above HANDOFF_ALT_M should sink, got {sink_high}"
+        );
+        let hold_at = cruise_v_des_y(HANDOFF_ALT_M, 0.0, true);
+        assert!(
+            hold_at.abs() < 1e-9,
+            "at HANDOFF_ALT_M terminal should hold altitude, got {hold_at}"
+        );
+        let non_terminal = cruise_v_des_y(530.0, 0.0, false);
+        assert!(
+            non_terminal <= -0.8,
+            "non-terminal above CRUISE_ALT_CAP should still bleed, got {non_terminal}"
+        );
+    }
+
+    #[test]
     fn deep_lean_uses_vertical_neutral_not_starvation_cap() {
         let mut state = RocketState::at_altitude(500.0);
         state.contacting = false;
@@ -3111,7 +3143,7 @@ mod tests {
         let cmd = spool_autopilot(&mut ap, &state, [500.0, 0.0], 0.26, 40);
         assert_eq!(ap.phase, TargetPhase::Cruise);
         // Lower bound leaves room for the terminal-approach sink bias
-        // (cruise_v_des_y with terminal=true trims ~0.05 off hover).
+        // (cruise_v_des_y with terminal=true sinks toward HANDOFF_ALT_M).
         assert!(
             cmd.throttle > 0.26,
             "terminal brake should keep torque headroom, thr={}",

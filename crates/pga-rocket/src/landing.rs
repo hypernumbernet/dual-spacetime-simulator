@@ -14,9 +14,9 @@
 //!
 //! **Hard conditionals (do not fuzzy):** `enabled`/`complete`, grounded recovery cut
 //! (`contacting && up_y < 0.5`), pad/free-field complete latches, antipodal attitude
-//! fallback, hull-probe height switch (`TILT_PROBE`), Chebyshev pad success, the
-//! soft-terminal vs coast/bang **regime gate**, multi-channel `max()` priority, and the
-//! suicide-burn **hard floor** when late on the envelope.
+//! fallback, hull-probe height switch (`TILT_PROBE`), painted-pad Chebyshev complete,
+//! the soft-terminal vs coast/bang **regime gate**, multi-channel `max()` priority, and
+//! the suicide-burn **hard floor** when late on the envelope.
 //!
 //! **Fuzzy (smooth edges):**
 //! - bang-brake engagement on `{up_y, v_down, h_need − h_env}`
@@ -28,8 +28,8 @@
 //! high-altitude pad-seek / low-altitude upright-commit attitude geometry as the
 //! optional pad branch of [`LandingAutopilot::update_with_target`]: mild position
 //! PD only while high; near the ground upright + soft-touch (no last-metre
-//! walk-in). T-mode success is the inner 12 m Chebyshev box; L-mode on the
-//! launch pad uses the painted 30 m square.
+//! walk-in). T-mode complete latches on the painted 30 m pad (same as L-mode
+//! pad success); the inner 12 m box is guidance aim only.
 
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
@@ -92,8 +92,10 @@ const UPY_BRAKE: f64 = 0.25;
 const UPY_AUTH: f64 = 0.5;
 const UPY_SOFT: f64 = 0.6;
 /// Target / launch pad half-extent (m) — matches `mesh::TARGET_PAD_HALF_EXTENT`.
+/// T-mode complete uses this painted square (not the inner guidance box).
 pub(crate) const PAD_HALF_M: f64 = 30.0;
-/// T-mode landing success half-extent (m) — narrower than the painted pad.
+/// T-mode inner guidance / hand-off aim half-extent (m) — narrower than the painted pad.
+/// Complete does **not** require this box; touchdown on [`PAD_HALF_M`] is enough.
 pub const TARGET_SUCCESS_HALF_M: f64 = 12.0;
 
 // --- T-pad guidance (high seek, low commit) ---------------------------------
@@ -580,7 +582,8 @@ impl LandingAutopilot {
         let vy = state.velocity[1];
         let v_down = (-vy).max(0.0);
         let pos = state.position();
-        let on_pad = on_target_success_square(pos, target_xz);
+        // Complete / settle on the painted platform; seek still uses cheby vs center.
+        let on_pad = on_pad_square(pos, target_xz);
         let cheby = chebyshev_xz(pos, target_xz);
         let seeking_center = !state.contacting
             && h > CENTER_SEEK_MIN_H
@@ -764,12 +767,6 @@ fn update_lock_latch(locked: &mut bool, tilt: f64, omega_sq: f64, vh_sq: f64) {
 #[inline]
 pub(crate) fn on_pad_square(pos: [f64; 3], target_xz: [f64; 2]) -> bool {
     chebyshev_xz(pos, target_xz) <= PAD_HALF_M
-}
-
-/// T-mode success: Chebyshev offset inside the inner landing box (painted pad is wider).
-#[inline]
-pub(crate) fn on_target_success_square(pos: [f64; 3], target_xz: [f64; 2]) -> bool {
-    chebyshev_xz(pos, target_xz) <= TARGET_SUCCESS_HALF_M
 }
 
 /// Chebyshev (∞-norm) horizontal offset from the pad center (m).
@@ -1353,5 +1350,31 @@ mod tests {
         ap.enabled = true;
         let cmd = ap.update_target_descend(&state, [0.0, 0.0], DT);
         assert!(cmd.throttle < 0.05, "expected coast high above envelope, t={}", cmd.throttle);
+    }
+
+    #[test]
+    fn target_descend_completes_on_painted_pad_outside_inner_box() {
+        // Rest upright on the painted platform but outside the 12 m guidance box.
+        let mut state = RocketState::resting_on_pad();
+        let offset = TARGET_SUCCESS_HALF_M + 5.0;
+        assert!(offset < PAD_HALF_M);
+        let com_y = state.position()[1];
+        state.motor = motor_from_pose(offset, com_y, 0.0, 0.0, 0.0, 0.0);
+        state.velocity = [0.0, 0.0, 0.0];
+        state.omega = [0.0, 0.0, 0.0];
+        state.contacting = true;
+
+        let target = [0.0, 0.0];
+        let pos = state.position();
+        assert!(on_pad_square(pos, target));
+        assert!(chebyshev_xz(pos, target) > TARGET_SUCCESS_HALF_M);
+
+        let mut ap = LandingAutopilot::for_target_pad();
+        ap.enabled = true;
+        let _ = ap.update_target_descend(&state, target, DT);
+        assert!(
+            ap.complete,
+            "painted-pad touchdown must complete without inner-box convergence"
+        );
     }
 }

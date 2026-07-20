@@ -18,7 +18,8 @@ pub use control::{
 pub use landing::LandingAutopilot;
 pub use fuzzy::{LONG_CRUISE_ALT_M as LONG_RANGE_CRUISE_ALT_M, LONG_RANGE_M};
 pub use target_landing::{
-    inside_target_pad, TargetLandingAutopilot, TargetPhase, CLIMB_ALT_M, TARGET_PAD_HALF_M,
+    inside_target_pad, TargetLandingAutopilot, TargetPhase, CLIMB_ALT_M, HANDOFF_ALT_M,
+    TARGET_PAD_HALF_M,
 };
 pub use landing::TARGET_SUCCESS_HALF_M;
 pub use sim::{
