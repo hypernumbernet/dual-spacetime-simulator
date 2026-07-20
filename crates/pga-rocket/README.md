@@ -211,14 +211,17 @@ X' = M X M~      (M~ は反転 reverse)
    - 内ループは従来どおり姿勢 PD + throttle 整形。ターミナル settle / Descend 硬 AND は不変。
 
 1. **中距離 go / brake** — 物理予測停止距離 `d_stop = d_flip + d_burn`
-   - `a_lat = g·tan(θ)`（垂直中立逆リーン）または **airplane 域** full-T 時 `(T/m)·thr·sin(θ)`。
+   - 計画 lean は実行天井 **`LEAN_BRAKE_MAX`（0.90 rad）** と同値。`a_lat = g·tan(θ)`（垂直中立）または
+     **airplane 域 / Moon / vh≳20 m/s** では full-T 時 `(T/m)·thr·sin(θ)`。
    - 二次抗力 `β = k/m`（Moon は `β=0`）。`d_burn = (1/2β) ln((a+βv²)/(a+βv_end²))`。
    - 減速時間 `t_decel` も同型の閉形式（`a_eff` 近似は廃止）。
    - 姿勢反転 `d_flip = v·t_flip`（現姿勢→逆リーン aim の角度から √-profile で `t_flip`）。
-   - **開始条件:** `range_eff ≤ d_stop`（ターミナル station-keep を除く）。幾何ヒステリシス
-     `BRAKE_RELEASE_MARGIN` で go↔brake チャタを抑止。オーバーシュート（`v_approach < 0`）も即 brake。
+   - **開始条件:** `range_eff ≤ d_stop + BRAKE_ENGAGE_MARGIN`（25 m 早め開始。ターミナル station-keep を除く）。
+     幾何ヒステリシス `BRAKE_RELEASE_MARGIN` で go↔brake チャタを抑止。オーバーシュート（`v_approach < 0`）も即 brake。
+   - **実行:** ラッチ直後から `LEAN_BRAKE_MAX` 逆リーン。Moon / 高速 / airplane では full-T ブレーキ。
+     demand ランプによる浅ブレーキは廃止。ブレーキ中は rate-kill 閾値を緩和（`OMEGA_RATE_KILL_BRAKE`）。
    - **aim 方向は離散**（go 自由ベクトル or 反速度ブレーキ）。ベクトル平均はしない。
-   - go 側の目標接近速度は同じ式の逆算（`allowed_approach_speed`）— ハード速度キャップなし。
+   - go 側の目標接近速度は同じ式の逆算（`allowed_approach_speed`、engage margin 込み）— ハード速度キャップなし。
 
 2. **遠距離 airplane 巡航**（水平距離 ≳ 1.5 km）
    - **優先順位:** 予測停止距離の外側ではフルスロットルでターゲット方向へ行く。高度は
