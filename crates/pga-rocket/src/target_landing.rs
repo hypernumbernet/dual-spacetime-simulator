@@ -35,7 +35,9 @@ use crate::landing::{
     axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_pad_square, saturate,
     LandingAutopilot, PAD_HALF_M,
 };
-use crate::sim::{ControlCommand, GRAVITY, RocketState};
+use crate::sim::{
+    air_drag_k_at_altitude, effective_air_drag_beta, ControlCommand, GRAVITY, RocketState,
+};
 
 /// Nominal loft altitude (m, CoM). Roughly reaching this is enough for the gate.
 pub const CLIMB_ALT_M: f64 = 500.0;
@@ -754,7 +756,7 @@ impl HorizontalBrakePlan {
         let beta = if state.moon_mode {
             0.0
         } else {
-            state.params.air_drag_k / mass.max(1e-6)
+            effective_air_drag_beta(state)
         };
         let brake_mode = brake_lateral_mode(in_airplane_range, vh, state.moon_mode);
         let brake_lean = LEAN_BRAKE_MAX;
@@ -1083,7 +1085,11 @@ fn predictor_step(
             max_thrust,
         )
     };
-    let a_drag = predictor_drag_accel(st.vel, k_drag, mass);
+    let a_drag = predictor_drag_accel(
+        st.vel,
+        air_drag_k_at_altitude(k_drag, st.pos[1]),
+        mass,
+    );
     let ax = a_thr[0] + a_drag[0];
     let ay = a_thr[1] + a_drag[1] - GRAVITY;
     let az = a_thr[2] + a_drag[2];
@@ -2262,7 +2268,7 @@ fn transit_command(
     let beta = if state.moon_mode {
         0.0
     } else {
-        state.params.air_drag_k / mass.max(1e-6)
+        effective_air_drag_beta(state)
     };
     let handoff_plan = if lofted
         && (terminal || brake_latched || cheby <= TERMINAL_EXIT_CHEBY_M)

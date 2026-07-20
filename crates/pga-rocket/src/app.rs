@@ -124,6 +124,7 @@ impl App {
             reset: self.input.just_pressed(KeyCode::KeyR),
             toggle_landing: self.input.just_pressed(KeyCode::KeyL),
             toggle_target_landing: self.input.just_pressed(KeyCode::KeyT),
+            toggle_moon_mode: self.input.just_pressed(KeyCode::KeyM),
         }
     }
 
@@ -197,6 +198,9 @@ impl App {
             if self.target_landing.enabled {
                 self.landing.disable();
             }
+        }
+        if keys.toggle_moon_mode {
+            self.rocket.moon_mode = !self.rocket.moon_mode;
         }
 
         if keys.reset {

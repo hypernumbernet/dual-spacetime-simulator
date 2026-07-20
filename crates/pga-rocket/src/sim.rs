@@ -13,6 +13,9 @@ pub const GRAVITY: f64 = 9.81;
 /// Sea-level air density (kg/m³), ISA.
 pub const AIR_DENSITY: f64 = 1.225;
 
+/// ISA troposphere scale height (m). `ρ(h) = ρ₀ exp(−h/H)`.
+pub const AIR_SCALE_HEIGHT: f64 = 8500.0;
+
 /// Effective ballistic coefficient β = m / (C_d A) (kg/m²).
 ///
 /// Real launch-vehicle stages are typically a few ×10³ kg/m². Using
@@ -28,6 +31,41 @@ pub const AIR_BALLISTIC_COEFF: f64 = 2.5e3;
 pub fn air_drag_k_from_mass(mass: f64) -> f64 {
     let m = mass.max(1e-6);
     AIR_DENSITY * m / (2.0 * AIR_BALLISTIC_COEFF)
+}
+
+/// ISA air density (kg/m³) at geometric altitude `h` (m, clamped ≥ 0).
+#[inline]
+pub fn air_density_at_altitude(h: f64) -> f64 {
+    let h = h.max(0.0);
+    AIR_DENSITY * (-h / AIR_SCALE_HEIGHT).exp()
+}
+
+/// Ratio ρ(h)/ρ₀ at altitude `h` (m).
+#[inline]
+pub fn air_density_ratio(h: f64) -> f64 {
+    air_density_at_altitude(h) / AIR_DENSITY
+}
+
+/// Sea-level drag coefficient scaled by altitude-dependent density.
+#[inline]
+pub fn air_drag_k_at_altitude(k_sea_level: f64, h: f64) -> f64 {
+    k_sea_level * air_density_ratio(h)
+}
+
+/// Quadratic drag coefficient for the current state (0 in Moon mode).
+#[inline]
+pub fn effective_air_drag_k(state: &RocketState) -> f64 {
+    if state.moon_mode {
+        0.0
+    } else {
+        air_drag_k_at_altitude(state.params.air_drag_k, state.altitude())
+    }
+}
+
+/// Drag parameter β = k/m for the current state (0 in Moon mode).
+#[inline]
+pub fn effective_air_drag_beta(state: &RocketState) -> f64 {
+    effective_air_drag_k(state) / state.params.mass.max(1e-6)
 }
 
 /// World-frame quadratic drag force `F = −k |v| v` (zero when `k` or `|v|` is tiny).
@@ -443,7 +481,7 @@ impl RocketState {
 
         // Air drag (Earth). Moon mode is vacuum — skip entirely.
         if !self.moon_mode {
-            let drag = air_drag_force(self.velocity, self.params.air_drag_k);
+            let drag = air_drag_force(self.velocity, effective_air_drag_k(self));
             force[0] += drag[0];
             force[1] += drag[1];
             force[2] += drag[2];
@@ -946,5 +984,23 @@ mod unit_tests {
         assert!(air_drag_force([0.0, 0.0, 0.0], 2.0)
             .iter()
             .all(|c| c.abs() < 1e-12));
+    }
+
+    #[test]
+    fn air_density_decreases_with_altitude() {
+        assert!((air_density_at_altitude(0.0) - AIR_DENSITY).abs() < 1e-12);
+        let rho_500 = air_density_at_altitude(500.0);
+        let rho_1000 = air_density_at_altitude(1000.0);
+        assert!(rho_500 < AIR_DENSITY);
+        assert!(rho_1000 < rho_500);
+        assert!((air_density_ratio(0.0) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn air_drag_k_scales_with_density() {
+        let k_sl = air_drag_k_from_mass(1000.0);
+        let k_520 = air_drag_k_at_altitude(k_sl, 520.0);
+        assert!(k_520 < k_sl);
+        assert!((k_520 / k_sl - air_density_ratio(520.0)).abs() < 1e-12);
     }
 }

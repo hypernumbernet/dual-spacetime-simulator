@@ -74,10 +74,11 @@ fn attitude_keys_set_pitch_yaw_roll() {
 
 #[test]
 fn map_keys_is_not_noop() {
-    // space, thrust_down, f, c, w, s, a, d, q, e, r, l, t
+    // space, thrust_down, f, c, w, s, a, d, q, e, r, l, t, m
     // A/D → roll, Q/E → yaw: d=roll_right, q=yaw_left
     let snap = map_keys(
         true, false, false, false, true, false, false, true, true, false, false, false, false,
+        false,
     );
     assert!(snap.thrust_up);
     assert!(!snap.thrust_full);

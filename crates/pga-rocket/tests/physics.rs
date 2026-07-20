@@ -614,3 +614,28 @@ fn air_drag_k_matches_realistic_ballistic_coeff() {
         "drag/weight at 50 m/s should be ~few % (got {ratio:.4})"
     );
 }
+
+#[test]
+fn air_drag_weaker_at_high_altitude() {
+    let mut low = RocketState::at_altitude(0.0);
+    low.moon_mode = false;
+    low.velocity = [80.0, 0.0, 0.0];
+    low.set_command(ControlCommand::default());
+    let vx0 = low.velocity[0];
+    step_rocket(&mut low, DT);
+    let low_loss = vx0 - low.velocity[0];
+
+    let mut high = RocketState::at_altitude(500.0);
+    high.moon_mode = false;
+    high.velocity = [80.0, 0.0, 0.0];
+    high.set_command(ControlCommand::default());
+    let vx0 = high.velocity[0];
+    step_rocket(&mut high, DT);
+    let high_loss = vx0 - high.velocity[0];
+
+    assert!(low_loss > 0.0, "sea-level drag should decelerate, loss={low_loss}");
+    assert!(
+        high_loss < low_loss,
+        "drag at 500 m should be weaker than at sea level: low={low_loss} high={high_loss}"
+    );
+}

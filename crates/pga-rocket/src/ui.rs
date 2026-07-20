@@ -193,6 +193,7 @@ fn help_section(ui: &mut egui::Ui) {
         "A/D: roll RCS",
         "L: auto-land",
         "T: land at T mark",
+        "M: Moon mode",
         "R: reset",
         "LMB/RMB drag: orbit",
         "Wheel/PgUp-Dn: zoom",

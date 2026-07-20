@@ -816,7 +816,7 @@ pub fn hud_text(
     };
     format!(
         "PGA Rocket  |  alt={:.1} m  vel_y={:.1} m/s  thr={:.0}%  auto={}  contact={}  fps={:.0}\n\
-         Space/Ctrl: hold thr  F: full  C: cut  W/S: pitch  Q/E: yaw  A/D: roll RCS  L: land  T: target-land  R: reset\n\
+         Space/Ctrl: hold thr  F: full  C: cut  W/S: pitch  Q/E: yaw  A/D: roll RCS  L: land  T: target-land  M: moon  R: reset\n\
          Drag LMB/RMB: orbit camera  Wheel: zoom  Arrows: orbit  Esc: quit",
         p[1], state.velocity[1], thr, status, contact, fps
     )

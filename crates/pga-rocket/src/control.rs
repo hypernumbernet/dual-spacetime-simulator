@@ -38,13 +38,15 @@ pub struct KeySnapshot {
     pub toggle_landing: bool,
     /// Toggle target-pad autopilot (T key, edge-triggered).
     pub toggle_target_landing: bool,
+    /// Toggle Moon mode (M key, edge-triggered).
+    pub toggle_moon_mode: bool,
 }
 
 /// Maps key state into incremental control updates.
 ///
 /// - Space / Ctrl: hold to raise / lower throttle
 /// - F / C: edge-triggered latch ramps (full / cut) over [`THROTTLE_LATCH_RAMP_S`]
-/// - W/S pitch, Q/E yaw, A/D roll; R / L / T are edge signals for the app
+/// - W/S pitch, Q/E yaw, A/D roll; R / L / T / M are edge signals for the app
 #[derive(Clone, Debug)]
 pub struct ControlMapper {
     /// Throttle units per second while Space / Ctrl held.
@@ -159,6 +161,7 @@ pub fn map_keys(
     r: bool,
     l: bool,
     t: bool,
+    m: bool,
 ) -> KeySnapshot {
     KeySnapshot {
         thrust_up: space,
@@ -175,6 +178,7 @@ pub fn map_keys(
         reset: r,
         toggle_landing: l,
         toggle_target_landing: t,
+        toggle_moon_mode: m,
     }
 }
 
