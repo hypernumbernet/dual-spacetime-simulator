@@ -1,8 +1,8 @@
 //! Integration tests for automatic landing autopilot.
 
 use pga_rocket::euclidean_pga::{motor_body_up_world, motor_from_pose};
-use pga_rocket::landing::LandingAutopilot;
-use pga_rocket::sim::{RocketState, step_rocket};
+use pga_rocket::landing::{H_FREEFALL_M, LandingAutopilot};
+use pga_rocket::sim::{ControlCommand, RocketState, step_rocket};
 
 const DT: f64 = 1.0 / 120.0;
 
@@ -325,4 +325,32 @@ fn l_mode_lateral_decel_lands_intact() {
     assert!(!state.destroyed, "impact={}", state.last_impact_speed);
     assert!(ap.complete, "expected touchdown, h={}", state.lowest_foot_y());
     assert!(tilt_of(&state) < 0.15, "expected near-upright rest");
+}
+
+#[test]
+fn autopilot_high_alt_freefall_then_brakes_on_speed_cap() {
+    let mut state = RocketState::at_altitude(H_FREEFALL_M + 500.0);
+    state.velocity = [0.0, -20.0, 0.0];
+    state.contacting = false;
+
+    let mut ap = LandingAutopilot::default();
+    ap.enabled = true;
+
+    let cmd_coast = ap.update(&state, DT);
+    assert!(
+        cmd_coast.throttle < 0.15,
+        "high-alt slow fall should freefall, throttle={}",
+        cmd_coast.throttle
+    );
+
+    state.velocity = [0.0, -280.0, 0.0];
+    let mut cmd_brake = ControlCommand::default();
+    for _ in 0..120 {
+        cmd_brake = ap.update(&state, DT);
+    }
+    assert!(
+        cmd_brake.throttle > 0.85,
+        "high-alt fast fall should brake, throttle={}",
+        cmd_brake.throttle
+    );
 }

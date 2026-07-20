@@ -437,6 +437,77 @@ fn cruise_w_from_vy(vy: f64) -> f64 {
     (1.0 - (vy - 3.0) / 5.0).clamp(0.0, 1.0)
 }
 
+// --- High-altitude freefall speed envelope ------------------------------------
+
+/// CoM altitude (m) at the low end of the freefall speed envelope.
+pub const FREEFALL_ALT_LO_M: f64 = 1000.0;
+/// CoM altitude (m) at the high end of the freefall speed envelope.
+pub const FREEFALL_ALT_HI_M: f64 = 5000.0;
+/// Max descent speed (m/s) at [`FREEFALL_ALT_LO_M`].
+pub const FREEFALL_V_CAP_LO_M_S: f64 = 100.0;
+/// Max descent speed (m/s) at [`FREEFALL_ALT_HI_M`] and above.
+pub const FREEFALL_V_CAP_HI_M_S: f64 = 300.0;
+/// Excess-speed scale (m/s) for exponential overspeed membership
+/// (`μ = 1 − e^{−excess/τ}`): ~63% at one τ over the cap, ~95% at 3τ.
+const FREEFALL_OVERSPEED_TAU_M_S: f64 = 40.0;
+
+/// Overspeed membership vs the altitude speed envelope (`0` at/below cap).
+#[inline]
+pub fn freefall_overspeed_mu(v_down: f64, alt: f64) -> f64 {
+    let excess = (v_down - freefall_v_cap(alt)).max(0.0);
+    if excess < 1e-12 {
+        0.0
+    } else {
+        1.0 - (-excess / FREEFALL_OVERSPEED_TAU_M_S).exp()
+    }
+}
+
+/// Allowed freefall descent speed (m/s) vs CoM altitude.
+///
+/// Linear envelope: 100 m/s at 1000 m → 300 m/s at 5000 m (clamped outside).
+#[inline]
+pub fn freefall_v_cap(alt: f64) -> f64 {
+    let u = ramp(alt, FREEFALL_ALT_LO_M, FREEFALL_ALT_HI_M);
+    FREEFALL_V_CAP_LO_M_S + u * (FREEFALL_V_CAP_HI_M_S - FREEFALL_V_CAP_LO_M_S)
+}
+
+/// Fuzzy high-altitude freefall vertical throttle.
+///
+/// Below the altitude speed envelope → attitude authority only. Above it, an
+/// exponential overspeed membership smoothly raises throttle toward
+/// `t_brake_cmd`, gated by uprightness so inverted thrust is not forced.
+#[derive(Clone, Copy, Debug)]
+pub struct FreefallThrottleFuzzy {
+    pub alt: f64,
+    pub v_down: f64,
+    pub up_y: f64,
+    pub t_auth: f64,
+    pub t_brake_cmd: f64,
+    pub upy_brake: f64,
+}
+
+impl FreefallThrottleFuzzy {
+    /// Membership-weighted freefall throttle in [0, 1].
+    pub fn arbitrate(self) -> f64 {
+        let FreefallThrottleFuzzy {
+            alt,
+            v_down,
+            up_y,
+            t_auth,
+            t_brake_cmd,
+            upy_brake,
+        } = self;
+
+        let mu_speed = freefall_overspeed_mu(v_down, alt);
+        let mu_up = ramp(up_y, upy_brake - 0.06, upy_brake + 0.12);
+        let mu = and(mu_speed, mu_up);
+        // Soft blend auth ↔ brake (not bang-floor) so throttle rises exponentially
+        // with overspeed while still respecting attitude authority.
+        defuzz_weighted(&[(1.0 - mu, t_auth), (mu, t_brake_cmd.max(t_auth))], t_auth)
+            .clamp(0.0, 1.0)
+    }
+}
+
 /// Asymmetric main-engine throttle slew (fraction per second).
 ///
 /// Pump-fed stages spool up slower than they throttle down; this models the
@@ -956,6 +1027,52 @@ pub fn long_range_go_aim(ux: f64, uz: f64, cos_up: f64) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn freefall_v_cap_envelope_endpoints() {
+        assert!((freefall_v_cap(1000.0) - 100.0).abs() < 1e-9);
+        assert!((freefall_v_cap(5000.0) - 300.0).abs() < 1e-9);
+        assert!((freefall_v_cap(3000.0) - 200.0).abs() < 1e-9);
+        assert!((freefall_v_cap(0.0) - 100.0).abs() < 1e-9);
+        assert!((freefall_v_cap(8000.0) - 300.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn freefall_overspeed_mu_edges() {
+        assert!(freefall_overspeed_mu(100.0, 1000.0) < 1e-9);
+        assert!(freefall_overspeed_mu(140.0, 1000.0) > 0.5);
+        assert!(freefall_overspeed_mu(220.0, 1000.0) > 0.95);
+    }
+
+    #[test]
+    fn freefall_throttle_fuzzy_exponential_shoulder() {
+        let base = FreefallThrottleFuzzy {
+            alt: 1500.0, // v_cap ≈ 125
+            v_down: 125.0,
+            up_y: 1.0,
+            t_auth: 0.05,
+            t_brake_cmd: 0.95,
+            upy_brake: 0.25,
+        };
+        let at_cap = base.arbitrate();
+        let mild = FreefallThrottleFuzzy {
+            v_down: 160.0,
+            ..base
+        }
+        .arbitrate();
+        let deep = FreefallThrottleFuzzy {
+            v_down: 280.0,
+            ..base
+        }
+        .arbitrate();
+        assert!(at_cap < 0.08, "at cap should stay near auth, t={at_cap}");
+        assert!(
+            mild > at_cap + 0.15 && mild < 0.85,
+            "mild overspeed partial brake, mild={mild}"
+        );
+        assert!(deep > 0.85, "deep overspeed near full, deep={deep}");
+        assert!(mild < deep, "exponential monotonic, mild={mild} deep={deep}");
+    }
 
     #[test]
     fn ramp_edges() {

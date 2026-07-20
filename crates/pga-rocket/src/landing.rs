@@ -6,7 +6,13 @@
 //! - Attitude: shortest-arc axis/angle error → √-profile rate command → gimbal PD.
 //!   Works for any initial attitude including inverted (antipodal singularity handled).
 //! - Vertical: closed-loop suicide-burn schedule — coast while above the braking
-//!   envelope, brake hard on it, soft-touch near the pad. Local laws stay closed-form;
+//!   envelope, brake hard on it, soft-touch near the pad. Above [`H_FREEFALL_M`],
+//!   relaxed-attitude freefall with an altitude speed envelope (100 m/s @ 1 km →
+//!   300 m/s @ 5 km), exponential fuzzy overspeed braking, and (L-mode)
+//!   anti-velocity thrust at ~90° when horizontal speed exceeds a deadband
+//!   (60 m/s Earth / 30 m/s Moon). Vertical overspeed adds the minimum upward
+//!   thrust component needed — not a full upright recovery. Local laws stay
+//!   closed-form;
 //!   bang-brake **engagement** uses fuzzy membership edges ([`crate::fuzzy`]) with a
 //!   **hard brake floor** so the envelope is never gated behind attitude recovery.
 //!
@@ -20,6 +26,7 @@
 //!
 //! **Fuzzy (smooth edges):**
 //! - bang-brake engagement on `{up_y, v_down, h_need − h_env}`
+//! - high-altitude freefall overspeed (`1 − e^{−excess/τ}` × upright gate)
 //! - continuous attitude gain scales near pad / settle
 //! - lean cone + desired thrust-axis mix (upright / anti-v / trim / pos-seek)
 //! - soft shoulder on flip aim around [`TILT_AIM`]
@@ -33,8 +40,9 @@
 
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
-    attitude_gain_scales, blend_desired_axis, blend_vec3, flip_aim_weight, lean_max_nominal,
-    ramp_down, LandingThrottleFuzzy, LeanAimFuzzy, PhysicsPadThrottleFuzzy, slew_throttle,
+    attitude_gain_scales, blend_desired_axis, blend_vec3, flip_aim_weight, freefall_overspeed_mu,
+    freefall_v_cap, lean_max_nominal, ramp_down, FreefallThrottleFuzzy, LandingThrottleFuzzy,
+    LeanAimFuzzy, PhysicsPadThrottleFuzzy, slew_throttle,
 };
 use crate::sim::{ControlCommand, GRAVITY, RocketState};
 
@@ -82,6 +90,19 @@ const T_REACT: f64 = 0.25;
 const BURN_PLAN_FRAC: f64 = 0.95;
 /// Above this foot height, prefer coast/suicide-burn over continuous soft descent.
 const H_COAST_ENABLE: f64 = 12.0;
+/// CoM altitude (m) above which L/T use attitude-only freefall.
+pub const H_FREEFALL_M: f64 = 1000.0;
+/// Freefall upright tilt deadzone (rad) while coasting under the speed envelope.
+/// Outside it the soft PD still uprights; inside, only rate damping remains.
+const FREEFALL_TILT_DEADZONE: f64 = 0.45;
+/// Deadzone floor (rad) when fully overspeed — still softer than pad settle.
+const FREEFALL_TILT_DEADZONE_MIN: f64 = 0.12;
+/// Horizontal speed (m/s) below which L freefall ignores lateral kill (Earth).
+const FREEFALL_VH_DEADBAND_EARTH: f64 = 60.0;
+/// Moon (vacuum): lower deadband — no drag to bleed speed.
+const FREEFALL_VH_DEADBAND_MOON: f64 = 30.0;
+/// Hard lateral-kill throttle at ~90° lean — horizontal thrust needs near-full engine.
+const FREEFALL_VH_THR_HARD: f64 = 0.98;
 /// Planning angular deceleration for the √-profile rate command (rad/s²).
 /// Conservative fraction of gimbal authority T·sinδ·|r_y|/Ixx ≈ 1.2 rad/s² at full T.
 const ALPHA_PLAN: f64 = 0.5;
@@ -324,6 +345,8 @@ impl LandingAutopilot {
         let vy = state.velocity[1];
         let v_down = (-vy).max(0.0);
         let pos = state.position();
+        let alt = pos[1];
+        let high_freefall = alt >= H_FREEFALL_M && !state.contacting;
         let on_pad = target_xz.is_some_and(|t| on_pad_square(pos, t));
         let cheby = target_xz.map_or(0.0, |t| chebyshev_xz(pos, t));
         let has_pad = target_xz.is_some();
@@ -382,10 +405,25 @@ impl LandingAutopilot {
             && lat_settle_enabled
             && self.lat_settle_phase == LatSettlePhase::Upright;
 
-        // Desired body +Y: pad settle is hard upright; otherwise continuous lean/aim
-        // mix with a soft flip shoulder around TILT_AIM (reduces aim snap / wobble).
+        // Desired body +Y: pad settle / upright counter are hard upright;
+        // high-altitude freefall uses a relaxed deadzone upright; otherwise
+        // continuous lean/aim mix with a soft flip shoulder around TILT_AIM.
         let (axis, angle) = if pad_settle || upright_counter {
             axis_angle_from_cross([up_body[2], 0.0, -up_body[0]], up_y)
+        } else if high_freefall {
+            // L freefall: relaxed upright + gradual anti-vh lean to bleed drift.
+            freefall_l_axis_angle(
+                &state.motor,
+                up_body,
+                up_y,
+                alt,
+                v_down,
+                state.velocity[0],
+                state.velocity[2],
+                vh,
+                a_lift,
+                state.moon_mode,
+            )
         } else {
             let vx = state.velocity[0];
             let vz = state.velocity[2];
@@ -443,7 +481,8 @@ impl LandingAutopilot {
         let alpha = ALPHA_PLAN * g.alpha;
         let w_cap = self.omega_max * g.omega_cap;
         let attitude_busy = angle > ERR_PHASE || omega_sq > OMEGA_PHASE * OMEGA_PHASE;
-        let soft_att = upright_counter
+        let soft_att = (high_freefall && angle < 0.55)
+            || upright_counter
             || (!has_pad
                 && lat_settle_enabled
                 && self.lat_settle_phase == LatSettlePhase::Active
@@ -532,7 +571,16 @@ impl LandingAutopilot {
             attitude_authority_throttle(pitch, yaw, roll, hover)
         };
 
-        let throttle = if state.contacting && vh > vh_touch {
+        let throttle = if high_freefall {
+            high_alt_freefall_l_throttle(
+                alt,
+                v_down,
+                up_y,
+                vh,
+                t_auth,
+                state.moon_mode,
+            )
+        } else if state.contacting && vh > vh_touch {
             // Skidding on the pad: thrust while tilted becomes a rocket sled.
             // Keep weight on the feet and let Coulomb friction stop the slide.
             // (Hard safety — not fuzzy.)
@@ -679,6 +727,7 @@ impl LandingAutopilot {
         let vy = state.velocity[1];
         let v_down = (-vy).max(0.0);
         let pos = state.position();
+        let high_freefall = pos[1] >= H_FREEFALL_M && !state.contacting;
         // Complete / settle on the painted platform; seek still uses cheby vs center.
         let on_pad = on_pad_square(pos, target_xz);
         let cheby = chebyshev_xz(pos, target_xz);
@@ -701,6 +750,8 @@ impl LandingAutopilot {
 
         let (axis, angle) = if pad_settle || force_upright {
             axis_angle_from_cross([up_body[2], 0.0, -up_body[0]], up_y)
+        } else if high_freefall {
+            freefall_upright_axis_angle(up_body, up_y, pos[1], v_down)
         } else {
             let vx = state.velocity[0];
             let vz = state.velocity[2];
@@ -746,10 +797,11 @@ impl LandingAutopilot {
 
         let g = attitude_gain_scales(state.contacting, on_pad, h);
         let upright_boost = if terminal_commit && h < 30.0 { 1.2 } else { 1.0 };
-        let kp = self.kp_attitude * g.kp * upright_boost;
-        let kd = self.kd_attitude * g.kd * upright_boost;
+        let soft_ff = if high_freefall { 0.70 } else { 1.0 };
+        let kp = self.kp_attitude * g.kp * upright_boost * soft_ff;
+        let kd = self.kd_attitude * g.kd * upright_boost * soft_ff;
         let kd_roll = self.kd_roll * g.kd_roll * upright_boost;
-        let alpha = ALPHA_PLAN * g.alpha;
+        let alpha = ALPHA_PLAN * g.alpha * soft_ff;
         let w_cap = self.omega_max * g.omega_cap;
         let w_mag = (kp * angle).min((2.0 * alpha * angle).sqrt()).min(w_cap);
         let rate_err_x = omega[0] - axis[0] * w_mag;
@@ -826,22 +878,26 @@ impl LandingAutopilot {
             attitude_authority_throttle(pitch, yaw, roll, hover)
         };
 
-        let throttle = physics_pad_vertical_throttle(
-            mass,
-            max_thrust,
-            hover_cmd,
-            up_y,
-            a_brake,
-            h,
-            h_env,
-            h_need,
-            v_down,
-            vy,
-            vh,
-            state.contacting,
-            vh_touch,
-            t_auth,
-        );
+        let throttle = if high_freefall {
+            high_alt_freefall_throttle(pos[1], v_down, up_y, t_auth)
+        } else {
+            physics_pad_vertical_throttle(
+                mass,
+                max_thrust,
+                hover_cmd,
+                up_y,
+                a_brake,
+                h,
+                h_env,
+                h_need,
+                v_down,
+                vy,
+                vh,
+                state.contacting,
+                vh_touch,
+                t_auth,
+            )
+        };
 
         self.emit_command(state, dt, throttle, pitch, yaw, roll)
     }
@@ -1012,6 +1068,149 @@ fn burn_height(vy: f64, a_brake: f64, v_touch: f64) -> f64 {
         return 0.0;
     }
     (v_down * v_down - v_touch * v_touch) / (2.0 * a_brake)
+}
+
+// --- L-mode high-altitude freefall (attitude + throttle) --------------------
+
+/// High-altitude freefall upright aim with a tilt deadzone that shrinks when
+/// over the altitude speed envelope (so braking still gets authority).
+fn freefall_upright_axis_angle(
+    up_body: [f64; 3],
+    up_y: f64,
+    alt: f64,
+    v_down: f64,
+) -> ([f64; 3], f64) {
+    let (axis, angle) = axis_angle_from_cross([up_body[2], 0.0, -up_body[0]], up_y);
+    let mu_over = freefall_overspeed_mu(v_down, alt);
+    let deadzone = FREEFALL_TILT_DEADZONE
+        + (FREEFALL_TILT_DEADZONE_MIN - FREEFALL_TILT_DEADZONE) * mu_over;
+    (axis, (angle - deadzone).max(0.0))
+}
+
+#[inline]
+fn freefall_vh_deadband(moon_mode: bool) -> f64 {
+    if moon_mode {
+        FREEFALL_VH_DEADBAND_MOON
+    } else {
+        FREEFALL_VH_DEADBAND_EARTH
+    }
+}
+
+#[inline]
+fn freefall_vh_kill_active(vh: f64, moon_mode: bool) -> bool {
+    vh >= freefall_vh_deadband(moon_mode)
+}
+
+#[inline]
+fn normalize3(v: [f64; 3]) -> Option<[f64; 3]> {
+    let len_sq = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    if len_sq < 1e-24 {
+        None
+    } else {
+        let inv = 1.0 / len_sq.sqrt();
+        Some([v[0] * inv, v[1] * inv, v[2] * inv])
+    }
+}
+
+/// Minimum world thrust direction with `y >= upy_req`, rotating from `d_base`
+/// toward world +Y only as much as vertical braking needs.
+fn freefall_min_upy_desired(d_base: [f64; 3], upy_req: f64) -> [f64; 3] {
+    let up = [0.0, 1.0, 0.0];
+    let Some(base) = normalize3(d_base) else {
+        return up;
+    };
+    if base[1] >= upy_req {
+        return base;
+    }
+    let mut lo = 0.0;
+    let mut hi = 1.0;
+    for _ in 0..24 {
+        let w = 0.5 * (lo + hi);
+        let ny = normalize3(blend_vec3(base, up, w)).map(|n| n[1]).unwrap_or(1.0);
+        if ny >= upy_req {
+            hi = w;
+        } else {
+            lo = w;
+        }
+    }
+    normalize3(blend_vec3(base, up, hi)).unwrap_or(up)
+}
+
+/// Required world-up thrust fraction for high-altitude overspeed braking.
+fn freefall_brake_upy_req(v_down: f64, alt: f64, a_lift: f64) -> f64 {
+    let mu_over = freefall_overspeed_mu(v_down, alt);
+    if mu_over < 1e-3 {
+        return 0.0;
+    }
+    let excess = (v_down - freefall_v_cap(alt)).max(0.0);
+    let a_req = PHYSICS_A_REQ_SAFETY * excess * 0.35;
+    let upy_full = ((a_req + GRAVITY * mu_over * 0.15) / a_lift).clamp(UPY_BRAKE, 0.98);
+    UPY_BRAKE + mu_over * (upy_full - UPY_BRAKE)
+}
+
+/// L-mode freefall aim: upright deadzone when quiet; ~90° anti-vh when above
+/// the deadband; vertical overspeed adds the minimum upward thrust component.
+fn freefall_l_axis_angle(
+    motor: &crate::euclidean_pga::Multivector,
+    up_body: [f64; 3],
+    up_y: f64,
+    alt: f64,
+    v_down: f64,
+    vx: f64,
+    vz: f64,
+    vh: f64,
+    a_lift: f64,
+    moon_mode: bool,
+) -> ([f64; 3], f64) {
+    if !freefall_vh_kill_active(vh, moon_mode) || vh < 1e-6 {
+        return freefall_upright_axis_angle(up_body, up_y, alt, v_down);
+    }
+    let inv = 1.0 / vh;
+    let horizontal = [-vx * inv, 0.0, -vz * inv];
+    let upy_req = freefall_brake_upy_req(v_down, alt, a_lift);
+    let desired = if upy_req > 1e-6 {
+        freefall_min_upy_desired(horizontal, upy_req)
+    } else {
+        horizontal
+    };
+    let d = motor_inverse_rotate_vector(motor, desired);
+    axis_angle_from_cross([d[2], 0.0, -d[0]], d[1].clamp(-1.0, 1.0))
+}
+
+/// Near-full throttle for ~90° anti-vh burn. Horizontal attitude (up_y ≈ 0) is
+/// intentional; only belly-up (up_y < 0) skips the kill floor.
+fn freefall_vh_kill_throttle(vh: f64, up_y: f64, t_auth: f64, moon_mode: bool) -> f64 {
+    if !freefall_vh_kill_active(vh, moon_mode) || up_y < -0.05 {
+        return 0.0;
+    }
+    FREEFALL_VH_THR_HARD.max(t_auth)
+}
+
+/// L-mode high-altitude freefall throttle: vertical envelope + lateral kill.
+fn high_alt_freefall_l_throttle(
+    alt: f64,
+    v_down: f64,
+    up_y: f64,
+    vh: f64,
+    t_auth: f64,
+    moon_mode: bool,
+) -> f64 {
+    high_alt_freefall_throttle(alt, v_down, up_y, t_auth).max(freefall_vh_kill_throttle(
+        vh, up_y, t_auth, moon_mode,
+    ))
+}
+
+/// High-altitude freefall vertical throttle via [`FreefallThrottleFuzzy`].
+fn high_alt_freefall_throttle(alt: f64, v_down: f64, up_y: f64, t_auth: f64) -> f64 {
+    FreefallThrottleFuzzy {
+        alt,
+        v_down,
+        up_y,
+        t_auth,
+        t_brake_cmd: BURN_PLAN_FRAC,
+        upy_brake: UPY_BRAKE,
+    }
+    .arbitrate()
 }
 
 /// Gimbal torque needs thrust; keep a small floor only while attitude is busy.
@@ -1307,6 +1506,198 @@ mod tests {
         ap.enabled = true;
         let cmd = ap.update(&state, DT);
         assert!(cmd.throttle < 0.05, "expected coast, throttle={}", cmd.throttle);
+    }
+
+    #[test]
+    fn high_alt_freefall_coasts_below_speed_cap() {
+        let mut state = RocketState::at_altitude(1500.0);
+        state.velocity = [0.0, -20.0, 0.0];
+        state.contacting = false;
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = lander_cmd_after_spool(&mut ap, &state);
+        assert!(
+            cmd.throttle < 0.15,
+            "expected attitude-only freefall, throttle={}",
+            cmd.throttle
+        );
+    }
+
+    #[test]
+    fn high_alt_freefall_brakes_above_speed_cap() {
+        // At 1500 m, v_cap ≈ 125 m/s; 280 m/s is deep overspeed → near-full brake.
+        let mut state = RocketState::at_altitude(1500.0);
+        state.velocity = [0.0, -280.0, 0.0];
+        state.contacting = false;
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = lander_cmd_after_spool(&mut ap, &state);
+        assert!(
+            cmd.throttle > 0.85,
+            "expected speed-cap brake, throttle={}",
+            cmd.throttle
+        );
+    }
+
+    #[test]
+    fn high_alt_freefall_fuzzy_mid_overspeed() {
+        // At 1500 m, v_cap ≈ 125; 160 m/s → modest exponential brake, not bang.
+        let mut state = RocketState::at_altitude(1500.0);
+        state.velocity = [0.0, -160.0, 0.0];
+        state.contacting = false;
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = lander_cmd_after_spool(&mut ap, &state);
+        assert!(
+            cmd.throttle > 0.25 && cmd.throttle < 0.80,
+            "mid overspeed should be partial fuzzy brake, throttle={}",
+            cmd.throttle
+        );
+    }
+
+    #[test]
+    fn high_alt_freefall_allows_higher_speed_at_5km() {
+        // At 5000 m, v_cap = 300; 250 m/s must still freefall.
+        let mut state = RocketState::at_altitude(5000.0);
+        state.velocity = [0.0, -250.0, 0.0];
+        state.contacting = false;
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = lander_cmd_after_spool(&mut ap, &state);
+        assert!(
+            cmd.throttle < 0.15,
+            "250 m/s at 5 km should freefall, throttle={}",
+            cmd.throttle
+        );
+    }
+
+    #[test]
+    fn high_alt_freefall_tilted_keeps_low_thrust_below_speed_cap() {
+        // 0.8 rad > freefall deadzone (~0.45) so soft upright still commands gimbal.
+        let mut state = RocketState::at_altitude(1500.0);
+        state.motor = motor_from_pose(0.0, 1500.0, 0.0, 0.8, 0.0, 0.0);
+        state.velocity = [0.0, -20.0, 0.0];
+        state.contacting = false;
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = lander_cmd_after_spool(&mut ap, &state);
+        assert!(
+            cmd.pitch.abs() + cmd.yaw.abs() > 0.05,
+            "tilted high-alt freefall needs attitude, pitch={} yaw={}",
+            cmd.pitch,
+            cmd.yaw
+        );
+        assert!(
+            cmd.throttle < 0.35,
+            "below speed cap thrust should stay low, throttle={}",
+            cmd.throttle
+        );
+    }
+
+    #[test]
+    fn high_alt_freefall_mild_tilt_is_within_deadzone() {
+        let mut state = RocketState::at_altitude(1500.0);
+        state.motor = motor_from_pose(0.0, 1500.0, 0.0, 0.25, 0.0, 0.0);
+        state.velocity = [0.0, -20.0, 0.0];
+        state.contacting = false;
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = lander_cmd_after_spool(&mut ap, &state);
+        assert!(
+            cmd.pitch.abs() + cmd.yaw.abs() < 0.20,
+            "mild freefall tilt should be deadzoned, pitch={} yaw={}",
+            cmd.pitch,
+            cmd.yaw
+        );
+        assert!(cmd.throttle < 0.15, "throttle={}", cmd.throttle);
+    }
+
+    #[test]
+    fn high_alt_freefall_leans_against_horizontal_drift() {
+        let mut state = RocketState::at_altitude(1500.0);
+        state.velocity = [80.0, -20.0, 0.0];
+        state.contacting = false;
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = lander_cmd_after_spool(&mut ap, &state);
+        assert!(
+            cmd.pitch.abs() + cmd.yaw.abs() > 0.08,
+            "horizontal drift above 60 m/s should command anti-vh lean, pitch={} yaw={}",
+            cmd.pitch,
+            cmd.yaw
+        );
+        assert!(
+            cmd.throttle > 0.85,
+            "lateral kill needs high thrust, throttle={}",
+            cmd.throttle
+        );
+    }
+
+    #[test]
+    fn high_alt_freefall_deep_lean_for_large_vh() {
+        let mut state = RocketState::at_altitude(1500.0);
+        state.velocity = [120.0, -20.0, 0.0];
+        state.contacting = false;
+        let mut ap = LandingAutopilot::default();
+        ap.enabled = true;
+        let cmd = lander_cmd_after_spool(&mut ap, &state);
+        assert!(
+            cmd.pitch.abs().max(cmd.yaw.abs()) > 0.9,
+            "large vh needs ~90° reverse lean, pitch={} yaw={}",
+            cmd.pitch,
+            cmd.yaw
+        );
+        assert!(
+            cmd.throttle > 0.85,
+            "deep lean needs high thrust, throttle={}",
+            cmd.throttle
+        );
+    }
+
+    #[test]
+    fn high_alt_freefall_vh_kill_gating() {
+        assert!(!freefall_vh_kill_active(55.0, false));
+        assert!(freefall_vh_kill_active(65.0, false));
+        assert!(!freefall_vh_kill_active(40.0, false));
+        assert!(freefall_vh_kill_active(40.0, true));
+        assert!(!freefall_vh_kill_active(25.0, true));
+        assert!(freefall_vh_kill_active(35.0, true));
+
+        let t_auth = 0.05;
+        assert!(freefall_vh_kill_throttle(55.0, 1.0, t_auth, false) < 1e-9);
+        assert!(freefall_vh_kill_throttle(65.0, 1.0, t_auth, false) > 0.90);
+        assert!(freefall_vh_kill_throttle(40.0, 1.0, t_auth, true) > 0.90);
+        // Horizontal kill (up_y ≈ 0) must still get full thrust — not gated like belly-up.
+        assert!(freefall_vh_kill_throttle(80.0, 0.02, t_auth, false) > 0.90);
+        // Belly-up waits for flip.
+        assert!(freefall_vh_kill_throttle(80.0, -0.10, 0.12, true) < 1e-9);
+    }
+
+    #[test]
+    fn high_alt_freefall_l_throttle_arbitrates() {
+        let t_auth = 0.05;
+        // Quiet vh: vertical envelope only.
+        assert!(high_alt_freefall_l_throttle(1500.0, 20.0, 1.0, 55.0, t_auth, false) < 0.1);
+        // Active vh: lateral floor dominates.
+        assert!(high_alt_freefall_l_throttle(1500.0, 20.0, 0.02, 80.0, t_auth, false) > 0.90);
+        // Deep vertical overspeed while upright.
+        assert!(high_alt_freefall_l_throttle(1500.0, 280.0, 1.0, 0.0, t_auth, false) > 0.85);
+    }
+
+    #[test]
+    fn high_alt_freefall_throttle_helper() {
+        // 1500 m → v_cap ≈ 125 m/s
+        assert!(high_alt_freefall_throttle(1500.0, 20.0, 1.0, 0.05) < 0.1);
+        assert!(high_alt_freefall_throttle(1500.0, 120.0, 1.0, 0.05) < 0.1);
+        assert!(high_alt_freefall_throttle(1500.0, 280.0, 1.0, 0.05) > 0.85);
+        assert!(high_alt_freefall_throttle(1500.0, 280.0, 0.1, 0.08) < 0.20);
+        // 5000 m → v_cap = 300 m/s
+        assert!(high_alt_freefall_throttle(5000.0, 250.0, 1.0, 0.05) < 0.1);
+        assert!(high_alt_freefall_throttle(5000.0, 380.0, 1.0, 0.05) > 0.70);
+        // Envelope endpoints
+        assert!((freefall_v_cap(1000.0) - 100.0).abs() < 1e-9);
+        assert!((freefall_v_cap(5000.0) - 300.0).abs() < 1e-9);
+        assert!((freefall_v_cap(3000.0) - 200.0).abs() < 1e-9);
     }
 
     #[test]

@@ -18,7 +18,9 @@
 //! Brake → Upright → Trim drives lean and throttle while sinking toward
 //! [`HANDOFF_ALT_M`] (~300 m). Hard AND gates (position / attitude only) arm
 //! [`TargetPhase::Descend`] via [`LandingAutopilot::update_target_descend`]
-//! as soon as the pad approach is settled (physics closed-loop suicide burn).
+//! (closed-loop suicide burn). Above [`H_FREEFALL_M`], transit flies an
+//! airplane-style freefall toward pad-overhead at [`HANDOFF_ALT_M`] (~90° lean)
+//! with the altitude speed envelope as the vertical brake.
 //!
 //! Attitude: PGA inverse sandwich ([`motor_inverse_rotate_vector`] /
 //! [`world_up_in_body`]), desired thrust [`clamp_tilt`]-ed into the lean cone,
@@ -27,13 +29,13 @@
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
     blend_vec3, careful_aggression, careful_terminal_latch, cruise_brake_hardness,
-    long_range_go_aim, long_range_hold_cos, long_range_weight, ramp, ramp_down,
+    freefall_v_cap, long_range_go_aim, long_range_hold_cos, long_range_weight, ramp, ramp_down,
     settle_aim_blend, settle_brake_lean_scale, settle_lean_freedom, settle_motion_scale,
-    settle_trim_rate_gate, slew_throttle, CruiseThrottleFuzzy, CAREFUL_NEAR_M, CAREFUL_RANGE_M,
-    CAREFUL_TERMINAL_ENTER_M, LONG_CRUISE_ALT_M,
+    settle_trim_rate_gate, slew_throttle, CruiseThrottleFuzzy, FreefallThrottleFuzzy,
+    CAREFUL_NEAR_M, CAREFUL_RANGE_M, CAREFUL_TERMINAL_ENTER_M, LONG_CRUISE_ALT_M,
 };
 use crate::landing::{
-    axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_pad_square, saturate,
+    axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_pad_square, saturate, H_FREEFALL_M,
     LandingAutopilot, PAD_HALF_M,
 };
 use crate::sim::{
@@ -773,6 +775,12 @@ impl TargetLandingAutopilot {
             self.phase = TargetPhase::Descend;
             self.lander.arm_from_transit(state);
             self.reset_terminal_settle();
+        }
+
+        if self.phase != TargetPhase::Descend && alt >= H_FREEFALL_M {
+            let mut cmd = high_alt_freefall_to_pad(state, target_xz);
+            self.apply_actuators(&mut cmd, dt, state);
+            return cmd;
         }
 
         match self.phase {
@@ -2374,6 +2382,77 @@ fn terminal_settle_throttle(
     }
 }
 
+/// High-altitude T freefall: airplane lean toward the pad while sinking to
+/// [`HANDOFF_ALT_M`] overhead. Deep (~90°) lean translates; the freefall speed
+/// envelope uprights and brakes when `v_down` exceeds [`freefall_v_cap`].
+fn high_alt_freefall_to_pad(state: &RocketState, target_xz: [f64; 2]) -> ControlCommand {
+    let pos = state.position();
+    let alt = pos[1];
+    let vy = state.velocity[1];
+    let v_down = (-vy).max(0.0);
+    let mass = state.params.mass;
+    let max_thrust = state.params.max_thrust;
+    let hover = mass * GRAVITY / max_thrust.max(1e-9);
+
+    let dx = target_xz[0] - pos[0];
+    let dz = target_xz[1] - pos[2];
+    let range = (dx * dx + dz * dz).sqrt();
+    let (ux, uz) = if range > 1e-3 {
+        (dx / range, dz / range)
+    } else {
+        (0.0, 0.0)
+    };
+
+    let v_cap = freefall_v_cap(alt);
+    let excess = (v_down - v_cap).max(0.0);
+    // Match FreefallThrottleFuzzy τ so aim uprights in lockstep with brake.
+    let mu_over = 1.0 - (-excess / 40.0).exp();
+
+    // Pitch elevator toward pad-overhead at hand-off altitude (~300 m).
+    let cos_up = long_range_hold_cos(alt, HANDOFF_ALT_M, vy, hover);
+    let go_aim = clamp_tilt(long_range_go_aim(ux, uz, cos_up), LEAN_LONG_MAX);
+    // Near the pad horizontally, fade lateral lean so we freefall into the
+    // overhead box rather than overshooting with deep airplane thrust.
+    let mu_near = ramp_down(range, 40.0, 180.0);
+    let sink_aim = clamp_tilt([0.0, cos_up.max(0.12), 0.0], LEAN_LONG_MAX);
+    let translate = blend_vec3(go_aim, sink_aim, mu_near);
+    // Overspeed: upright so vertical thrust can brake on the freefall envelope.
+    let desired = blend_vec3(translate, [0.0, 1.0, 0.0], mu_over);
+
+    let (pitch, yaw, roll, up_y) =
+        attitude_toward(state, desired, COS_TILT_AIM_AIR, false, false);
+
+    let effort = pitch.abs() + yaw.abs() + 0.35 * roll.abs();
+    let t_auth = if effort < 0.04 {
+        0.0
+    } else {
+        (0.08 + 0.35 * effort).min(hover * 0.55)
+    };
+
+    let t_brake = FreefallThrottleFuzzy {
+        alt,
+        v_down,
+        up_y,
+        t_auth,
+        t_brake_cmd: THR_FULL,
+        upy_brake: 0.25,
+    }
+    .arbitrate();
+
+    // Under envelope: full-T airplane translate (deep lean still sinks).
+    // Over envelope: exponential freefall brake takes over.
+    let t_go = THR_FULL;
+    let throttle = (t_go * (1.0 - mu_over)).max(t_brake).max(t_auth);
+
+    ControlCommand {
+        throttle,
+        pitch,
+        yaw,
+        roll,
+    }
+    .clamp()
+}
+
 /// Climb-phase guidance: always full throttle, upright through liftoff, then an
 /// open-loop pitch program toward the pad (no MPC / velocity-feedback lean).
 fn climb_command(
@@ -3010,6 +3089,69 @@ mod tests {
         ap.phase = TargetPhase::Climb;
         let _ = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
         assert_eq!(ap.phase, TargetPhase::Cruise);
+    }
+
+    #[test]
+    fn high_altitude_cruise_translates_toward_pad() {
+        // Far from pad, under freefall envelope → airplane translate (full T, deep lean).
+        let mut state = RocketState::at_altitude(H_FREEFALL_M + 200.0);
+        state.velocity = [0.0, -15.0, 0.0];
+        state.contacting = false;
+        let mut ap = TargetLandingAutopilot::default();
+        ap.enabled = true;
+        ap.phase = TargetPhase::Cruise;
+        let target = [2500.0, 0.0];
+        let mut cmd = ControlCommand::default();
+        for _ in 0..120 {
+            cmd = ap.update(&state, target, 1.0 / 120.0);
+        }
+        assert!(
+            cmd.throttle > 0.85,
+            "T freefall to pad should translate at high T, thr={}",
+            cmd.throttle
+        );
+        assert!(
+            cmd.pitch.abs() + cmd.yaw.abs() > 0.3,
+            "should command deep lean toward pad, pitch={} yaw={}",
+            cmd.pitch,
+            cmd.yaw
+        );
+    }
+
+    #[test]
+    fn high_altitude_freefall_aims_near_handoff_altitude() {
+        // Over the pad at 2 km: pitch elevator should dive (low cos toward 300 m).
+        let hover = 1000.0 * GRAVITY / (3.0 * 1000.0 * GRAVITY);
+        let cos = long_range_hold_cos(2000.0, HANDOFF_ALT_M, -10.0, hover);
+        assert!(
+            cos < 0.35,
+            "above handoff alt should pitch-dive, cos={cos}"
+        );
+        let mut state = RocketState::at_altitude(2000.0);
+        state.velocity = [0.0, -10.0, 0.0];
+        state.contacting = false;
+        let cmd = high_alt_freefall_to_pad(&state, [0.0, 0.0]);
+        assert!(cmd.throttle > 0.5, "still thrusting while diving, thr={}", cmd.throttle);
+    }
+
+    #[test]
+    fn high_altitude_cruise_brakes_on_speed_cap() {
+        // 1200 m → v_cap ≈ 110; 280 m/s is deep overspeed → upright brake.
+        let mut state = RocketState::at_altitude(H_FREEFALL_M + 200.0);
+        state.velocity = [0.0, -280.0, 0.0];
+        state.contacting = false;
+        let mut ap = TargetLandingAutopilot::default();
+        ap.enabled = true;
+        ap.phase = TargetPhase::Cruise;
+        let mut cmd = ControlCommand::default();
+        for _ in 0..120 {
+            cmd = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
+        }
+        assert!(
+            cmd.throttle > 0.85,
+            "T-mode high-alt fast fall should brake, thr={}",
+            cmd.throttle
+        );
     }
 
     #[test]
