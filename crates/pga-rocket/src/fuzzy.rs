@@ -443,18 +443,22 @@ fn cruise_w_from_vy(vy: f64) -> f64 {
 pub const FREEFALL_ALT_LO_M: f64 = 1000.0;
 /// CoM altitude (m) at the high end of the freefall speed envelope.
 pub const FREEFALL_ALT_HI_M: f64 = 5000.0;
-/// Max descent speed (m/s) at [`FREEFALL_ALT_LO_M`].
-pub const FREEFALL_V_CAP_LO_M_S: f64 = 100.0;
-/// Max descent speed (m/s) at [`FREEFALL_ALT_HI_M`] and above.
-pub const FREEFALL_V_CAP_HI_M_S: f64 = 300.0;
+/// Max descent speed (m/s) at [`FREEFALL_ALT_LO_M`] (80% of legacy 100 m/s).
+pub const FREEFALL_V_CAP_LO_M_S: f64 = 80.0;
+/// Max descent speed (m/s) at [`FREEFALL_ALT_HI_M`] and above (80% of legacy 300 m/s).
+pub const FREEFALL_V_CAP_HI_M_S: f64 = 240.0;
+/// Moon: max descent speed (m/s) at [`FREEFALL_ALT_LO_M`].
+pub const FREEFALL_V_CAP_LO_MOON_M_S: f64 = 60.0;
+/// Moon: max descent speed (m/s) at [`FREEFALL_ALT_HI_M`] and above.
+pub const FREEFALL_V_CAP_HI_MOON_M_S: f64 = 120.0;
 /// Excess-speed scale (m/s) for exponential overspeed membership
 /// (`μ = 1 − e^{−excess/τ}`): ~63% at one τ over the cap, ~95% at 3τ.
 const FREEFALL_OVERSPEED_TAU_M_S: f64 = 40.0;
 
 /// Overspeed membership vs the altitude speed envelope (`0` at/below cap).
 #[inline]
-pub fn freefall_overspeed_mu(v_down: f64, alt: f64) -> f64 {
-    let excess = (v_down - freefall_v_cap(alt)).max(0.0);
+pub fn freefall_overspeed_mu(v_down: f64, alt: f64, moon_mode: bool) -> f64 {
+    let excess = (v_down - freefall_v_cap(alt, moon_mode)).max(0.0);
     if excess < 1e-12 {
         0.0
     } else {
@@ -462,13 +466,31 @@ pub fn freefall_overspeed_mu(v_down: f64, alt: f64) -> f64 {
     }
 }
 
+/// Normalized altitude along the 1000–5000 m reference segment (unclamped above HI).
+#[inline]
+fn freefall_alt_u(alt: f64) -> f64 {
+    if FREEFALL_ALT_HI_M <= FREEFALL_ALT_LO_M {
+        return 1.0;
+    }
+    if alt <= FREEFALL_ALT_LO_M {
+        0.0
+    } else {
+        (alt - FREEFALL_ALT_LO_M) / (FREEFALL_ALT_HI_M - FREEFALL_ALT_LO_M)
+    }
+}
+
 /// Allowed freefall descent speed (m/s) vs CoM altitude.
 ///
-/// Linear envelope: 100 m/s at 1000 m → 300 m/s at 5000 m (clamped outside).
+/// Earth: 80 m/s at 1000 m → 240 m/s at 5000 m, then linear extension (no upper clamp).
+/// Moon: 50 m/s at 1000 m → 150 m/s at 5000 m, then linear extension (no upper clamp).
 #[inline]
-pub fn freefall_v_cap(alt: f64) -> f64 {
-    let u = ramp(alt, FREEFALL_ALT_LO_M, FREEFALL_ALT_HI_M);
-    FREEFALL_V_CAP_LO_M_S + u * (FREEFALL_V_CAP_HI_M_S - FREEFALL_V_CAP_LO_M_S)
+pub fn freefall_v_cap(alt: f64, moon_mode: bool) -> f64 {
+    let u = freefall_alt_u(alt);
+    if moon_mode {
+        FREEFALL_V_CAP_LO_MOON_M_S + u * (FREEFALL_V_CAP_HI_MOON_M_S - FREEFALL_V_CAP_LO_MOON_M_S)
+    } else {
+        FREEFALL_V_CAP_LO_M_S + u * (FREEFALL_V_CAP_HI_M_S - FREEFALL_V_CAP_LO_M_S)
+    }
 }
 
 /// Fuzzy high-altitude freefall vertical throttle.
@@ -484,6 +506,7 @@ pub struct FreefallThrottleFuzzy {
     pub t_auth: f64,
     pub t_brake_cmd: f64,
     pub upy_brake: f64,
+    pub moon_mode: bool,
 }
 
 impl FreefallThrottleFuzzy {
@@ -496,9 +519,10 @@ impl FreefallThrottleFuzzy {
             t_auth,
             t_brake_cmd,
             upy_brake,
+            moon_mode,
         } = self;
 
-        let mu_speed = freefall_overspeed_mu(v_down, alt);
+        let mu_speed = freefall_overspeed_mu(v_down, alt, moon_mode);
         let mu_up = ramp(up_y, upy_brake - 0.06, upy_brake + 0.12);
         let mu = and(mu_speed, mu_up);
         // Soft blend auth ↔ brake (not bang-floor) so throttle rises exponentially
@@ -1030,29 +1054,38 @@ mod tests {
 
     #[test]
     fn freefall_v_cap_envelope_endpoints() {
-        assert!((freefall_v_cap(1000.0) - 100.0).abs() < 1e-9);
-        assert!((freefall_v_cap(5000.0) - 300.0).abs() < 1e-9);
-        assert!((freefall_v_cap(3000.0) - 200.0).abs() < 1e-9);
-        assert!((freefall_v_cap(0.0) - 100.0).abs() < 1e-9);
-        assert!((freefall_v_cap(8000.0) - 300.0).abs() < 1e-9);
+        assert!((freefall_v_cap(1000.0, false) - 80.0).abs() < 1e-9);
+        assert!((freefall_v_cap(5000.0, false) - 240.0).abs() < 1e-9);
+        assert!((freefall_v_cap(3000.0, false) - 160.0).abs() < 1e-9);
+        assert!((freefall_v_cap(0.0, false) - 80.0).abs() < 1e-9);
+        // Extended beyond 5000 m (no upper clamp).
+        assert!((freefall_v_cap(6000.0, false) - 280.0).abs() < 1e-9);
+        assert!((freefall_v_cap(8000.0, false) - 360.0).abs() < 1e-9);
+        assert!((freefall_v_cap(1000.0, true) - 50.0).abs() < 1e-9);
+        assert!((freefall_v_cap(5000.0, true) - 150.0).abs() < 1e-9);
+        assert!((freefall_v_cap(3000.0, true) - 100.0).abs() < 1e-9);
+        assert!((freefall_v_cap(10000.0, true) - 275.0).abs() < 1e-9);
     }
 
     #[test]
     fn freefall_overspeed_mu_edges() {
-        assert!(freefall_overspeed_mu(100.0, 1000.0) < 1e-9);
-        assert!(freefall_overspeed_mu(140.0, 1000.0) > 0.5);
-        assert!(freefall_overspeed_mu(220.0, 1000.0) > 0.95);
+        assert!(freefall_overspeed_mu(80.0, 1000.0, false) < 1e-9);
+        assert!(freefall_overspeed_mu(120.0, 1000.0, false) > 0.5);
+        assert!(freefall_overspeed_mu(200.0, 1000.0, false) > 0.95);
+        assert!(freefall_overspeed_mu(50.0, 1000.0, true) < 1e-9);
+        assert!(freefall_overspeed_mu(80.0, 1000.0, true) > 0.5);
     }
 
     #[test]
     fn freefall_throttle_fuzzy_exponential_shoulder() {
         let base = FreefallThrottleFuzzy {
-            alt: 1500.0, // v_cap ≈ 125
-            v_down: 125.0,
+            alt: 1500.0, // v_cap ≈ 100
+            v_down: 100.0,
             up_y: 1.0,
             t_auth: 0.05,
             t_brake_cmd: 0.95,
             upy_brake: 0.25,
+            moon_mode: false,
         };
         let at_cap = base.arbitrate();
         let mild = FreefallThrottleFuzzy {
@@ -1071,7 +1104,10 @@ mod tests {
             "mild overspeed partial brake, mild={mild}"
         );
         assert!(deep > 0.85, "deep overspeed near full, deep={deep}");
-        assert!(mild < deep, "exponential monotonic, mild={mild} deep={deep}");
+        assert!(
+            mild < deep,
+            "exponential monotonic, mild={mild} deep={deep}"
+        );
     }
 
     #[test]

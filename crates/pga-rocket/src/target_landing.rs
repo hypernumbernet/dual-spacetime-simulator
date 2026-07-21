@@ -18,25 +18,28 @@
 //! Brake → Upright → Trim drives lean and throttle while sinking toward
 //! [`HANDOFF_ALT_M`] (~300 m). Hard AND gates (position / attitude only) arm
 //! [`TargetPhase::Descend`] via [`LandingAutopilot::update_target_descend`]
-//! (closed-loop suicide burn). Above [`H_FREEFALL_M`], transit flies an
-//! airplane-style freefall toward pad-overhead at [`HANDOFF_ALT_M`] (~90° lean)
-//! with the altitude speed envelope as the vertical brake.
+//! (closed-loop suicide burn). Above [`h_freefall_m`] (Earth 6000 m / Moon 10000 m),
+//! transit flies a nose-down **dive** (full-T acceleration toward ground / pad)
+//! under the speed envelope; lateral steering when `range > alt`, otherwise pure
+//! vertical dive. Overspeed flips upright and brakes via [`freefall_v_cap`]
+//! (safe descent speed is highest priority).
 //!
 //! Attitude: PGA inverse sandwich ([`motor_inverse_rotate_vector`] /
-//! [`world_up_in_body`]), desired thrust [`clamp_tilt`]-ed into the lean cone,
-//! then rate-limited (aim slew + gimbal actuator) before the attitude PD.
+//! [`world_up_in_body`]), desired thrust tracked without an upright flip fight
+//! during dive, then rate-limited (aim slew + gimbal actuator) before the attitude PD.
 
 use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
     blend_vec3, careful_aggression, careful_terminal_latch, cruise_brake_hardness,
-    freefall_v_cap, long_range_go_aim, long_range_hold_cos, long_range_weight, ramp, ramp_down,
-    settle_aim_blend, settle_brake_lean_scale, settle_lean_freedom, settle_motion_scale,
+    freefall_overspeed_mu, long_range_go_aim, long_range_hold_cos, long_range_weight, ramp,
+    ramp_down, settle_aim_blend, settle_brake_lean_scale, settle_lean_freedom, settle_motion_scale,
     settle_trim_rate_gate, slew_throttle, CruiseThrottleFuzzy, FreefallThrottleFuzzy,
     CAREFUL_NEAR_M, CAREFUL_RANGE_M, CAREFUL_TERMINAL_ENTER_M, LONG_CRUISE_ALT_M,
 };
 use crate::landing::{
-    axis_angle_from_cross, chebyshev_xz, clamp_tilt, on_pad_square, saturate, H_FREEFALL_M,
-    LandingAutopilot, PAD_HALF_M,
+    axis_angle_from_cross, chebyshev_xz, clamp_tilt, high_alt_dive_throttle_gate,
+    high_alt_freefall_desired_aim, h_freefall_m, on_pad_square, saturate, LandingAutopilot,
+    PAD_HALF_M,
 };
 use crate::sim::{
     air_drag_k_at_altitude, effective_air_drag_beta, ControlCommand, GRAVITY, RocketState,
@@ -127,6 +130,8 @@ const COS_TILT_AIM_AIR: f64 = 0.10;
 /// Horizontal range (m) above which transit prefers airplane mode: full-T go +
 /// pitch elevator while outside the predicted stop distance.
 const LONG_AIRPLANE_RANGE_M: f64 = 1500.0;
+/// Flip-recover gate for freefall dive — allow full nose-down (do not fight invert).
+const COS_TILT_AIM_FF: f64 = -1.01;
 /// Geometric hysteresis (m) when releasing latched reverse lean — must exceed
 /// hand-off cheby so go↔brake does not chatter at the pad edge.
 const BRAKE_RELEASE_MARGIN_M: f64 = HANDOFF_CHEBY_MAX_M;
@@ -777,7 +782,7 @@ impl TargetLandingAutopilot {
             self.reset_terminal_settle();
         }
 
-        if self.phase != TargetPhase::Descend && alt >= H_FREEFALL_M {
+        if self.phase != TargetPhase::Descend && alt >= h_freefall_m(state.moon_mode) {
             let mut cmd = high_alt_freefall_to_pad(state, target_xz);
             self.apply_actuators(&mut cmd, dt, state);
             return cmd;
@@ -1051,6 +1056,21 @@ fn brake_flip_angle(state: &RocketState, ux: f64, uz: f64, vh: f64, lean_max: f6
         [ux, brake_aim_y_bias(lean_max), uz]
     };
     let desired = clamp_tilt(desired_raw, lean_max);
+    let len = (desired[0] * desired[0] + desired[1] * desired[1] + desired[2] * desired[2]).sqrt();
+    if len <= 1e-9 {
+        return 0.0;
+    }
+    let d = motor_inverse_rotate_vector(
+        &state.motor,
+        [desired[0] / len, desired[1] / len, desired[2] / len],
+    );
+    let up_y = d[1].clamp(-1.0, 1.0);
+    let (_, angle) = axis_angle_from_cross([d[2], 0.0, -d[0]], up_y);
+    angle.max(0.0)
+}
+
+/// Angle (rad) from current body-up to a world-frame thrust aim (PGA motor frame).
+fn go_flip_angle(state: &RocketState, desired: [f64; 3]) -> f64 {
     let len = (desired[0] * desired[0] + desired[1] * desired[1] + desired[2] * desired[2]).sqrt();
     if len <= 1e-9 {
         return 0.0;
@@ -2382,18 +2402,21 @@ fn terminal_settle_throttle(
     }
 }
 
-/// High-altitude T freefall: airplane lean toward the pad while sinking to
-/// [`HANDOFF_ALT_M`] overhead. Deep (~90°) lean translates; the freefall speed
-/// envelope uprights and brakes when `v_down` exceeds [`freefall_v_cap`].
-fn high_alt_freefall_to_pad(state: &RocketState, target_xz: [f64; 2]) -> ControlCommand {
-    let pos = state.position();
+/// World-frame thrust aim and dive-go membership for high-altitude T dive.
+///
+/// Under the speed envelope: nose-down dive — slant toward the target when
+/// `range > alt`, otherwise pure `[0, −1, 0]`. Inside predicted stop distance,
+/// fade lateral slant to pure vertical dive. Over the envelope: blend upright
+/// (safe speed first). Returns `(desired_aim, mu_dive_go)` where `mu_dive_go`
+/// gates full-T dive acceleration (still needs a nose-down attitude gate).
+fn high_alt_freefall_guidance(
+    state: &RocketState,
+    pos: [f64; 3],
+    velocity: [f64; 3],
+    target_xz: [f64; 2],
+) -> ([f64; 3], f64) {
     let alt = pos[1];
-    let vy = state.velocity[1];
-    let v_down = (-vy).max(0.0);
-    let mass = state.params.mass;
-    let max_thrust = state.params.max_thrust;
-    let hover = mass * GRAVITY / max_thrust.max(1e-9);
-
+    let v_down = (-velocity[1]).max(0.0);
     let dx = target_xz[0] - pos[0];
     let dz = target_xz[1] - pos[2];
     let range = (dx * dx + dz * dz).sqrt();
@@ -2403,24 +2426,67 @@ fn high_alt_freefall_to_pad(state: &RocketState, target_xz: [f64; 2]) -> Control
         (0.0, 0.0)
     };
 
-    let v_cap = freefall_v_cap(alt);
-    let excess = (v_down - v_cap).max(0.0);
-    // Match FreefallThrottleFuzzy τ so aim uprights in lockstep with brake.
-    let mu_over = 1.0 - (-excess / 40.0).exp();
+    let mu_over = freefall_overspeed_mu(v_down, alt, state.moon_mode);
 
-    // Pitch elevator toward pad-overhead at hand-off altitude (~300 m).
-    let cos_up = long_range_hold_cos(alt, HANDOFF_ALT_M, vy, hover);
-    let go_aim = clamp_tilt(long_range_go_aim(ux, uz, cos_up), LEAN_LONG_MAX);
-    // Near the pad horizontally, fade lateral lean so we freefall into the
-    // overhead box rather than overshooting with deep airplane thrust.
-    let mu_near = ramp_down(range, 40.0, 180.0);
-    let sink_aim = clamp_tilt([0.0, cos_up.max(0.12), 0.0], LEAN_LONG_MAX);
-    let translate = blend_vec3(go_aim, sink_aim, mu_near);
+    // Hard priority: steer toward pad when horizontal range exceeds altitude.
+    let prioritize_lateral = range > alt;
+    let dive_down = [0.0, -1.0, 0.0];
+    let steer_aim = high_alt_freefall_desired_aim(pos, target_xz);
+    let base_aim = if prioritize_lateral {
+        steer_aim
+    } else {
+        dive_down
+    };
+
+    // Predicted stop distance: PGA flip time + propulsive decel (same as cruise).
+    let mass = state.params.mass;
+    let max_thrust = state.params.max_thrust;
+    let beta = if state.moon_mode {
+        0.0
+    } else {
+        effective_air_drag_beta(state)
+    };
+    let a_prop = lateral_accel_for_lean(
+        std::f64::consts::FRAC_PI_2,
+        LateralThrMode::FullThrottle,
+        mass,
+        max_thrust,
+    );
+    let v_approach = velocity[0] * ux + velocity[2] * uz;
+    let v_closing = v_approach.max(0.0);
+    let t_flip = if prioritize_lateral && range > 1e-3 {
+        brake_flip_time(go_flip_angle(state, steer_aim))
+    } else {
+        0.0
+    };
+    let d_stop = predicted_stop_distance(v_closing, VH_HANDOFF_MAX, a_prop, beta, t_flip);
+
+    // Inside stop envelope: fade lateral slant → pure vertical dive (still nose-down).
+    let mu_inside = ramp_down(range, d_stop, d_stop + BRAKE_ENGAGE_MARGIN_M);
+    let dive_aim = blend_vec3(base_aim, dive_down, mu_inside);
     // Overspeed: upright so vertical thrust can brake on the freefall envelope.
-    let desired = blend_vec3(translate, [0.0, 1.0, 0.0], mu_over);
+    let desired = blend_vec3(dive_aim, [0.0, 1.0, 0.0], mu_over);
+    let mu_dive_go = 1.0 - mu_over;
+    (desired, mu_dive_go)
+}
+
+/// High-altitude T dive: nose-down full-T acceleration toward the pad / ground.
+/// Predicted stop distance collapses lateral slant to pure vertical dive near the
+/// pad. The freefall speed envelope uprights and brakes when `v_down` exceeds
+/// [`freefall_v_cap`] (safe descent speed is highest priority).
+fn high_alt_freefall_to_pad(state: &RocketState, target_xz: [f64; 2]) -> ControlCommand {
+    let pos = state.position();
+    let alt = pos[1];
+    let v_down = (-state.velocity[1]).max(0.0);
+    let mass = state.params.mass;
+    let max_thrust = state.params.max_thrust;
+    let hover = mass * GRAVITY / max_thrust.max(1e-9);
+
+    let (desired, mu_dive_go) =
+        high_alt_freefall_guidance(state, pos, state.velocity, target_xz);
 
     let (pitch, yaw, roll, up_y) =
-        attitude_toward(state, desired, COS_TILT_AIM_AIR, false, false);
+        attitude_toward(state, desired, COS_TILT_AIM_FF, false, false);
 
     let effort = pitch.abs() + yaw.abs() + 0.35 * roll.abs();
     let t_auth = if effort < 0.04 {
@@ -2436,13 +2502,15 @@ fn high_alt_freefall_to_pad(state: &RocketState, target_xz: [f64; 2]) -> Control
         t_auth,
         t_brake_cmd: THR_FULL,
         upy_brake: 0.25,
+        moon_mode: state.moon_mode,
     }
     .arbitrate();
 
-    // Under envelope: full-T airplane translate (deep lean still sinks).
+    // Under envelope + nose-down: full-T dive acceleration.
     // Over envelope: exponential freefall brake takes over.
-    let t_go = THR_FULL;
-    let throttle = (t_go * (1.0 - mu_over)).max(t_brake).max(t_auth);
+    // While flipping: attitude authority only (avoid lofting upright).
+    let t_dive = THR_FULL * mu_dive_go * high_alt_dive_throttle_gate(up_y);
+    let throttle = t_dive.max(t_brake).max(t_auth);
 
     ControlCommand {
         throttle,
@@ -2917,9 +2985,10 @@ fn attitude_toward(
 mod tests {
     use super::*;
     use crate::fuzzy::CAREFUL_AGGRESSION_MIN;
-    use crate::landing::TARGET_SUCCESS_HALF_M;
+    use crate::landing::{H_FREEFALL_EARTH_M, TARGET_SUCCESS_HALF_M};
 
     const TEST_DT: f64 = 1.0 / 120.0;
+    const FF_TEST_ALT: f64 = H_FREEFALL_EARTH_M + 200.0;
 
     /// Advance the autopilot until the throttle actuator reaches `min_throttle`.
     fn spool_autopilot(
@@ -3093,64 +3162,172 @@ mod tests {
 
     #[test]
     fn high_altitude_cruise_translates_toward_pad() {
-        // Far from pad, under freefall envelope → airplane translate (full T, deep lean).
-        let mut state = RocketState::at_altitude(H_FREEFALL_M + 200.0);
+        // Far from pad (range > alt), nose-down under envelope → full-T dive.
+        let mut state = RocketState::at_altitude(FF_TEST_ALT);
+        state.motor = crate::euclidean_pga::motor_from_pose(
+            0.0,
+            FF_TEST_ALT,
+            0.0,
+            std::f64::consts::PI,
+            0.0,
+            0.0,
+        );
         state.velocity = [0.0, -15.0, 0.0];
         state.contacting = false;
         let mut ap = TargetLandingAutopilot::default();
         ap.enabled = true;
         ap.phase = TargetPhase::Cruise;
-        let target = [2500.0, 0.0];
+        let target = [8000.0, 0.0];
         let mut cmd = ControlCommand::default();
         for _ in 0..120 {
             cmd = ap.update(&state, target, 1.0 / 120.0);
         }
         assert!(
             cmd.throttle > 0.85,
-            "T freefall to pad should translate at high T, thr={}",
+            "T dive to pad should burn at high T, thr={}",
             cmd.throttle
-        );
-        assert!(
-            cmd.pitch.abs() + cmd.yaw.abs() > 0.3,
-            "should command deep lean toward pad, pitch={} yaw={}",
-            cmd.pitch,
-            cmd.yaw
         );
     }
 
     #[test]
-    fn high_altitude_freefall_aims_near_handoff_altitude() {
-        // Over the pad at 2 km: pitch elevator should dive (low cos toward 300 m).
-        let hover = 1000.0 * GRAVITY / (3.0 * 1000.0 * GRAVITY);
-        let cos = long_range_hold_cos(2000.0, HANDOFF_ALT_M, -10.0, hover);
-        assert!(
-            cos < 0.35,
-            "above handoff alt should pitch-dive, cos={cos}"
+    fn high_altitude_freefall_aims_toward_target_when_range_exceeds_alt() {
+        // range=8000 > alt=6200 → slant aim toward target (downward component).
+        let mut state = RocketState::at_altitude(FF_TEST_ALT);
+        state.velocity = [0.0, -15.0, 0.0];
+        state.contacting = false;
+        let (aim, mu_go) = high_alt_freefall_guidance(
+            &state,
+            state.position(),
+            state.velocity,
+            [8000.0, 0.0],
         );
-        let mut state = RocketState::at_altitude(2000.0);
+        assert!(
+            aim[1] < 0.0,
+            "slant aim toward distant pad should point downward, y={}",
+            aim[1]
+        );
+        assert!(aim[0] > 0.5, "should lean toward +X target, x={}", aim[0]);
+        assert!(mu_go > 0.9, "under envelope should dive-go, mu={mu_go}");
+    }
+
+    #[test]
+    fn high_altitude_dive_vertical_inside_d_stop() {
+        // 5 m from pad → inside d_stop: pure vertical dive, still dive-go.
+        let mut state = RocketState::at_altitude(FF_TEST_ALT);
+        state.motor = crate::euclidean_pga::motor_from_pose(
+            5.0,
+            FF_TEST_ALT,
+            0.0,
+            std::f64::consts::PI,
+            0.0,
+            0.0,
+        );
+        state.velocity = [-3.0, -15.0, 0.0];
+        state.contacting = false;
+        let (aim, mu_go) = high_alt_freefall_guidance(
+            &state,
+            state.position(),
+            state.velocity,
+            [0.0, 0.0],
+        );
+        assert!(
+            mu_go > 0.9,
+            "inside d_stop should still dive-go, mu={mu_go}"
+        );
+        assert!(
+            (aim[1] + 1.0).abs() < 0.05,
+            "inside d_stop should pure vertical dive, y={}",
+            aim[1]
+        );
+        let cmd = high_alt_freefall_to_pad(&state, [0.0, 0.0]);
+        assert!(
+            cmd.throttle > 0.85,
+            "nose-down dive inside d_stop should full-T, thr={}",
+            cmd.throttle
+        );
+    }
+
+    #[test]
+    fn high_altitude_freefall_descend_priority_when_range_below_alt() {
+        // range=500 m < alt=6200 m → pure vertical dive.
+        let mut state = RocketState::at_altitude(FF_TEST_ALT);
+        state.motor = crate::euclidean_pga::motor_from_pose(500.0, FF_TEST_ALT, 0.0, 0.0, 0.0, 0.0);
+        state.velocity = [0.0, -15.0, 0.0];
+        state.contacting = false;
+        let (aim, mu_go) = high_alt_freefall_guidance(
+            &state,
+            state.position(),
+            state.velocity,
+            [0.0, 0.0],
+        );
+        assert!(mu_go > 0.9, "under envelope should dive-go, mu={mu_go}");
+        assert!(
+            (aim[1] + 1.0).abs() < 1e-9,
+            "descend priority should aim nose-down, y={}",
+            aim[1]
+        );
+    }
+
+    #[test]
+    fn high_altitude_dive_over_pad_under_envelope() {
+        // Over the pad at 6.2 km, under envelope → pure nose-down dive.
+        let mut state = RocketState::at_altitude(FF_TEST_ALT);
         state.velocity = [0.0, -10.0, 0.0];
         state.contacting = false;
-        let cmd = high_alt_freefall_to_pad(&state, [0.0, 0.0]);
-        assert!(cmd.throttle > 0.5, "still thrusting while diving, thr={}", cmd.throttle);
+        let (aim, mu_go) = high_alt_freefall_guidance(
+            &state,
+            state.position(),
+            state.velocity,
+            [0.0, 0.0],
+        );
+        assert!(
+            (aim[1] + 1.0).abs() < 1e-9,
+            "over pad under envelope should dive nose-down, y={}",
+            aim[1]
+        );
+        assert!(mu_go > 0.9, "over pad under envelope should dive-go, mu={mu_go}");
     }
 
     #[test]
     fn high_altitude_cruise_brakes_on_speed_cap() {
-        // 1200 m → v_cap ≈ 110; 280 m/s is deep overspeed → upright brake.
-        let mut state = RocketState::at_altitude(H_FREEFALL_M + 200.0);
-        state.velocity = [0.0, -280.0, 0.0];
+        // 6200 m → v_cap = 280; 380 m/s is deep overspeed → upright brake.
+        let mut state = RocketState::at_altitude(FF_TEST_ALT);
+        state.velocity = [0.0, -380.0, 0.0];
         state.contacting = false;
         let mut ap = TargetLandingAutopilot::default();
         ap.enabled = true;
         ap.phase = TargetPhase::Cruise;
+        let target = [8000.0, 0.0];
         let mut cmd = ControlCommand::default();
         for _ in 0..120 {
-            cmd = ap.update(&state, [500.0, 0.0], 1.0 / 120.0);
+            cmd = ap.update(&state, target, 1.0 / 120.0);
         }
         assert!(
             cmd.throttle > 0.85,
             "T-mode high-alt fast fall should brake, thr={}",
             cmd.throttle
+        );
+        // Overspeed aim is upright; under-envelope dive aim is nose-down.
+        let (aim_over, _) = high_alt_freefall_guidance(
+            &state,
+            state.position(),
+            state.velocity,
+            target,
+        );
+        let mut slow = RocketState::at_altitude(FF_TEST_ALT);
+        slow.velocity = [0.0, -15.0, 0.0];
+        slow.contacting = false;
+        let (aim_dive, _) = high_alt_freefall_guidance(
+            &slow,
+            slow.position(),
+            slow.velocity,
+            target,
+        );
+        assert!(
+            aim_over[1] > aim_dive[1] + 0.5,
+            "overspeed should be more upright than dive, over y={} dive y={}",
+            aim_over[1],
+            aim_dive[1]
         );
     }
 

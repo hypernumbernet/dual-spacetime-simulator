@@ -1,7 +1,7 @@
 //! Integration tests for automatic landing autopilot.
 
 use pga_rocket::euclidean_pga::{motor_body_up_world, motor_from_pose};
-use pga_rocket::landing::{H_FREEFALL_M, LandingAutopilot};
+use pga_rocket::landing::{h_freefall_m, LandingAutopilot};
 use pga_rocket::sim::{ControlCommand, RocketState, step_rocket};
 
 const DT: f64 = 1.0 / 120.0;
@@ -328,22 +328,36 @@ fn l_mode_lateral_decel_lands_intact() {
 }
 
 #[test]
-fn autopilot_high_alt_freefall_then_brakes_on_speed_cap() {
-    let mut state = RocketState::at_altitude(H_FREEFALL_M + 500.0);
+fn autopilot_high_alt_dive_then_brakes_on_speed_cap() {
+    let alt = h_freefall_m(false) + 500.0;
+    let mut state = RocketState::at_altitude(alt);
+    state.motor = pga_rocket::euclidean_pga::motor_from_pose(
+        0.0,
+        alt,
+        0.0,
+        std::f64::consts::PI,
+        0.0,
+        0.0,
+    );
     state.velocity = [0.0, -20.0, 0.0];
     state.contacting = false;
 
     let mut ap = LandingAutopilot::default();
     ap.enabled = true;
 
-    let cmd_coast = ap.update(&state, DT);
+    let mut cmd_dive = ControlCommand::default();
+    for _ in 0..120 {
+        cmd_dive = ap.update(&state, DT);
+    }
     assert!(
-        cmd_coast.throttle < 0.15,
-        "high-alt slow fall should freefall, throttle={}",
-        cmd_coast.throttle
+        cmd_dive.throttle > 0.85,
+        "high-alt nose-down under envelope should dive, throttle={}",
+        cmd_dive.throttle
     );
 
-    state.velocity = [0.0, -280.0, 0.0];
+    state.velocity = [0.0, -450.0, 0.0];
+    // Upright for brake authority on the freefall envelope.
+    state.motor = pga_rocket::euclidean_pga::motor_from_pose(0.0, alt, 0.0, 0.0, 0.0, 0.0);
     let mut cmd_brake = ControlCommand::default();
     for _ in 0..120 {
         cmd_brake = ap.update(&state, DT);
