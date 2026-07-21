@@ -96,6 +96,9 @@ pub const H_FREEFALL_EARTH_M: f64 = 6000.0;
 pub const H_FREEFALL_MOON_M: f64 = 10000.0;
 /// Legacy alias — Earth freefall threshold.
 pub const H_FREEFALL_M: f64 = H_FREEFALL_EARTH_M;
+/// High-alt dive: compare horizontal range against (altitude + this bias)
+/// so the decision uses ~1000 m above the target as reference.
+pub const HIGH_ALT_OVERHEAD_BIAS_M: f64 = 1000.0;
 
 /// CoM altitude (m) above which L/T enter high-altitude freefall.
 #[inline]
@@ -1090,15 +1093,15 @@ fn burn_height(vy: f64, a_brake: f64, v_touch: f64) -> f64 {
 
 /// World-frame thrust aim for high-alt **dive** toward a ground target.
 ///
-/// When horizontal range exceeds altitude, points down the slant toward the
-/// target; otherwise pure nose-down `[0, −1, 0]` (descent priority). Thrust along
-/// this axis accelerates the vehicle toward the ground / pad.
+/// When horizontal range exceeds altitude + [`HIGH_ALT_OVERHEAD_BIAS_M`], points down
+/// the slant toward the target; otherwise pure nose-down `[0, −1, 0]` (descent
+/// priority). Thrust along this axis accelerates the vehicle toward the ground / pad.
 pub(crate) fn high_alt_freefall_desired_aim(pos: [f64; 3], target_xz: [f64; 2]) -> [f64; 3] {
     let dx = target_xz[0] - pos[0];
     let dz = target_xz[1] - pos[2];
     let range = (dx * dx + dz * dz).sqrt();
     let alt = pos[1].max(0.0);
-    if range > alt && range > 1e-3 {
+    if range > alt + HIGH_ALT_OVERHEAD_BIAS_M && range > 1e-3 {
         let slant = (range * range + alt * alt).sqrt();
         [dx / slant, -alt / slant, dz / slant]
     } else {
@@ -1675,8 +1678,19 @@ mod tests {
         let down = high_alt_freefall_desired_aim([0.0, 6000.0, 0.0], [500.0, 0.0]);
         assert!(
             (down[1] + 1.0).abs() < 1e-9,
-            "range < alt should pure dive, y={}",
+            "range < alt + bias should pure dive, y={}",
             down[1]
+        );
+    }
+
+    #[test]
+    fn high_alt_dive_aim_pure_dive_when_range_between_alt_and_bias() {
+        // alt=6000, range=6500: alt < range <= alt + 1000 → pure vertical dive.
+        let aim = high_alt_freefall_desired_aim([0.0, 6000.0, 0.0], [6500.0, 0.0]);
+        assert!(
+            (aim[1] + 1.0).abs() < 1e-9,
+            "range between alt and alt+bias should pure dive, y={}",
+            aim[1]
         );
     }
 

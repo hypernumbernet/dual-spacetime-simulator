@@ -20,7 +20,7 @@
 //! [`TargetPhase::Descend`] via [`LandingAutopilot::update_target_descend`]
 //! (closed-loop suicide burn). Above [`h_freefall_m`] (Earth 6000 m / Moon 10000 m),
 //! transit flies a nose-down **dive** (full-T acceleration toward ground / pad)
-//! under the speed envelope; lateral steering when `range > alt`, otherwise pure
+//! under the speed envelope; lateral steering when `range > alt + 1000 m`, otherwise pure
 //! vertical dive. Overspeed flips upright and brakes via [`freefall_v_cap`]
 //! (safe descent speed is highest priority).
 //!
@@ -39,6 +39,7 @@ use crate::fuzzy::{
 use crate::landing::{
     axis_angle_from_cross, chebyshev_xz, clamp_tilt, high_alt_dive_throttle_gate,
     high_alt_freefall_desired_aim, h_freefall_m, on_pad_square, saturate, LandingAutopilot,
+    HIGH_ALT_OVERHEAD_BIAS_M,
     PAD_HALF_M,
 };
 use crate::sim::{
@@ -2405,7 +2406,7 @@ fn terminal_settle_throttle(
 /// World-frame thrust aim and dive-go membership for high-altitude T dive.
 ///
 /// Under the speed envelope: nose-down dive — slant toward the target when
-/// `range > alt`, otherwise pure `[0, −1, 0]`. Inside predicted stop distance,
+/// `range > alt + 1000 m`, otherwise pure `[0, −1, 0]`. Inside predicted stop distance,
 /// fade lateral slant to pure vertical dive. Over the envelope: blend upright
 /// (safe speed first). Returns `(desired_aim, mu_dive_go)` where `mu_dive_go`
 /// gates full-T dive acceleration (still needs a nose-down attitude gate).
@@ -2428,8 +2429,8 @@ fn high_alt_freefall_guidance(
 
     let mu_over = freefall_overspeed_mu(v_down, alt, state.moon_mode);
 
-    // Hard priority: steer toward pad when horizontal range exceeds altitude.
-    let prioritize_lateral = range > alt;
+    // Hard priority: steer toward pad when horizontal range exceeds altitude + overhead bias.
+    let prioritize_lateral = range > alt + HIGH_ALT_OVERHEAD_BIAS_M;
     let dive_down = [0.0, -1.0, 0.0];
     let steer_aim = high_alt_freefall_desired_aim(pos, target_xz);
     let base_aim = if prioritize_lateral {
@@ -3162,7 +3163,7 @@ mod tests {
 
     #[test]
     fn high_altitude_cruise_translates_toward_pad() {
-        // Far from pad (range > alt), nose-down under envelope → full-T dive.
+        // Far from pad (range > alt + 1000 m), nose-down under envelope → full-T dive.
         let mut state = RocketState::at_altitude(FF_TEST_ALT);
         state.motor = crate::euclidean_pga::motor_from_pose(
             0.0,
@@ -3191,7 +3192,7 @@ mod tests {
 
     #[test]
     fn high_altitude_freefall_aims_toward_target_when_range_exceeds_alt() {
-        // range=8000 > alt=6200 → slant aim toward target (downward component).
+        // range=8000 > alt=6200 + 1000 → slant aim toward target (downward component).
         let mut state = RocketState::at_altitude(FF_TEST_ALT);
         state.velocity = [0.0, -15.0, 0.0];
         state.contacting = false;
@@ -3249,7 +3250,7 @@ mod tests {
 
     #[test]
     fn high_altitude_freefall_descend_priority_when_range_below_alt() {
-        // range=500 m < alt=6200 m → pure vertical dive.
+        // range=500 m < alt=6200 + 1000 m → pure vertical dive.
         let mut state = RocketState::at_altitude(FF_TEST_ALT);
         state.motor = crate::euclidean_pga::motor_from_pose(500.0, FF_TEST_ALT, 0.0, 0.0, 0.0, 0.0);
         state.velocity = [0.0, -15.0, 0.0];
@@ -3264,6 +3265,34 @@ mod tests {
         assert!(
             (aim[1] + 1.0).abs() < 1e-9,
             "descend priority should aim nose-down, y={}",
+            aim[1]
+        );
+    }
+
+    #[test]
+    fn high_altitude_freefall_descend_priority_when_range_between_alt_and_bias() {
+        // alt=6200, range=6500: alt < range <= alt + 1000 → pure vertical dive.
+        let mut state = RocketState::at_altitude(FF_TEST_ALT);
+        state.motor = crate::euclidean_pga::motor_from_pose(
+            6500.0,
+            FF_TEST_ALT,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        );
+        state.velocity = [0.0, -15.0, 0.0];
+        state.contacting = false;
+        let (aim, mu_go) = high_alt_freefall_guidance(
+            &state,
+            state.position(),
+            state.velocity,
+            [0.0, 0.0],
+        );
+        assert!(mu_go > 0.9, "under envelope should dive-go, mu={mu_go}");
+        assert!(
+            (aim[1] + 1.0).abs() < 1e-9,
+            "range between alt and alt+bias should aim nose-down, y={}",
             aim[1]
         );
     }
