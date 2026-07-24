@@ -9,7 +9,7 @@
 //!   envelope, brake hard on it, soft-touch near the pad. Above [`h_freefall_m`]
 //!   (Earth 6000 m / Moon 10000 m), nose-down **dive** (thrust accelerates toward
 //!   ground / target) under the altitude speed envelope (Earth: 80 m/s @ 1 km →
-//!   linearly extended; Moon: 50 m/s @ 1 km → linearly extended). Overspeed flips
+//!   linearly extended; Moon: 60 m/s @ 1 km → linearly extended). Overspeed flips
 //!   upright and brakes. Horizontal speed above a deadband (60 m/s Earth /
 //!   30 m/s Moon) adds anti-velocity lean while diving. Local laws stay
 //!   closed-form;
@@ -1815,7 +1815,7 @@ mod tests {
         assert!(high_alt_freefall_throttle(5000.0, 380.0, 1.0, 0.05, false) > 0.70);
         assert!(high_alt_freefall_throttle(8000.0, 340.0, 1.0, 0.05, false) < 0.1);
         assert!(high_alt_freefall_throttle(8000.0, 420.0, 1.0, 0.05, false) > 0.70);
-        // Moon: 1500 m → v_cap ≈ 62.5 m/s
+        // Moon: 1500 m → v_cap ≈ 67.5 m/s
         assert!(high_alt_freefall_throttle(1500.0, 55.0, 1.0, 0.05, true) < 0.1);
         assert!(high_alt_freefall_throttle(1500.0, 180.0, 1.0, 0.05, true) > 0.85);
         // Envelope endpoints
@@ -1824,9 +1824,9 @@ mod tests {
         assert!((freefall_v_cap(3000.0, false) - 160.0).abs() < 1e-9);
         assert!((freefall_v_cap(6000.0, false) - 280.0).abs() < 1e-9);
         assert!((freefall_v_cap(8000.0, false) - 360.0).abs() < 1e-9);
-        assert!((freefall_v_cap(1000.0, true) - 50.0).abs() < 1e-9);
-        assert!((freefall_v_cap(5000.0, true) - 150.0).abs() < 1e-9);
-        assert!((freefall_v_cap(10000.0, true) - 275.0).abs() < 1e-9);
+        assert!((freefall_v_cap(1000.0, true) - 60.0).abs() < 1e-9);
+        assert!((freefall_v_cap(5000.0, true) - 120.0).abs() < 1e-9);
+        assert!((freefall_v_cap(10000.0, true) - 195.0).abs() < 1e-9);
     }
 
     #[test]

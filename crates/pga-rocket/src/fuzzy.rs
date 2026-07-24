@@ -482,7 +482,7 @@ fn freefall_alt_u(alt: f64) -> f64 {
 /// Allowed freefall descent speed (m/s) vs CoM altitude.
 ///
 /// Earth: 80 m/s at 1000 m → 240 m/s at 5000 m, then linear extension (no upper clamp).
-/// Moon: 50 m/s at 1000 m → 150 m/s at 5000 m, then linear extension (no upper clamp).
+/// Moon: 60 m/s at 1000 m → 120 m/s at 5000 m, then linear extension (no upper clamp).
 #[inline]
 pub fn freefall_v_cap(alt: f64, moon_mode: bool) -> f64 {
     let u = freefall_alt_u(alt);
@@ -1061,10 +1061,10 @@ mod tests {
         // Extended beyond 5000 m (no upper clamp).
         assert!((freefall_v_cap(6000.0, false) - 280.0).abs() < 1e-9);
         assert!((freefall_v_cap(8000.0, false) - 360.0).abs() < 1e-9);
-        assert!((freefall_v_cap(1000.0, true) - 50.0).abs() < 1e-9);
-        assert!((freefall_v_cap(5000.0, true) - 150.0).abs() < 1e-9);
-        assert!((freefall_v_cap(3000.0, true) - 100.0).abs() < 1e-9);
-        assert!((freefall_v_cap(10000.0, true) - 275.0).abs() < 1e-9);
+        assert!((freefall_v_cap(1000.0, true) - 60.0).abs() < 1e-9);
+        assert!((freefall_v_cap(5000.0, true) - 120.0).abs() < 1e-9);
+        assert!((freefall_v_cap(3000.0, true) - 90.0).abs() < 1e-9);
+        assert!((freefall_v_cap(10000.0, true) - 195.0).abs() < 1e-9);
     }
 
     #[test]
@@ -1072,8 +1072,8 @@ mod tests {
         assert!(freefall_overspeed_mu(80.0, 1000.0, false) < 1e-9);
         assert!(freefall_overspeed_mu(120.0, 1000.0, false) > 0.5);
         assert!(freefall_overspeed_mu(200.0, 1000.0, false) > 0.95);
-        assert!(freefall_overspeed_mu(50.0, 1000.0, true) < 1e-9);
-        assert!(freefall_overspeed_mu(80.0, 1000.0, true) > 0.5);
+        assert!(freefall_overspeed_mu(60.0, 1000.0, true) < 1e-9);
+        assert!(freefall_overspeed_mu(100.0, 1000.0, true) > 0.5);
     }
 
     #[test]
