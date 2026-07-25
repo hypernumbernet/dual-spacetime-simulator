@@ -6,7 +6,8 @@ use crate::landing::LandingAutopilot;
 use crate::mesh::{GRASS_METERS_PER_TILE, hud_text, random_target_xz};
 use crate::target_landing::TargetLandingAutopilot;
 use crate::renderer::{
-    MIN_CAMERA_HEIGHT, Renderer, SKY_COLOR, camera_view_proj, min_orbit_pitch, orbit_camera_far,
+    MIN_CAMERA_HEIGHT, MOON_SKY_COLOR, Renderer, SKY_COLOR, camera_view_proj, min_orbit_pitch,
+    orbit_camera_far,
 };
 use crate::sim::{ControlCommand, RocketState, step_rocket};
 use crate::ui::{ContentRegion, draw_params_panel};
@@ -318,13 +319,14 @@ impl App {
         renderer.set_hud(hud);
 
         let moon_mode = self.rocket.moon_mode;
+        let sky_color = if moon_mode { MOON_SKY_COLOR } else { SKY_COLOR };
         let draw_result = renderer.draw(
             vb,
             vp,
             eye,
             ground_xz,
             target_xz,
-            SKY_COLOR,
+            sky_color,
             content.left_inset_px,
             moon_mode,
             gui,

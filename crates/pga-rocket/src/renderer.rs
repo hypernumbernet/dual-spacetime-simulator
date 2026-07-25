@@ -29,6 +29,9 @@ const FX_FRAG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/fx.frag
 /// Sky / fog color (matches clear color).
 pub const SKY_COLOR: [f32; 4] = [0.45, 0.62, 0.85, 1.0];
 
+/// Moon mode sky / fog color (vacuum, no atmosphere).
+pub const MOON_SKY_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MeshPush {
