@@ -77,14 +77,14 @@ fn flight_section(ui: &mut egui::Ui, rocket: &RocketState, target_xz: [f32; 2]) 
     let p = rocket.position();
     let v = rocket.velocity;
     let w = rocket.omega;
-    let range = ((p[0] as f32 - target_xz[0]).powi(2) + (p[2] as f32 - target_xz[1]).powi(2))
-        .sqrt();
-    kv(ui, "Alt", format!("{:.2} m", p[1]));
+    let dx = target_xz[0] - p[0] as f32;
+    let dz = target_xz[1] - p[2] as f32;
+    let range = (dx * dx + dz * dz).sqrt();
     kv(ui, "CoM X", format!("{:.2} m", p[0]));
     kv(ui, "CoM Y", format!("{:.2} m", p[1]));
     kv(ui, "CoM Z", format!("{:.2} m", p[2]));
-    kv(ui, "Target X", format!("{:.1} m", target_xz[0]));
-    kv(ui, "Target Z", format!("{:.1} m", target_xz[1]));
+    kv(ui, "Target X", format!("{:.1} m", dx));
+    kv(ui, "Target Z", format!("{:.1} m", dz));
     kv(ui, "Range", format!("{:.1} m", range));
     kv(ui, "Vel X", format!("{:.2} km/h", v[0] * MS_TO_KMH));
     kv(ui, "Vel Y", format!("{:.2} km/h", v[1] * MS_TO_KMH));
