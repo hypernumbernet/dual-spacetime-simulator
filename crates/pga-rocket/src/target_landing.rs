@@ -391,11 +391,48 @@ fn apply_cruise_alt_lean_cap(
     hover: f64,
 ) -> CruiseBrakeCommand {
     let cos_floor = long_range_hold_cos(alt, alt_hold, vy, hover);
-    let lean_alt = cos_floor.acos();
-    let lean_cap = cmd.lean_cap.min(lean_alt);
-    cmd.lean_cap = lean_cap;
-    cmd.aim = clamp_tilt(cmd.aim, lean_cap);
+    if cmd.lean_cap.cos() >= cos_floor {
+        return cmd;
+    }
+    cmd.lean_cap = cos_floor.acos();
+    cmd.aim = clamp_tilt(cmd.aim, cmd.lean_cap);
     cmd
+}
+
+/// Latched cruise reverse-brake: anti-v aim + altitude-hold lean cap + MPC plan fields.
+#[inline]
+fn latched_cruise_brake_plan(
+    vx: f64,
+    vz: f64,
+    vh: f64,
+    v_approach: f64,
+    aim_filtered: [f64; 3],
+    alt: f64,
+    alt_hold: f64,
+    vy: f64,
+    hover: f64,
+    in_airplane_range: bool,
+    moon_mode: bool,
+) -> (CruiseBrakeCommand, TransitMpcPlan) {
+    let cmd = apply_cruise_alt_lean_cap(
+        cruise_brake_command(vx, vz, vh, v_approach, aim_filtered),
+        alt,
+        alt_hold,
+        vy,
+        hover,
+    );
+    let plan = TransitMpcPlan {
+        desired_raw: cmd.aim,
+        lean_max: cmd.lean_cap,
+        deep: cmd.hardness > 0.25,
+        force_full_thr: brake_force_full_throttle(
+            in_airplane_range,
+            vh,
+            moon_mode,
+            cmd.hardness,
+        ),
+    };
+    (cmd, plan)
 }
 
 /// Lateral thrust regime for stop-distance planning and brake execution.
@@ -1271,12 +1308,13 @@ fn predictor_thrust_accel(
             [am * u[0], am * u[1], am * u[2]]
         }
         LateralThrMode::VerticalNeutral => {
-            let horiz = (u[0] * u[0] + u[2] * u[2]).sqrt();
-            if horiz <= 1e-9 {
+            let horiz_sq = u[0] * u[0] + u[2] * u[2];
+            if horiz_sq <= 1e-18 {
                 [0.0, GRAVITY, 0.0]
             } else {
-                let lean = horiz.clamp(0.0, 0.999).asin();
-                let a_lat = (GRAVITY * lean.tan()).max(0.0);
+                let horiz = horiz_sq.sqrt();
+                let horiz_c = horiz.min(0.999);
+                let a_lat = GRAVITY * horiz_c / (1.0 - horiz_c * horiz_c).max(1e-12).sqrt();
                 let scale = a_lat / horiz;
                 [scale * u[0], GRAVITY, scale * u[2]]
             }
@@ -1576,18 +1614,18 @@ fn candidate_params(
             let v_approach = vx * ux + vz * uz;
             // MPC brake uses instantaneous anti-v only — filtered azimuth is for
             // the live command path, not the open-loop predictor.
-            let cmd = apply_cruise_alt_lean_cap(
-                cruise_brake_command(vx, vz, vh, v_approach, [0.0, 1.0, 0.0]),
+            let (cmd, plan) = latched_cruise_brake_plan(
+                vx,
+                vz,
+                vh,
+                v_approach,
+                [0.0, 1.0, 0.0],
                 alt,
                 alt_hold,
                 vy,
                 hover,
-            );
-            let full_thr = brake_force_full_throttle(
                 in_airplane_range,
-                vh,
                 moon_mode,
-                cmd.hardness,
             );
             let exec_mode = if cmd.hardness > 0.45 {
                 brake_mode
@@ -1597,15 +1635,15 @@ fn candidate_params(
             Some(CandidateParams {
                 aim: cmd.aim,
                 lean_max: cmd.lean_cap,
-                thr: if full_thr {
+                thr: if plan.force_full_thr {
                     THR_FULL
                 } else {
                     hover.clamp(0.55, 0.95)
                 },
                 mode: exec_mode,
                 coast: false,
-                deep: cmd.hardness > 0.25,
-                force_full_thr: full_thr,
+                deep: plan.deep,
+                force_full_thr: plan.force_full_thr,
             })
         }
         TransitCandidate::Coast => Some(CandidateParams {
@@ -2785,6 +2823,31 @@ fn transit_command(
             false,
             out.terminal_brake_latch,
         )
+    } else if brake {
+        let (cmd, mpc_plan) = latched_cruise_brake_plan(
+            vx,
+            vz,
+            vh,
+            v_approach,
+            aim_prev,
+            pos[1],
+            alt_hold,
+            vy,
+            hover,
+            in_airplane_range,
+            state.moon_mode,
+        );
+        brake_hardness = cmd.hardness;
+        cruise_brake = Some(cmd);
+        mpc_out_hold = TransitCandidate::Brake;
+        mpc_out_counter = mpc_hold_counter.saturating_add(1);
+        (
+            mpc_plan.desired_raw,
+            mpc_plan.lean_max,
+            mpc_plan.deep,
+            mpc_plan.force_full_thr,
+            terminal_brake_latched,
+        )
     } else {
         let (mut mpc_plan, out_hold, out_counter) = transit_mpc_select(
             state,
@@ -2803,38 +2866,14 @@ fn transit_command(
             lofted,
             ballistic,
             brake_latched,
-            brake,
+            false,
             mpc_hold,
             mpc_hold_counter,
         );
         mpc_out_hold = out_hold;
         mpc_out_counter = out_counter;
 
-        if brake {
-            let cmd = apply_cruise_alt_lean_cap(
-                cruise_brake_command(vx, vz, vh, v_approach, aim_prev),
-                pos[1],
-                alt_hold,
-                vy,
-                hover,
-            );
-            brake_hardness = cmd.hardness;
-            cruise_brake = Some(cmd);
-            mpc_plan = TransitMpcPlan {
-                desired_raw: cmd.aim,
-                lean_max: cmd.lean_cap,
-                deep: cmd.hardness > 0.25,
-                force_full_thr: brake_force_full_throttle(
-                    in_airplane_range,
-                    vh,
-                    state.moon_mode,
-                    cmd.hardness,
-                ),
-            };
-            mpc_out_hold = TransitCandidate::Brake;
-        }
-
-        if !mpc_plan.force_full_thr && !brake {
+        if !mpc_plan.force_full_thr {
             mpc_plan.desired_raw[0] += 0.05 * need_x;
             mpc_plan.desired_raw[2] += 0.05 * need_z;
         }
