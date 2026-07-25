@@ -378,6 +378,26 @@ fn cruise_brake_command(
     }
 }
 
+/// Limit brake lean so full-T reverse thrust still satisfies altitude-hold pitch.
+///
+/// Matches [`long_range_hold_cos`] / AirplaneHold: caps tilt so vertical thrust
+/// does not fall below the cruise altitude schedule while braking.
+#[inline]
+fn apply_cruise_alt_lean_cap(
+    mut cmd: CruiseBrakeCommand,
+    alt: f64,
+    alt_hold: f64,
+    vy: f64,
+    hover: f64,
+) -> CruiseBrakeCommand {
+    let cos_floor = long_range_hold_cos(alt, alt_hold, vy, hover);
+    let lean_alt = cos_floor.acos();
+    let lean_cap = cmd.lean_cap.min(lean_alt);
+    cmd.lean_cap = lean_cap;
+    cmd.aim = clamp_tilt(cmd.aim, lean_cap);
+    cmd
+}
+
 /// Lateral thrust regime for stop-distance planning and brake execution.
 #[inline]
 fn brake_lateral_mode(in_airplane_range: bool, vh: f64, moon_mode: bool) -> LateralThrMode {
@@ -1253,12 +1273,12 @@ fn predictor_thrust_accel(
         LateralThrMode::VerticalNeutral => {
             let horiz = (u[0] * u[0] + u[2] * u[2]).sqrt();
             if horiz <= 1e-9 {
-                [0.0, 0.0, 0.0]
+                [0.0, GRAVITY, 0.0]
             } else {
                 let lean = horiz.clamp(0.0, 0.999).asin();
                 let a_lat = (GRAVITY * lean.tan()).max(0.0);
                 let scale = a_lat / horiz;
-                [scale * u[0], 0.0, scale * u[2]]
+                [scale * u[0], GRAVITY, scale * u[2]]
             }
         }
     }
@@ -1556,7 +1576,13 @@ fn candidate_params(
             let v_approach = vx * ux + vz * uz;
             // MPC brake uses instantaneous anti-v only — filtered azimuth is for
             // the live command path, not the open-loop predictor.
-            let cmd = cruise_brake_command(vx, vz, vh, v_approach, [0.0, 1.0, 0.0]);
+            let cmd = apply_cruise_alt_lean_cap(
+                cruise_brake_command(vx, vz, vh, v_approach, [0.0, 1.0, 0.0]),
+                alt,
+                alt_hold,
+                vy,
+                hover,
+            );
             let full_thr = brake_force_full_throttle(
                 in_airplane_range,
                 vh,
@@ -2785,7 +2811,13 @@ fn transit_command(
         mpc_out_counter = out_counter;
 
         if brake {
-            let cmd = cruise_brake_command(vx, vz, vh, v_approach, aim_prev);
+            let cmd = apply_cruise_alt_lean_cap(
+                cruise_brake_command(vx, vz, vh, v_approach, aim_prev),
+                pos[1],
+                alt_hold,
+                vy,
+                hover,
+            );
             brake_hardness = cmd.hardness;
             cruise_brake = Some(cmd);
             mpc_plan = TransitMpcPlan {
@@ -3455,6 +3487,72 @@ mod tests {
         assert!(
             TARGET_PAD_HALF_M > TARGET_SUCCESS_HALF_M,
             "visual pad should exceed inner guidance box"
+        );
+    }
+
+    #[test]
+    fn vertical_neutral_predictor_hovers() {
+        let mass = 1000.0;
+        let max_thrust = mass * GRAVITY * 3.0;
+        let hover = mass * GRAVITY / max_thrust;
+        let aim = clamp_tilt([1.0, 1.0, 0.0], 0.4);
+        let a = predictor_thrust_accel(
+            aim,
+            0.4,
+            hover,
+            LateralThrMode::VerticalNeutral,
+            mass,
+            max_thrust,
+        );
+        assert!(
+            (a[1] - GRAVITY).abs() < 1e-9,
+            "VerticalNeutral ay should cancel gravity, got {}",
+            a[1]
+        );
+        let upright = predictor_thrust_accel(
+            [0.0, 1.0, 0.0],
+            0.05,
+            hover,
+            LateralThrMode::VerticalNeutral,
+            mass,
+            max_thrust,
+        );
+        assert!(
+            (upright[1] - GRAVITY).abs() < 1e-9,
+            "upright VerticalNeutral should hover, got {}",
+            upright[1]
+        );
+    }
+
+    #[test]
+    fn cruise_brake_alt_lean_cap_limits_deep_lean_below_hold() {
+        let mass = 1000.0;
+        let max_thrust = mass * GRAVITY * 3.0;
+        let hover = mass * GRAVITY / max_thrust;
+        let alt = 400.0;
+        let alt_hold = LONG_CRUISE_ALT_M;
+        let raw = cruise_brake_command(-50.0, 0.0, 50.0, 50.0, [0.0, 1.0, 0.0]);
+        assert!(
+            raw.lean_cap > 1.0,
+            "full hardness should want deep lean, got {}",
+            raw.lean_cap
+        );
+        let capped = apply_cruise_alt_lean_cap(raw, alt, alt_hold, 0.0, hover);
+        let cos_floor = long_range_hold_cos(alt, alt_hold, 0.0, hover);
+        let len = (capped.aim[0] * capped.aim[0]
+            + capped.aim[1] * capped.aim[1]
+            + capped.aim[2] * capped.aim[2])
+            .sqrt();
+        let cos_aim = capped.aim[1] / len;
+        assert!(
+            cos_aim >= cos_floor - 1e-6,
+            "brake aim must respect altitude hold floor, cos_aim={cos_aim} floor={cos_floor}"
+        );
+        assert!(
+            capped.lean_cap <= cos_floor.acos() + 1e-6,
+            "lean cap must shrink below hold band, cap={} floor_angle={}",
+            capped.lean_cap,
+            cos_floor.acos()
         );
     }
 

@@ -215,3 +215,33 @@ fn target_descend_completes_without_hovering() {
         "should rest nearly upright, cos(tilt)={up_y}"
     );
 }
+
+#[test]
+fn moon_high_speed_cruise_brake_holds_altitude() {
+    let mut state = RocketState::at_altitude(500.0);
+    state.contacting = false;
+    state.moon_mode = true;
+    state.velocity = [55.0, 0.0, 0.0];
+    let target = [200.0, 0.0];
+    let mut ap = TargetLandingAutopilot::default();
+    ap.enabled = true;
+    let mut min_alt = state.altitude();
+    for _ in 0..120 * 8 {
+        if state.destroyed || ap.complete {
+            break;
+        }
+        let cmd = ap.update(&state, target, DT);
+        state.set_command(cmd);
+        step_rocket(&mut state, DT);
+        min_alt = min_alt.min(state.altitude());
+    }
+    assert!(
+        !state.destroyed,
+        "moon cruise brake must not ground-crash, impact={}",
+        state.last_impact_speed
+    );
+    assert!(
+        min_alt > 200.0,
+        "cruise brake should hold above gate floor, min_alt={min_alt}"
+    );
+}
