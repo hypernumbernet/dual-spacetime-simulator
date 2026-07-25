@@ -8,6 +8,8 @@ use egui::{RichText, ScrollArea};
 /// Fixed width of the left parameter panel (logical points).
 pub const PANEL_WIDTH: f32 = 196.0;
 
+const MS_TO_KMH: f64 = 3.6;
+
 /// 3D content region to the right of the left UI panel.
 ///
 /// Aspect and left inset stay in one place so the camera frustum and the
@@ -84,10 +86,10 @@ fn flight_section(ui: &mut egui::Ui, rocket: &RocketState, target_xz: [f32; 2]) 
     kv(ui, "Target X", format!("{:.1} m", target_xz[0]));
     kv(ui, "Target Z", format!("{:.1} m", target_xz[1]));
     kv(ui, "Range", format!("{:.1} m", range));
-    kv(ui, "Vel X", format!("{:.2} m/s", v[0]));
-    kv(ui, "Vel Y", format!("{:.2} m/s", v[1]));
-    kv(ui, "Vel Z", format!("{:.2} m/s", v[2]));
-    kv(ui, "Speed", format!("{:.2} m/s", rocket.speed()));
+    kv(ui, "Vel X", format!("{:.2} km/h", v[0] * MS_TO_KMH));
+    kv(ui, "Vel Y", format!("{:.2} km/h", v[1] * MS_TO_KMH));
+    kv(ui, "Vel Z", format!("{:.2} km/h", v[2] * MS_TO_KMH));
+    kv(ui, "Speed", format!("{:.2} km/h", rocket.speed() * MS_TO_KMH));
     kv(ui, "ω X", format!("{:.3} rad/s", w[0]));
     kv(ui, "ω Y", format!("{:.3} rad/s", w[1]));
     kv(ui, "ω Z", format!("{:.3} rad/s", w[2]));
@@ -98,7 +100,10 @@ fn flight_section(ui: &mut egui::Ui, rocket: &RocketState, target_xz: [f32; 2]) 
 
 fn contact_label(rocket: &RocketState) -> String {
     if rocket.destroyed {
-        format!("DESTROYED\n{:.1} m/s", rocket.last_impact_speed)
+        format!(
+            "DESTROYED\n{:.1} km/h",
+            rocket.last_impact_speed * MS_TO_KMH
+        )
     } else if rocket.contacting {
         if rocket.body_contacting {
             "yes body".into()
