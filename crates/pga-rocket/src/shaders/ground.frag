@@ -31,8 +31,7 @@ layout(location = 0) out vec4 out_color;
 const float PAD_HALF = 30.0;
 const vec3 MARK_COLOR = vec3(0.95, 0.82, 0.12);
 
-// Soft large-scale variation (CPU generators carry mid/fine detail; this damps
-// remaining low-frequency field structure for open-world feel).
+// Cheap large-scale field variation (detail lives in the mipmapped albedo).
 float lhash(vec2 cell) {
     uvec2 q = uvec2(ivec2(floor(cell))) * uvec2(1597334673u, 3812015801u);
     return float((q.x ^ q.y) * 1597334673u) * (1.0 / 4294967295.0);
@@ -41,32 +40,25 @@ float lhash(vec2 cell) {
 float vnoise(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
-    vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    // Hermite smoothstep (cheaper than full quintic; fine for soft field tint).
+    vec2 u = f * f * (3.0 - 2.0 * f);
     float a = lhash(i);
     float b = lhash(i + vec2(1.0, 0.0));
     float c = lhash(i + vec2(0.0, 1.0));
-    float d = lhash(i + vec2(1.0, 0.0) + vec2(0.0, 1.0));
+    float d = lhash(i + vec2(1.0, 1.0));
     return a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y;
 }
 
-// Multi-scale albedo: fine detail near the camera, mid + broad scales farther
-// out so high-frequency tile repeats never lock to display resolution (moiré).
-vec3 multi_scale_albedo(sampler2D tex, vec2 xz, float mpt, float cam_dist) {
-    float m = max(mpt, 0.001);
-    // Offset mid/broad UVs so scales do not stack the same phase.
-    vec3 detail = texture(tex, xz / m).rgb;
-    vec3 mid = texture(tex, xz / (m * 4.0) + vec2(0.37, 0.11)).rgb;
-    vec3 broad = texture(tex, xz / (m * 16.0) + vec2(0.71, 0.53)).rgb;
-
-    // Fade fine detail first (~hundreds of m), then mid (~km).
-    float w_detail = exp(-cam_dist * 0.004);
-    float w_mid = exp(-cam_dist * 0.0008);
-
-    vec3 col = mix(broad, mid, w_mid);
-    col = mix(col, detail, w_detail * 0.72);
-    // Slight residual mid contribution keeps texture from going flat at range.
-    col = mix(col, mid, 0.12 * (1.0 - w_detail));
-    return col;
+// Two-scale albedo: hardware mips already kill high-frequency moiré; the second
+// slower UV scale breaks phase-locked tile repeats at long range without a 3rd sample.
+// `detail_uv` is world.xz / grass_mpt (from VS). Falloff uses cheap reciprocal, not exp.
+vec3 dual_scale_albedo(sampler2D tex, vec2 detail_uv, float cam_dist) {
+    vec3 detail = texture(tex, detail_uv).rgb;
+    // 1/16 world frequency + phase offset so scales do not stack.
+    vec3 broad = texture(tex, detail_uv * 0.0625 + vec2(0.71, 0.53)).rgb;
+    // ~fade detail over a few hundred metres; residual broad keeps far field alive.
+    float w = 1.0 / (1.0 + cam_dist * 0.004);
+    return mix(broad, detail, w * 0.78 + 0.10);
 }
 
 bool in_aabb(vec2 p, vec2 center, vec2 half_ext) {
@@ -74,66 +66,59 @@ bool in_aabb(vec2 p, vec2 center, vec2 half_ext) {
     return d.x <= half_ext.x && d.y <= half_ext.y;
 }
 
-// Yellow "H" at launch origin (home pad). Dimensions match former home_h_mark_mesh.
+// Yellow "H" at launch origin (home pad).
 bool home_h_mark(vec2 p) {
-    // Left / right uprights: half (3, 12), centers (±9, 0).
     if (in_aabb(p, vec2(-9.0, 0.0), vec2(3.0, 12.0))) return true;
     if (in_aabb(p, vec2(9.0, 0.0), vec2(3.0, 12.0))) return true;
-    // Crossbar: half (12, 3), center (0, 0).
     if (in_aabb(p, vec2(0.0, 0.0), vec2(12.0, 3.0))) return true;
     return false;
 }
 
-// Yellow "T" centered on the target pad. Dimensions match former target_t_mark_mesh.
+// Yellow "T" centered on the target pad.
 bool target_t_mark(vec2 p, vec2 target) {
-    // Stem: half (3, 11), center (tx, tz - 2).
-    vec2 stem_c = target + vec2(0.0, -2.0);
-    if (in_aabb(p, stem_c, vec2(3.0, 11.0))) return true;
-    // Crossbar on +Z end of stem: half (12, 3), center (tx, tz + 6).
-    vec2 bar_c = target + vec2(0.0, 6.0);
-    if (in_aabb(p, bar_c, vec2(12.0, 3.0))) return true;
+    if (in_aabb(p, target + vec2(0.0, -2.0), vec2(3.0, 11.0))) return true;
+    if (in_aabb(p, target + vec2(0.0, 6.0), vec2(12.0, 3.0))) return true;
     return false;
 }
 
 void main() {
+    // Edge fog first: fully fogged rim skips all texture / noise work.
+    float edge_start = clamp(pc.fog_params.x, 0.0, 0.999);
+    float fog = smoothstep(edge_start, 1.0, v_edge);
+    if (fog >= 0.999) {
+        out_color = vec4(pc.fog_color.rgb, 1.0);
+        return;
+    }
+
     vec2 xz = v_world.xz;
     vec2 target = vec2(pc.camera_pos.w, pc.ground_origin.w);
+    // Horizontal range only (cheaper than full 3D length; matches ground plane).
     float cam_dist = length(xz - pc.camera_pos.xz);
 
     bool on_home = max(abs(xz.x), abs(xz.y)) <= PAD_HALF;
     bool on_target = max(abs(xz.x - target.x), abs(xz.y - target.y)) <= PAD_HALF;
-    bool on_pad = on_home || on_target;
 
     vec3 lit;
-    if (on_pad) {
+    if (on_home || on_target) {
+        // Pads are ~60 m across: single LINEAR+mip sample is enough (no dual-scale).
         float paved_mpt = max(pc.fog_params.w, 0.001);
-        // Pads also multi-scale so distant pads do not moiré.
-        lit = multi_scale_albedo(paved, xz, paved_mpt, cam_dist);
-        // Letter marks painted in-plane (no second mesh → no z-fighting).
+        lit = texture(paved, xz / paved_mpt).rgb;
         if ((on_home && home_h_mark(xz)) || (on_target && target_t_mark(xz, target))) {
             lit = MARK_COLOR;
         }
     } else if (pc.ground_origin.y > 0.5) {
-        // Moon mode: continuous regolith + dusty large-scale variation.
-        float grass_mpt = max(pc.fog_params.z, 0.001);
-        vec3 moon_col = multi_scale_albedo(moon, xz, grass_mpt, cam_dist);
-        float dust = 0.90 + 0.14 * vnoise(xz * 0.035);
-        float shade = 0.92 + 0.12 * vnoise(xz * 0.14 + 9.0);
-        // Sparse larger dark patches read as distant crater fields.
-        float crater_field = 1.0 - 0.12 * step(0.88, vnoise(xz * 0.012 + 3.0));
-        lit = moon_col * dust * shade * crater_field;
+        // Moon: dual-scale regolith + one low-frequency dust tint.
+        vec3 moon_col = dual_scale_albedo(moon, v_uv, cam_dist);
+        float dust = 0.88 + 0.16 * vnoise(xz * 0.03);
+        // Sparse dark crater fields (threshold on same cheap noise family).
+        float crater = 1.0 - 0.10 * step(0.90, vnoise(xz * 0.01 + 3.0));
+        lit = moon_col * dust * crater;
     } else {
-        float grass_mpt = max(pc.fog_params.z, 0.001);
-        vec3 grass_col = multi_scale_albedo(grass, xz, grass_mpt, cam_dist);
-        // Broad meadow patches so the field is not a flat repeating stamp.
-        float meadow = 0.88 + 0.18 * vnoise(xz * 0.04);
-        float shade = 0.94 + 0.10 * vnoise(xz * 0.17 + 17.0);
-        lit = grass_col * meadow * shade;
+        // Earth meadow: dual-scale grass + one meadow patch tint.
+        vec3 grass_col = dual_scale_albedo(grass, v_uv, cam_dist);
+        float meadow = 0.90 + 0.14 * vnoise(xz * 0.035);
+        lit = grass_col * meadow;
     }
 
-    // Edge fog hides the finite plane rim (circular fade); altitude-independent so
-    // the ground under the rocket stays visible from any height.
-    float edge_start = clamp(pc.fog_params.x, 0.0, 0.999);
-    float fog = smoothstep(edge_start, 1.0, v_edge);
     out_color = vec4(mix(lit, pc.fog_color.rgb, fog), 1.0);
 }

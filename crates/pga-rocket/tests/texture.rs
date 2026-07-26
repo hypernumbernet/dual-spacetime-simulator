@@ -102,7 +102,7 @@ fn mip_level_count_for_256() {
 #[test]
 fn mip_chain_covers_full_pyramid() {
     let base = generate_grass_pixels_size(64);
-    let chain = generate_mip_chain(&base, 64, 64);
+    let chain = generate_mip_chain(base, 64, 64);
     assert_eq!(chain.len(), mip_level_count(64, 64) as usize);
     assert_eq!(chain[0].0, 64);
     assert_eq!(chain[0].1, 64);

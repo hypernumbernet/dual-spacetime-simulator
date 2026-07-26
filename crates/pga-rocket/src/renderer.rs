@@ -8,7 +8,7 @@ use crate::mesh::{
     grass_ground_mesh, ground_half_extent_for_eye_height, ground_plane_scale, rocket_mesh,
 };
 use crate::sim::RocketState;
-use crate::texture::{Texture, create_grass_texture, create_moon_texture, create_paved_texture};
+use crate::texture::{Texture, create_ground_textures};
 use ash::vk;
 use glam::{Mat4, Vec3};
 use gpu_allocator::vulkan::Allocator;
@@ -130,10 +130,8 @@ impl Renderer {
         let tri_pipeline = create_mesh_pipeline(&device, render_pass, mesh_layout);
         let fx_pipeline = create_fx_pipeline(&device, render_pass, mesh_layout);
 
-        // Grass + paved + moon textures and ground pipeline.
-        let grass = create_grass_texture(vb, &allocator);
-        let paved = create_paved_texture(vb, &allocator);
-        let moon = create_moon_texture(vb, &allocator);
+        // Grass + paved + moon in one queue submit (LINEAR + mips + aniso).
+        let (grass, paved, moon) = create_ground_textures(vb, &allocator);
 
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
