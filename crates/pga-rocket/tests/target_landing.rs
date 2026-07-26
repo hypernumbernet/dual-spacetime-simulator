@@ -217,6 +217,38 @@ fn target_descend_completes_without_hovering() {
 }
 
 #[test]
+fn moon_long_range_cruise_limits_overshoot() {
+    use pga_rocket::LONG_RANGE_CRUISE_ALT_M;
+
+    let mut state = RocketState::at_altitude(LONG_RANGE_CRUISE_ALT_M);
+    state.contacting = false;
+    state.moon_mode = true;
+    state.motor = motor_from_pose(-4000.0, LONG_RANGE_CRUISE_ALT_M, 0.0, 0.0, 0.0, 0.0);
+    state.velocity = [70.0, 0.0, 0.0];
+    let target = [0.0, 0.0];
+    let mut ap = TargetLandingAutopilot::default();
+    ap.enabled = true;
+    ap.phase = TargetPhase::Cruise;
+    let mut max_overshoot = 0.0_f64;
+    for _ in 0..90 * 120 {
+        if state.destroyed || ap.complete {
+            break;
+        }
+        let pos = state.position();
+        if pos[0] > target[0] + TARGET_PAD_HALF_M {
+            max_overshoot = max_overshoot.max(pos[0] - target[0]);
+        }
+        let cmd = ap.update(&state, target, DT);
+        state.set_command(cmd);
+        step_rocket(&mut state, DT);
+    }
+    assert!(
+        max_overshoot < 120.0,
+        "moon long-range approach should not overshoot far past pad, max_overshoot={max_overshoot}"
+    );
+}
+
+#[test]
 fn moon_high_speed_cruise_brake_holds_altitude() {
     let mut state = RocketState::at_altitude(500.0);
     state.contacting = false;

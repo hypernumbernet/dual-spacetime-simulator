@@ -225,21 +225,21 @@ X' = M X M~      (M~ は反転 reverse)
      [`slew_throttle`](src/fuzzy.rs) で非対称スプールしてから sim に渡す（Descend と同型）。
 
 1. **中距離 go / brake** — 物理予測停止距離 `d_stop = d_flip + d_burn`
-   - 計画 lean は実行天井 **`LEAN_BRAKE_MAX`（= [`LEAN_LONG_MAX`](src/target_landing.rs) 1.45 rad）** と同値。`a_lat = g·tan(θ)`（垂直中立）または
+   - 計画 lean は **`LEAN_BRAKE_MAX` を [`long_range_hold_cos`](src/fuzzy.rs) の高度保持上限で cap** した値（実行時の [`apply_cruise_alt_lean_cap`](src/target_landing.rs) と整合）。`a_lat = g·tan(θ)`（垂直中立）または
      **airplane 域 / Moon / vh≳20 m/s** では full-T 時 `(T/m)·thr·sin(θ)`。
-   - 二次抗力 `β = k/m`（Moon は `β=0`）。`d_burn = (1/2β) ln((a+βv²)/(a+βv_end²))`。
+   - 二次抗力 `β = k/m`（Moon は `β=0`、停止距離に **×1.15** の悲観係数）。
    - 減速時間 `t_decel` も同型の閉形式（`a_eff` 近似は廃止）。
-   - 姿勢反転 `d_flip = v·t_flip`（現姿勢→逆リーン aim の角度から √-profile で `t_flip`）。
+   - 姿勢反転 `d_flip = v·t_flip + ½·a_coast·t_flip²`（`a_coast` は go 側残推力の 50% を flip 中の前進距離として加算）。
    - **開始条件:** `range_eff ≤ d_stop + BRAKE_ENGAGE_MARGIN`（25 m 早め開始。ターミナル station-keep を除く）。
      幾何ヒステリシス `BRAKE_RELEASE_MARGIN` で go↔brake チャタを抑止。オーバーシュート（`v_approach < 0`）も即 brake。
    - **実行:** 高速時は `LEAN_BRAKE_MAX` 逆リーン + Moon / vh≳20 / airplane で full-T。
      減速後は [`cruise_brake_hardness`](src/fuzzy.rs)（vh 6→22 m/s 肩 + オーバーシュート）で
      lean・full-T・aim・rate-kill を連続減衰し、低速では直立寄り + soft PD で姿勢安定化。
    - **aim:** 高速は反速度ブレーキ、低速は upright とファジーブレンド（go/brake の離散選択は維持）。
-   - go 側の目標接近速度は同じ式の逆算（`allowed_approach_speed`、engage margin 込み）— ハード速度キャップなし。
+   - go 側の目標接近速度は同じ式の逆算（`allowed_approach_speed`、engage margin 込み）。**`v_approach > v_allow` の間は Airplane / go 加速を止め Coast で横速度を拘束。**
 
 2. **遠距離 airplane 巡航**（水平距離 ≳ 1.5 km）
-   - **優先順位:** 予測停止距離の外側ではフルスロットルでターゲット方向へ行く。高度は
+   - **優先順位:** 予測停止距離の外側ではフルスロットルでターゲット方向へ行くが、**`v_allow` 超過時は Coast で横速度を抑える**。高度は
      **pitch / lean（エレベータ）** のみ（推力床でロフトしない）。
    - `range_eff ≤ d_stop` に入った瞬間、airplane も **同じ物理ゲート**で逆リーンへ譲る
      （`is_long_range_cruise` は brake 中 false）。
