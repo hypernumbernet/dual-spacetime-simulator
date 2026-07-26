@@ -210,6 +210,10 @@ X' = M X M~      (M~ は反転 reverse)
      `ballistic_apogee = h + vy²/(2g) ≥ CLIMB_ALT_M`（500 m）で即 Cruise へ（過剰ロフト防止）。
 
 0.5. **Transit MPC（Cruise）** — 簡易 3DOF 前方ロールアウト + 候補サンプリング
+   - HUD / 左パネルの `Target (T)` は短いサブラベルを表示（幅 ≤14）:
+     `cruise/air` `cruise/go` `cruise/brake` `cruise/coast` `cruise/sink` `cruise/loft`、
+     ターミナル settle は `cruise/s-brake` `cruise/s-up` `cruise/s-trim`。
+     トップフェーズ（Climb / Cruise / Descend）は変更しない。
    - 状態: 位置・速度 + lean 1 次遅れ（`brake_flip_time` 相当）。推力は `(T/m)·thr·û`、
      二次抗力 `F=−k|v|v`、重力。Moon は `k=0`。
    - 候補: `CruiseGo` / `Brake` / `Coast` / `SinkGo` / `AirplaneHold`（低高度安全網として

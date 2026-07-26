@@ -736,6 +736,8 @@ impl TargetLandingAutopilot {
         self.lander.disable();
     }
 
+    /// Compact HUD / panel label. Cruise sub-regimes stay ≤14 chars so the
+    /// narrow left dock (`Target (T)` row) and top HUD do not wrap awkwardly.
     pub fn status_label(&self) -> &'static str {
         if !self.enabled {
             "off"
@@ -744,9 +746,33 @@ impl TargetLandingAutopilot {
         } else {
             match self.phase {
                 TargetPhase::Climb => "climb+go",
-                TargetPhase::Cruise => "cruise",
+                TargetPhase::Cruise => self.cruise_status_label(),
                 TargetPhase::Descend => "descend",
             }
+        }
+    }
+
+    /// Cruise soft-regime label (MPC hold / latches / terminal settle).
+    #[inline]
+    fn cruise_status_label(&self) -> &'static str {
+        // Terminal settle overrides transit MPC once inside the careful envelope.
+        if self.terminal_latched {
+            return match self.terminal_settle_phase {
+                TerminalSettlePhase::Brake => "cruise/s-brake",
+                TerminalSettlePhase::Upright => "cruise/s-up",
+                TerminalSettlePhase::Trim => "cruise/s-trim",
+            };
+        }
+        if self.brake_latched {
+            return "cruise/brake";
+        }
+        match self.mpc_hold {
+            TransitCandidate::AirplaneHold => "cruise/air",
+            TransitCandidate::CruiseGo => "cruise/go",
+            TransitCandidate::Brake => "cruise/brake",
+            TransitCandidate::Coast => "cruise/coast",
+            TransitCandidate::SinkGo => "cruise/sink",
+            TransitCandidate::LoftGo => "cruise/loft",
         }
     }
 
@@ -3271,6 +3297,59 @@ mod tests {
         assert!(!ap.complete);
         ap.disable();
         assert!(!ap.enabled);
+    }
+
+    #[test]
+    fn status_label_exposes_short_cruise_submodes() {
+        let mut ap = TargetLandingAutopilot::default();
+        assert_eq!(ap.status_label(), "off");
+        ap.enabled = true;
+        ap.phase = TargetPhase::Climb;
+        assert_eq!(ap.status_label(), "climb+go");
+        ap.phase = TargetPhase::Descend;
+        assert_eq!(ap.status_label(), "descend");
+
+        ap.phase = TargetPhase::Cruise;
+        ap.mpc_hold = TransitCandidate::AirplaneHold;
+        assert_eq!(ap.status_label(), "cruise/air");
+        ap.mpc_hold = TransitCandidate::CruiseGo;
+        assert_eq!(ap.status_label(), "cruise/go");
+        ap.mpc_hold = TransitCandidate::Coast;
+        assert_eq!(ap.status_label(), "cruise/coast");
+        ap.mpc_hold = TransitCandidate::SinkGo;
+        assert_eq!(ap.status_label(), "cruise/sink");
+        ap.mpc_hold = TransitCandidate::LoftGo;
+        assert_eq!(ap.status_label(), "cruise/loft");
+
+        ap.brake_latched = true;
+        assert_eq!(ap.status_label(), "cruise/brake");
+        ap.brake_latched = false;
+        ap.terminal_latched = true;
+        ap.terminal_settle_phase = TerminalSettlePhase::Brake;
+        assert_eq!(ap.status_label(), "cruise/s-brake");
+        ap.terminal_settle_phase = TerminalSettlePhase::Upright;
+        assert_eq!(ap.status_label(), "cruise/s-up");
+        ap.terminal_settle_phase = TerminalSettlePhase::Trim;
+        assert_eq!(ap.status_label(), "cruise/s-trim");
+
+        for label in [
+            "cruise/air",
+            "cruise/go",
+            "cruise/brake",
+            "cruise/coast",
+            "cruise/sink",
+            "cruise/loft",
+            "cruise/s-brake",
+            "cruise/s-up",
+            "cruise/s-trim",
+            "climb+go",
+            "descend",
+        ] {
+            assert!(
+                label.len() <= 14,
+                "HUD label too wide for narrow panel: {label}"
+            );
+        }
     }
 
     #[test]
