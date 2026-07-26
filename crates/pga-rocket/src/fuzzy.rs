@@ -857,9 +857,9 @@ pub fn cruise_brake_hardness(vh: f64, v_approach: f64, v_soft: f64, v_hard: f64)
 /// Minimum lean freedom at strict speeds (attitude-priority floor).
 pub const SETTLE_LEAN_FREEDOM_MIN: f64 = 0.30;
 /// Horizontal speed (m/s) below which settle lean stays at the strict floor.
-pub const SETTLE_LEAN_V_STRICT: f64 = 4.0;
+pub const SETTLE_LEAN_V_STRICT: f64 = 3.0;
 /// Horizontal speed (m/s) above which settle lean reaches full freedom.
-pub const SETTLE_LEAN_V_FREE: f64 = 60.0;
+pub const SETTLE_LEAN_V_FREE: f64 = 14.0;
 /// Brake lean-cap scale at minimum freedom (keeps residual decel authority).
 pub const SETTLE_LEAN_CAP_FLOOR_FRAC: f64 = 0.20;
 
@@ -886,6 +886,18 @@ pub fn settle_lean_freedom(vh: f64) -> f64 {
     let exp_a = SETTLE_LEAN_CURVE_ALPHA.exp();
     let curve = ((SETTLE_LEAN_CURVE_ALPHA * mu).exp() - 1.0) / (exp_a - 1.0);
     min_f + (1.0 - min_f) * curve
+}
+
+/// Urgency from remaining settle time — opens lean when position or speed are bottlenecks.
+#[inline]
+pub fn settle_urgency(t_pos: f64, t_vh: f64) -> f64 {
+    (t_pos / 3.0).clamp(0.0, 1.0).max((t_vh / 3.0).clamp(0.0, 1.0))
+}
+
+/// Effective lean freedom: speed-based floor opened by settle urgency.
+#[inline]
+pub fn settle_freedom_effective(vh: f64, t_pos: f64, t_vh: f64) -> f64 {
+    settle_lean_freedom(vh).max(settle_urgency(t_pos, t_vh))
 }
 
 /// Position/anti-v gain scale from freedom (floor → 1.0 at full).
@@ -1378,7 +1390,7 @@ mod tests {
         assert!((settle_lean_freedom(0.0) - SETTLE_LEAN_FREEDOM_MIN).abs() < 1e-9);
         assert!((settle_lean_freedom(SETTLE_LEAN_V_STRICT) - SETTLE_LEAN_FREEDOM_MIN).abs() < 1e-9);
         assert!((settle_lean_freedom(SETTLE_LEAN_V_FREE) - 1.0).abs() < 1e-9);
-        assert!((settle_lean_freedom(80.0) - 1.0).abs() < 1e-9);
+        assert!((settle_lean_freedom(20.0) - 1.0).abs() < 1e-9);
         let mid = settle_lean_freedom(8.0);
         let linear_mid = SETTLE_LEAN_FREEDOM_MIN + (1.0 - SETTLE_LEAN_FREEDOM_MIN) * 0.5;
         assert!(

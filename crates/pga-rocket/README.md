@@ -35,7 +35,7 @@ cargo test -p pga-rocket                 # 物理・制御・着陸の全テス�
 誘導は PGA の点として「パッド上空のロフトウェイポイント」を取り、CoM からの自由ベクトル
 変位で **上昇と水平移動を同時に** 行います。遠距離はフルスロットル＋ pitch エレベータで
 `LONG_CRUISE_ALT_M`（~520 m）を保持、中距離は Transit MPC と `d_stop` ブレーキ包絡線
-で減速し、ターミナル settle（Brake → Upright → Trim）で **~300 m まで降下しながら**
+で減速し、ターミナル settle（Brake | Align）で **~300 m まで降下しながら**
 姿勢・横速度を静かに整え、位置・姿勢が整い次第すみやかに最終降下（Descend）へ
 ハンドオフします。降下の後半（低高度）は位置微調整をせず
 直立＋ソフト接地にコミットします。**着陸成功（complete）**は描画パッド上への接地
@@ -212,7 +212,7 @@ X' = M X M~      (M~ は反転 reverse)
 0.5. **Transit MPC（Cruise）** — 簡易 3DOF 前方ロールアウト + 候補サンプリング
    - HUD / 左パネルの `Target (T)` は短いサブラベルを表示（幅 ≤14）:
      `cruise/air` `cruise/go` `cruise/brake` `cruise/coast` `cruise/sink` `cruise/loft`、
-     ターミナル settle は `cruise/s-brake` `cruise/s-up` `cruise/s-trim`。
+     ターミナル settle は `cruise/s-brake` `cruise/s-align`。
      トップフェーズ（Climb / Cruise / Descend）は変更しない。
    - 状態: 位置・速度 + lean 1 次遅れ（`brake_flip_time` 相当）。推力は `(T/m)·thr·û`、
      二次抗力 `F=−k|v|v`、重力。Moon は `k=0`。
@@ -264,25 +264,26 @@ X' = M X M~      (M~ は反転 reverse)
      `ω_py` ≤0.12 rad/s、`up_y` ≥0.95）。**高度はゲートしない** — 整い次第すみやかに Descend。
    - 進入は ~90 m、退出は ~140 m のヒステリシス。包絡内の motion/lean は
      [`careful_aggression(range)`](src/fuzzy.rs) で距離連続スケール（近い→**0.70**、遠い→**1.0**）。
-   - その手前の settle 制御は [`HandoffSettlePlan`](src/target_landing.rs) で
-     **クリアまでの残り時間**を物理予測:
+   - サブフェーズは **Brake | Align** の2相のみ。Brake 要否だけ離散＋ヒステリシス。
+   - [`HandoffSettlePlan`](src/target_landing.rs) で **クリアまでの残り時間**を物理予測:
      - `t_att`: 現 tilt → hand-off tilt（√-profile 反転時間 + レート減速）
      - `t_vh`: 残 `vh` → `VH_HANDOFF_MAX`（`a_lat ≈ g·tan(θ_lean)`、抗力込み）
      - `t_pos`: Chebyshev 残差 → `HANDOFF_CHEBY_MAX`（**Chebyshev 接近率**
-     `v_cheby` —  diverging 時は減速＋反転時間を加算）
+     `v_cheby` — diverging 時は減速＋反転時間を加算）
      - `t_settle = max(t_att, t_vh, t_pos)` — 大きいほど lean / aim ゲインを上げる。
    - lean 上限は固定 `LEAN_MID`/`LEAN_CRUISE` ではなく **物理逆算 + `LEAN_BRAKE_MAX`（= `LEAN_LONG_MAX` 1.45 rad）ソフト天井**。
+   - **Align 中の連続仲裁:** 姿勢拘束 `constraint = f(t_att, tilt, rate)` と
+     位置自由度 `freedom_eff = max(settle_lean_freedom(vh), settle_urgency(t_pos, t_vh))` から
+     `lean_auth = freedom_eff × (1 − constraint)`。固定 upright 待ち時間はなし。
    - `t_att` 支配時は aim を直立寄りにし、**スロットルを hover/cos 付近まで上げて
      ジンバルトルクを優先**（深リーン中の 0.35–0.55 上限は撤廃）。
-   - `t_settle ≈ 0`（閾値目前）だけ静かな lean に戻し、go↔brake チャタを抑える。
    - ターミナル域では `vh` 過大・オーバーシュート・Chebyshev 超過時に **逆リーン
      ブレーキ**を再投入。`a_stop = vh²/(2Δcheby)` から lean を逆算して位置収束を加速。
    - **姿勢 vs 減速の仲裁:** [`settle_lean_freedom(vh)`](src/fuzzy.rs) とその派生ヘルパ
      （`settle_motion_scale` / `settle_aim_blend` / `settle_brake_lean_scale` /
-     `settle_trim_rate_gate`）が横速 **3 m/s → 14 m/s** の肩で指数関数的に
+     `settle_trim_rate_gate` / `settle_freedom_effective`）が横速 **3 m/s → 14 m/s** の肩で
      **lean 自由度 0.3→1** を開く。定数は [`fuzzy.rs`](src/fuzzy.rs) に集約。
-     静かな姿勢（`t_att≈0`）では Upright 最低待ちを **0.25 s** に短縮（深リーン復帰後は 0.45 s）。
-     低速 Trim/Brake では lean 床を厳格化し aim を直立寄りにして振り子揺れを抑え、
+     低速 Align/Brake では `constraint` が aim を直立寄りにし振り子揺れを抑え、
      高速では既存の深リーン減速権威を維持する。
 
 3. **ターミナル Descend（パッド上・hand-off 後）**

@@ -15,7 +15,7 @@
 //! short-hop cruise cap). The climb apogee target soft-blends toward 480 m via
 //! [`long_range_weight`]. Same stop-distance gate hands off to reverse lean. Inside
 //! the terminal-settle envelope (enter ~90 m, exit ~140 m): sequenced
-//! Brake → Upright → Trim drives lean and throttle while sinking toward
+//! Brake | Align drives lean and throttle while sinking toward
 //! [`HANDOFF_ALT_M`] (~300 m). Hard AND gates (position / attitude only) arm
 //! [`TargetPhase::Descend`] via [`LandingAutopilot::update_target_descend`]
 //! (closed-loop suicide burn). Above [`h_freefall_m`] (Earth 6000 m / Moon 10000 m),
@@ -32,8 +32,9 @@ use crate::euclidean_pga::{motor_inverse_rotate_vector, world_up_in_body};
 use crate::fuzzy::{
     blend_vec3, careful_aggression, careful_terminal_latch, cruise_brake_hardness,
     freefall_overspeed_mu, long_range_go_aim, long_range_hold_cos, long_range_weight, ramp,
-    ramp_down, settle_aim_blend, settle_brake_lean_scale, settle_lean_freedom, settle_motion_scale,
-    settle_trim_rate_gate, slew_throttle, CruiseThrottleFuzzy, FreefallThrottleFuzzy,
+    ramp_down, settle_aim_blend, settle_brake_lean_scale, settle_freedom_effective,
+    settle_lean_freedom, settle_motion_scale, settle_trim_rate_gate, slew_throttle,
+    CruiseThrottleFuzzy, FreefallThrottleFuzzy,
     CAREFUL_NEAR_M, CAREFUL_RANGE_M, CAREFUL_TERMINAL_ENTER_M, LONG_CRUISE_ALT_M,
 };
 use crate::landing::{
@@ -84,20 +85,15 @@ const NEAR_HANDOFF_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M + 20.0;
 /// Chebyshev (m) beyond which terminal latch may release on range exit.
 const TERMINAL_EXIT_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M + 35.0;
 
-// --- Terminal settle (Brake → Upright → Trim) --------------------------------
-/// Upright attitude must hold this long (s) before terminal position trim.
-const UPRIGHT_STABLE_MIN_S: f64 = 0.45;
-/// Shorter upright hold when already quiet (no attitude recovery pending).
-const UPRIGHT_STABLE_QUIET_S: f64 = 0.25;
-/// Max pitch/yaw rate (rad/s) allowed before leaving Upright for Trim.
-const OMEGA_TRIM_ENTER: f64 = OMEGA_HANDOFF_MAX * 0.50;
-/// Inside this Chebyshev (m) with quiet vh, Trim holds upright (no chase).
-const TRIM_DEADZONE_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M * 0.60;
+// --- Terminal settle (Brake | Align) -----------------------------------------
+/// Attitude recovery horizon (s) for constraint ramp — no fixed upright wait.
+const T_ATT_STRICT_S: f64 = 0.8;
+/// Inside this Chebyshev (m) with quiet vh, Align holds upright (no chase).
+const ALIGN_DEADZONE_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M * 0.60;
 // Unscaled bases; runtime values multiply by distance-dependent aggression.
-const TRIM_LEAN_CAP_BASE: f64 = 0.15;
-const TRIM_LEAN_NEAR_BASE: f64 = 0.032;
-const TRIM_LEAN_STRICT_BASE: f64 = 0.018;
-const TRIM_V_CREEP_PER_M_BASE: f64 = 0.26;
+const ALIGN_LEAN_CAP_BASE: f64 = 0.15;
+const ALIGN_LEAN_NEAR_BASE: f64 = 0.032;
+const TRIM_V_CREEP_PER_M_BASE: f64 = 0.28;
 const TRIM_V_CREEP_MAX_BASE: f64 = 6.00;
 const TRIM_V_CREEP_MIN_BASE: f64 = 1.3;
 const CAREFUL_BRAKE_LEAN_SOFT_BASE: f64 = 0.22;
@@ -311,10 +307,7 @@ fn aim_slew_rate(
     terminal: bool,
     terminal_phase: Option<TerminalSettlePhase>,
 ) -> f64 {
-    if matches!(
-        terminal_phase,
-        Some(TerminalSettlePhase::Upright | TerminalSettlePhase::Trim)
-    ) {
+    if matches!(terminal_phase, Some(TerminalSettlePhase::Align)) {
         return AIM_SLEW_SOFT;
     }
     let authority = if terminal {
@@ -550,16 +543,14 @@ pub enum TargetPhase {
     Descend,
 }
 
-/// Sub-phase within cruise terminal settle (careful envelope): brake → upright → trim.
+/// Sub-phase within cruise terminal settle (careful envelope): brake | align.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum TerminalSettlePhase {
     /// Reverse lean to kill horizontal speed / overshoot.
     #[default]
     Brake,
-    /// Pure upright recovery — no position PD (kills pendulum sway).
-    Upright,
-    /// Small position trim once upright and stable.
-    Trim,
+    /// Continuous position + attitude alignment (constraint × freedom arbitration).
+    Align,
 }
 
 /// Autopilot that lands on a world-XZ pad mark (T key).
@@ -580,10 +571,8 @@ pub struct TargetLandingAutopilot {
     terminal_brake_latched: bool,
     /// Seconds the hand-off AND gates have been continuously satisfied.
     handoff_settle_s: f64,
-    /// Terminal settle sub-phase (Brake / Upright / Trim).
+    /// Terminal settle sub-phase (Brake / Align).
     terminal_settle_phase: TerminalSettlePhase,
-    /// Seconds upright gates have held during [`TerminalSettlePhase::Upright`].
-    upright_stable_s: f64,
     /// Held MPC candidate between replans (receding-horizon hysteresis).
     mpc_hold: TransitCandidate,
     mpc_hold_counter: u32,
@@ -613,7 +602,6 @@ impl Default for TargetLandingAutopilot {
             terminal_brake_latched: false,
             handoff_settle_s: 0.0,
             terminal_settle_phase: TerminalSettlePhase::Brake,
-            upright_stable_s: 0.0,
             mpc_hold: TransitCandidate::CruiseGo,
             mpc_hold_counter: MPC_REPLAN_EVERY,
             throttle_actuator: 0.0,
@@ -631,7 +619,6 @@ impl TargetLandingAutopilot {
         self.terminal_brake_latched = false;
         self.handoff_settle_s = 0.0;
         self.terminal_settle_phase = TerminalSettlePhase::Brake;
-        self.upright_stable_s = 0.0;
     }
 
     fn reset_transit_latches(&mut self) {
@@ -759,8 +746,7 @@ impl TargetLandingAutopilot {
         if self.terminal_latched {
             return match self.terminal_settle_phase {
                 TerminalSettlePhase::Brake => "cruise/s-brake",
-                TerminalSettlePhase::Upright => "cruise/s-up",
-                TerminalSettlePhase::Trim => "cruise/s-trim",
+                TerminalSettlePhase::Align => "cruise/s-align",
             };
         }
         if self.brake_latched {
@@ -883,7 +869,7 @@ impl TargetLandingAutopilot {
                 cmd
             }
             TargetPhase::Cruise => {
-                let (mut cmd, brake, terminal_brake, settle_phase, upright_s, mpc_hold, mpc_counter) =
+                let (mut cmd, brake, terminal_brake, settle_phase, mpc_hold, mpc_counter) =
                     transit_command(
                         state,
                         target_xz,
@@ -892,7 +878,6 @@ impl TargetLandingAutopilot {
                         self.terminal_latched,
                         self.terminal_brake_latched,
                         self.terminal_settle_phase,
-                        self.upright_stable_s,
                         self.mpc_hold,
                         self.mpc_hold_counter,
                         dt,
@@ -903,7 +888,6 @@ impl TargetLandingAutopilot {
                 self.brake_latched = brake;
                 self.terminal_brake_latched = terminal_brake;
                 self.terminal_settle_phase = settle_phase;
-                self.upright_stable_s = upright_s;
                 self.mpc_hold = mpc_hold;
                 self.mpc_hold_counter = mpc_counter;
                 cmd
@@ -1026,7 +1010,7 @@ fn kill_climb_vy(vy: f64) -> f64 {
 /// Never commands climb; above [`CRUISE_ALT_CAP`] (non-terminal) or
 /// [`HANDOFF_ALT_M`] (terminal settle) asks for a gentle sink.
 /// `terminal`: inside the settle envelope, sink toward [`HANDOFF_ALT_M`]
-/// while Brake → Upright → Trim adjusts position and attitude in parallel.
+/// while Brake | Align adjusts position and attitude in parallel.
 #[inline]
 fn cruise_v_des_y(alt: f64, vy: f64, terminal: bool) -> f64 {
     let sink = if terminal {
@@ -2145,7 +2129,17 @@ struct TerminalSettleOutput {
     lean_max: f64,
     terminal_brake_latch: bool,
     phase: TerminalSettlePhase,
-    upright_stable_s: f64,
+    /// Attitude constraint (0 = free to trim, 1 = upright priority).
+    constraint: f64,
+}
+
+/// Attitude constraint for Align: upright priority when tilt/rate or `t_att` demand recovery.
+#[inline]
+fn settle_attitude_constraint(hp: HandoffSettlePlan, up_y: f64, omega_py: f64) -> f64 {
+    let t_att_c = smoothstep01(hp.t_att / T_ATT_STRICT_S);
+    let tilt_c = ramp_down(up_y, COS_TILT_HANDOFF - 0.08, COS_TILT_HANDOFF);
+    let rate_c = ramp(omega_py, OMEGA_HANDOFF_MAX * 0.5, OMEGA_HANDOFF_MAX);
+    t_att_c.max(tilt_c).max(rate_c).clamp(0.0, 1.0)
 }
 
 /// "Too fast for here" speed: creep target plus margin, so a hot arrival
@@ -2164,72 +2158,31 @@ fn terminal_needs_brake(
     v_approach: f64,
     vh_hot: f64,
 ) -> bool {
-    // Terminal is always inside [`CAREFUL_RANGE_M`]: prefer Trim unless clearly too fast.
+    // Terminal is always inside [`CAREFUL_RANGE_M`]: prefer Align unless clearly too fast.
     vh > vh_hot
         || v_cheby < -0.70
         || v_approach < -2.5
         || (brake_latched && brake_w > 0.55 && vh > VH_HANDOFF_MAX)
 }
 
-/// Advance terminal settle sub-phase (Brake → Upright → Trim loop).
+/// Advance terminal settle sub-phase (Brake | Align).
 fn update_terminal_settle_phase(
     phase: TerminalSettlePhase,
-    upright_stable_s: f64,
-    dt: f64,
-    up_y: f64,
-    omega_py: f64,
     brake_w: f64,
     brake_latched: bool,
     v_cheby: f64,
     vh: f64,
     v_approach: f64,
-    t_att: f64,
     vh_hot: f64,
-) -> (TerminalSettlePhase, f64) {
-    // Stricter than hand-off: Trim must not start while still rocking.
-    let needs_upright = up_y < COS_TILT_HANDOFF
-        || omega_py > OMEGA_TRIM_ENTER
-        || t_att > 0.05;
+) -> TerminalSettlePhase {
     let needs_brake =
         terminal_needs_brake(brake_w, brake_latched, v_cheby, vh, v_approach, vh_hot);
-
     match phase {
-        TerminalSettlePhase::Brake => {
-            // Always damp brake lean through Upright — never skip to Trim.
+        TerminalSettlePhase::Brake | TerminalSettlePhase::Align => {
             if needs_brake {
-                (TerminalSettlePhase::Brake, 0.0)
+                TerminalSettlePhase::Brake
             } else {
-                (TerminalSettlePhase::Upright, 0.0)
-            }
-        }
-        TerminalSettlePhase::Upright => {
-            if needs_brake {
-                (TerminalSettlePhase::Brake, 0.0)
-            } else if needs_upright {
-                (TerminalSettlePhase::Upright, 0.0)
-            } else {
-                let stable = upright_stable_s + dt;
-                let upright_min = if t_att <= 0.02 && omega_py <= OMEGA_TRIM_ENTER {
-                    UPRIGHT_STABLE_QUIET_S
-                } else {
-                    UPRIGHT_STABLE_MIN_S
-                };
-                if stable >= upright_min {
-                    (TerminalSettlePhase::Trim, 0.0)
-                } else {
-                    (TerminalSettlePhase::Upright, stable)
-                }
-            }
-        }
-        TerminalSettlePhase::Trim => {
-            // Hysteresis: only leave Trim for clear attitude upset, not micro-tilt.
-            let upset = up_y < COS_TILT_HANDOFF - 0.02 || omega_py > OMEGA_HANDOFF_MAX;
-            if upset {
-                (TerminalSettlePhase::Upright, 0.0)
-            } else if needs_brake {
-                (TerminalSettlePhase::Brake, 0.0)
-            } else {
-                (TerminalSettlePhase::Trim, upright_stable_s)
+                TerminalSettlePhase::Align
             }
         }
     }
@@ -2326,8 +2279,8 @@ fn terminal_brake_aim(
     ([aim_x, AIM_Y_BIAS, aim_z], lean)
 }
 
-/// Trim-phase aim: slow creep with tiny lean — never chase transit `v_allow`.
-fn terminal_trim_aim(
+/// Align-phase aim: slow creep with lean authority scaled by constraint × freedom.
+fn terminal_align_aim(
     ux: f64,
     uz: f64,
     vx: f64,
@@ -2336,17 +2289,15 @@ fn terminal_trim_aim(
     cheby: f64,
     v_cheby: f64,
     omega_py: f64,
-    freedom: f64,
+    lean_auth: f64,
     aggression: f64,
 ) -> ([f64; 3], f64) {
-    // Quiet and already in the hand-off box: hold upright. Must sit below the
-    // centered arm branch's vh bound — holding upright at a higher vh would
-    // freeze the deceleration right where arming needs it quiet.
-    if cheby <= TRIM_DEADZONE_CHEBY_M
-        && vh <= VH_HANDOFF_MAX * 0.12
+    // Quiet and already in the hand-off box: hold upright.
+    if cheby <= ALIGN_DEADZONE_CHEBY_M
+        && vh <= VH_HANDOFF_MAX * 0.85
         && v_cheby > -0.08
     {
-        return ([0.0, 1.0, 0.0], careful(0.02, aggression));
+        return ([0.0, 1.0, 0.0], careful(0.02, aggression) * lean_auth.max(0.01));
     }
 
     let v_creep = trim_creep_speed(cheby, aggression);
@@ -2355,16 +2306,15 @@ fn terminal_trim_aim(
 
     let dist_scale = (cheby / CAREFUL_RANGE_M).clamp(0.10, 1.0);
     let rate_gate_base = (1.0 - (omega_py / OMEGA_HANDOFF_MAX).clamp(0.0, 1.0)).powi(2);
-    let rate_gate = settle_trim_rate_gate(rate_gate_base, freedom);
-    let lean_near = careful(TRIM_LEAN_NEAR_BASE, aggression);
-    let lean_far = careful(TRIM_LEAN_CAP_BASE, aggression);
+    let rate_gate = settle_trim_rate_gate(rate_gate_base, lean_auth.clamp(0.0, 1.0));
+    let lean_near = careful(ALIGN_LEAN_NEAR_BASE, aggression);
+    let lean_far = careful(ALIGN_LEAN_CAP_BASE, aggression);
     let lean_dist = lean_near + (lean_far - lean_near) * dist_scale;
-    let lean_strict = careful(TRIM_LEAN_STRICT_BASE, aggression);
-    let lean_cap = (lean_strict + (lean_dist - lean_strict) * freedom) * rate_gate;
+    let lean_cap = lean_dist * rate_gate * lean_auth.clamp(0.0, 1.0);
 
-    let gain_scale = settle_motion_scale(freedom);
-    let k_vel = careful(0.38 + 0.12 * dist_scale, aggression) * gain_scale;
-    let k_pos = careful(0.008 * dist_scale, aggression) * gain_scale;
+    let motion = settle_motion_scale(lean_auth.clamp(0.0, 1.0));
+    let k_vel = careful(0.38 + 0.12 * dist_scale, aggression) * motion;
+    let k_pos = careful(0.008 * dist_scale, aggression) * motion;
     let a_req_x = k_pos * ux * cheby + k_vel * err_vx;
     let a_req_z = k_pos * uz * cheby + k_vel * err_vz;
     let a_lat = (a_req_x * a_req_x + a_req_z * a_req_z).sqrt();
@@ -2378,12 +2328,12 @@ fn terminal_trim_aim(
         aim_scale * (uz * 0.30 + err_vz / v_ref),
     ];
     let upright = [0.0, 1.0, 0.0];
-    let blended = blend_vec3(upright, pos_aim, settle_aim_blend(freedom));
+    let blended = blend_vec3(upright, pos_aim, settle_aim_blend(lean_auth.clamp(0.0, 1.0)));
 
     (blended, lean)
 }
 
-/// Sequenced terminal settle: Brake → Upright → Trim (no simultaneous pos+att blend).
+/// Terminal settle: Brake | Align with continuous constraint × freedom arbitration.
 fn terminal_settle_aim(
     hp: HandoffSettlePlan,
     ux: f64,
@@ -2401,8 +2351,6 @@ fn terminal_settle_aim(
     brake_mode: LateralThrMode,
     terminal_brake_latched: bool,
     phase: TerminalSettlePhase,
-    upright_stable_s: f64,
-    dt: f64,
     up_y: f64,
     omega_py: f64,
     aggression: f64,
@@ -2412,22 +2360,20 @@ fn terminal_settle_aim(
     let (brake_w, new_latch) =
         terminal_brake_blend(v_cheby, vh, v_approach, cheby, terminal_brake_latched, vh_hot);
 
-    let freedom = settle_lean_freedom(vh);
-
-    let (phase, upright_stable_s) = update_terminal_settle_phase(
+    let phase = update_terminal_settle_phase(
         phase,
-        upright_stable_s,
-        dt,
-        up_y,
-        omega_py,
         brake_w,
         new_latch,
         v_cheby,
         vh,
         v_approach,
-        hp.t_att,
         vh_hot,
     );
+
+    let constraint = settle_attitude_constraint(hp, up_y, omega_py);
+    let freedom_eff = settle_freedom_effective(vh, hp.t_pos, hp.t_vh);
+    let lean_auth = freedom_eff * (1.0 - constraint);
+    let freedom = settle_lean_freedom(vh);
 
     let (desired_raw, lean_max) = match phase {
         TerminalSettlePhase::Brake => {
@@ -2453,11 +2399,19 @@ fn terminal_settle_aim(
             );
             (d, lean)
         }
-        TerminalSettlePhase::Upright => ([0.0, 1.0, 0.0], 0.0),
-        TerminalSettlePhase::Trim => {
-            let (d, lean) =
-                terminal_trim_aim(ux, uz, vx, vz, vh, cheby, v_cheby, omega_py, freedom, aggression);
-            (d, lean)
+        TerminalSettlePhase::Align => {
+            terminal_align_aim(
+                ux,
+                uz,
+                vx,
+                vz,
+                vh,
+                cheby,
+                v_cheby,
+                omega_py,
+                lean_auth,
+                aggression,
+            )
         }
     };
 
@@ -2466,7 +2420,7 @@ fn terminal_settle_aim(
         lean_max,
         terminal_brake_latch: new_latch,
         phase,
-        upright_stable_s,
+        constraint,
     }
 }
 
@@ -2501,6 +2455,7 @@ fn smoothstep01(t: f64) -> f64 {
 fn terminal_settle_throttle(
     phase: TerminalSettlePhase,
     quiet: bool,
+    constraint: f64,
     hover: f64,
     _hover_cmd: f64,
     up_y: f64,
@@ -2510,16 +2465,15 @@ fn terminal_settle_throttle(
     t_motion: f64,
 ) -> f64 {
     match phase {
-        TerminalSettlePhase::Upright => {
-            let tilt_cap = hover * (0.92 + 0.06 * up_y.clamp(0.70, 1.0));
-            (hover + 0.08 * effort).clamp(tilt_cap * 0.96, (hover + 0.04).min(0.78))
-        }
-        TerminalSettlePhase::Trim => {
-            let t_trim = hover * (0.96 + 0.03 * up_y.clamp(0.90, 1.0));
+        TerminalSettlePhase::Align => {
+            let t_align = hover * (0.96 + 0.03 * up_y.clamp(0.90, 1.0));
+            let t_upright = hover * (0.92 + 0.06 * up_y.clamp(0.70, 1.0));
+            let t_target = t_upright + (1.0 - constraint) * (t_align - t_upright);
             if quiet {
-                t_hold.clamp(t_trim * 0.97, t_trim + 0.02)
+                t_hold.clamp(t_target * 0.97, t_target + 0.02)
             } else {
-                t_hold.clamp(t_trim * 0.95, t_trim + 0.03)
+                let effort_boost = constraint * 0.08 * effort;
+                (t_hold + effort_boost).clamp(t_target * 0.95, t_target + 0.03)
             }
         }
         TerminalSettlePhase::Brake => {
@@ -2711,7 +2665,6 @@ fn transit_command(
     terminal_latched: bool,
     terminal_brake_latched: bool,
     terminal_settle_phase: TerminalSettlePhase,
-    upright_stable_s: f64,
     mpc_hold: TransitCandidate,
     mpc_hold_counter: u32,
     dt: f64,
@@ -2722,7 +2675,6 @@ fn transit_command(
     bool,
     bool,
     TerminalSettlePhase,
-    f64,
     TransitCandidate,
     u32,
 ) {
@@ -2884,8 +2836,6 @@ fn transit_command(
             brake_mode,
             terminal_brake_latched,
             terminal_settle_phase,
-            upright_stable_s,
-            dt,
             up_y,
             omega_py,
             aggression,
@@ -2986,7 +2936,7 @@ fn transit_command(
     let brake_soft_from_h = cruise_brake.as_ref().map(|c| c.soft_att).unwrap_or(false);
     let soft_att = matches!(
         terminal_settle_out.map(|o| o.phase),
-        Some(TerminalSettlePhase::Upright | TerminalSettlePhase::Trim)
+        Some(TerminalSettlePhase::Align)
     ) || (brake && !terminal && brake_soft_from_h);
     let brake_aggressive_att = brake && !terminal && brake_agg_from_h;
     let (pitch, yaw, roll, up_y) =
@@ -3032,6 +2982,7 @@ fn transit_command(
         terminal_settle_throttle(
             settle.phase,
             quiet,
+            settle.constraint,
             hover,
             hover_cmd,
             up_y,
@@ -3075,10 +3026,7 @@ fn transit_command(
     let out_phase = terminal_settle_out
         .map(|o| o.phase)
         .unwrap_or(terminal_settle_phase);
-    let out_upright_s = terminal_settle_out
-        .map(|o| o.upright_stable_s)
-        .unwrap_or(upright_stable_s);
-    (cmd, brake, terminal_brake_out, out_phase, out_upright_s, mpc_out_hold, mpc_out_counter)
+    (cmd, brake, terminal_brake_out, out_phase, mpc_out_hold, mpc_out_counter)
 }
 
 /// Attitude PD toward a world-frame desired body +Y via PGA inverse transport.
@@ -3327,10 +3275,8 @@ mod tests {
         ap.terminal_latched = true;
         ap.terminal_settle_phase = TerminalSettlePhase::Brake;
         assert_eq!(ap.status_label(), "cruise/s-brake");
-        ap.terminal_settle_phase = TerminalSettlePhase::Upright;
-        assert_eq!(ap.status_label(), "cruise/s-up");
-        ap.terminal_settle_phase = TerminalSettlePhase::Trim;
-        assert_eq!(ap.status_label(), "cruise/s-trim");
+        ap.terminal_settle_phase = TerminalSettlePhase::Align;
+        assert_eq!(ap.status_label(), "cruise/s-align");
 
         for label in [
             "cruise/air",
@@ -3340,8 +3286,7 @@ mod tests {
             "cruise/sink",
             "cruise/loft",
             "cruise/s-brake",
-            "cruise/s-up",
-            "cruise/s-trim",
+            "cruise/s-align",
             "climb+go",
             "descend",
         ] {
@@ -4278,103 +4223,61 @@ mod tests {
     }
 
     #[test]
-    fn terminal_settle_brake_releases_to_upright_when_tilted() {
+    fn terminal_settle_brake_releases_to_align_when_quiet() {
         let phase = update_terminal_settle_phase(
             TerminalSettlePhase::Brake,
             0.0,
-            1.0 / 120.0,
-            0.88,
-            0.05,
-            0.0,
             false,
             0.5,
             2.0,
             1.0,
-            0.0,
             VH_HANDOFF_MAX * 1.35,
         );
-        assert_eq!(phase.0, TerminalSettlePhase::Upright);
+        assert_eq!(phase, TerminalSettlePhase::Align);
     }
 
     #[test]
-    fn terminal_settle_brake_always_enters_upright() {
+    fn terminal_settle_brake_always_enters_align() {
         let phase = update_terminal_settle_phase(
             TerminalSettlePhase::Brake,
             0.0,
-            1.0 / 120.0,
-            0.98,
-            0.05,
-            0.0,
             false,
             0.5,
             2.0,
             1.0,
-            0.0,
             VH_HANDOFF_MAX * 1.35,
         );
-        assert_eq!(phase.0, TerminalSettlePhase::Upright);
+        assert_eq!(phase, TerminalSettlePhase::Align);
     }
 
     #[test]
-    fn terminal_settle_upright_holds_before_trim() {
+    fn terminal_settle_align_reenters_brake_when_hot() {
         let phase = update_terminal_settle_phase(
-            TerminalSettlePhase::Upright,
-            0.0,
-            0.05,
-            0.98,
-            OMEGA_TRIM_ENTER * 0.5,
+            TerminalSettlePhase::Align,
             0.0,
             false,
             0.5,
-            2.0,
+            VH_HANDOFF_MAX * 2.0,
             1.0,
-            0.0,
             VH_HANDOFF_MAX * 1.35,
         );
-        assert_eq!(phase.0, TerminalSettlePhase::Upright);
-        assert!(phase.1 > 0.0, "upright stable timer should accumulate");
+        assert_eq!(phase, TerminalSettlePhase::Brake);
     }
 
     #[test]
-    fn terminal_settle_upright_holds_while_rate_above_trim_enter() {
-        let phase = update_terminal_settle_phase(
-            TerminalSettlePhase::Upright,
-            UPRIGHT_STABLE_MIN_S,
-            0.02,
-            0.98,
-            OMEGA_TRIM_ENTER + 0.01,
-            0.0,
-            false,
-            0.5,
-            2.0,
-            1.0,
-            0.0,
-            VH_HANDOFF_MAX * 1.35,
-        );
-        assert_eq!(phase.0, TerminalSettlePhase::Upright);
+    fn settle_attitude_constraint_high_when_tilted() {
+        let hp = HandoffSettlePlan {
+            t_att: 0.0,
+            t_vh: 0.0,
+            t_pos: 0.0,
+            t_settle: 0.0,
+        };
+        let c = settle_attitude_constraint(hp, 0.88, 0.05);
+        assert!(c > 0.5, "tilted rocket should constrain align, c={c}");
     }
 
     #[test]
-    fn terminal_settle_upright_advances_to_trim_after_stable() {
-        let phase = update_terminal_settle_phase(
-            TerminalSettlePhase::Upright,
-            UPRIGHT_STABLE_QUIET_S - 0.01,
-            0.02,
-            0.98,
-            OMEGA_TRIM_ENTER * 0.5,
-            0.0,
-            false,
-            0.5,
-            2.0,
-            1.0,
-            0.0,
-            VH_HANDOFF_MAX * 1.35,
-        );
-        assert_eq!(phase.0, TerminalSettlePhase::Trim);
-    }
-
-    #[test]
-    fn terminal_upright_aim_is_pure_vertical() {
+    fn terminal_align_high_constraint_suppresses_lateral() {
         let mut state = RocketState::at_altitude(500.0);
         state.contacting = false;
         state.velocity = [-0.8, 0.0, 0.0];
@@ -4407,29 +4310,22 @@ mod tests {
             state.params.max_thrust,
             LateralThrMode::VerticalNeutral,
             false,
-            TerminalSettlePhase::Upright,
-            0.0,
-            1.0 / 120.0,
+            TerminalSettlePhase::Align,
             world_up_in_body(&state.motor)[1],
             0.08,
             careful_aggression(CAREFUL_NEAR_M),
             [0.0, 1.0, 0.0],
         );
-        assert_eq!(out.phase, TerminalSettlePhase::Upright);
+        assert_eq!(out.phase, TerminalSettlePhase::Align);
         assert!(
-            out.desired_raw[0].abs() + out.desired_raw[2].abs() < 1e-6,
-            "upright phase must not command lateral aim, got {:?}",
-            out.desired_raw
-        );
-        assert!(
-            out.lean_max <= 1e-6,
-            "upright lean cap should be zero, lean={}",
-            out.lean_max
+            out.constraint > 0.25,
+            "tilted align should be attitude-constrained, c={}",
+            out.constraint
         );
     }
 
     #[test]
-    fn terminal_trim_deadzone_holds_upright() {
+    fn terminal_align_deadzone_holds_upright() {
         let mut state = RocketState::at_altitude(500.0);
         state.contacting = false;
         state.velocity = [-0.3, 0.0, 0.0];
@@ -4461,28 +4357,25 @@ mod tests {
             state.params.max_thrust,
             LateralThrMode::VerticalNeutral,
             false,
-            TerminalSettlePhase::Trim,
-            0.0,
-            1.0 / 120.0,
+            TerminalSettlePhase::Align,
             1.0,
             0.02,
             careful_aggression(CAREFUL_NEAR_M),
             [0.0, 1.0, 0.0],
         );
-        assert_eq!(out.phase, TerminalSettlePhase::Trim);
+        assert_eq!(out.phase, TerminalSettlePhase::Align);
         assert!(
             out.desired_raw[0].abs() + out.desired_raw[2].abs() < 1e-6,
-            "deadzone trim must hold upright, aim={:?}",
+            "deadzone align must hold upright, aim={:?}",
             out.desired_raw
         );
     }
 
     #[test]
-    fn terminal_trim_allows_small_position_lean() {
+    fn terminal_align_allows_small_position_lean() {
         let mut state = RocketState::at_altitude(500.0);
         state.contacting = false;
         state.velocity = [-0.2, 0.0, 0.0];
-        // Outside deadzone so trim must nudge toward the pad.
         state.motor = crate::euclidean_pga::motor_from_pose(512.0, 500.0, 0.0, 0.0, 0.0, 0.0);
         let pos = state.position();
         let v_cheby = chebyshev_closing_rate(pos, [500.0, 0.0], state.velocity);
@@ -4512,39 +4405,34 @@ mod tests {
             state.params.max_thrust,
             LateralThrMode::VerticalNeutral,
             false,
-            TerminalSettlePhase::Trim,
-            0.0,
-            1.0 / 120.0,
+            TerminalSettlePhase::Align,
             1.0,
             0.02,
             careful_aggression(80.0),
             [0.0, 1.0, 0.0],
         );
-        assert_eq!(out.phase, TerminalSettlePhase::Trim);
+        assert_eq!(out.phase, TerminalSettlePhase::Align);
         assert!(
             out.desired_raw[0].abs() > 0.005,
-            "trim should nudge toward pad, aim={:?}",
+            "align should nudge toward pad, aim={:?}",
             out.desired_raw
         );
         let agg = careful_aggression(80.0);
         assert!(
-            out.lean_max <= careful(TRIM_LEAN_CAP_BASE, agg) + 1e-6,
-            "trim lean must stay capped, lean={}",
-            out.lean_max
-        );
-        assert!(
-            out.lean_max < careful(TRIM_LEAN_STRICT_BASE, agg) + 0.012,
-            "low-vh trim must stay near strict floor, lean={}",
+            out.lean_max <= careful(ALIGN_LEAN_CAP_BASE, agg) + 1e-6,
+            "align lean must stay capped, lean={}",
             out.lean_max
         );
     }
 
     #[test]
-    fn terminal_trim_lean_freedom_opens_at_speed() {
+    fn terminal_align_lean_auth_opens_at_speed() {
         let agg = careful_aggression(80.0);
         let cheby = 30.0;
         let omega = 0.02;
-        let (_, lean_slow) = terminal_trim_aim(
+        let auth_slow = settle_freedom_effective(4.0, 0.0, 0.0) * (1.0 - 0.0);
+        let auth_fast = settle_freedom_effective(14.0, 0.0, 0.0) * (1.0 - 0.0);
+        let (_, lean_slow) = terminal_align_aim(
             -1.0,
             0.0,
             -0.5,
@@ -4553,24 +4441,24 @@ mod tests {
             cheby,
             4.0,
             omega,
-            settle_lean_freedom(4.0),
+            auth_slow,
             agg,
         );
-        let (_, lean_fast) = terminal_trim_aim(
+        let (_, lean_fast) = terminal_align_aim(
             -1.0,
             0.0,
-            -30.0,
+            -14.0,
             0.0,
-            55.0,
+            14.0,
             cheby,
-            55.0,
+            14.0,
             omega,
-            settle_lean_freedom(55.0),
+            auth_fast,
             agg,
         );
         assert!(
             lean_slow < lean_fast,
-            "trim lean must open with vh: slow={lean_slow} fast={lean_fast}"
+            "align lean must open with lean_auth: slow={lean_slow} fast={lean_fast}"
         );
     }
 
@@ -4644,7 +4532,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_trim_creep_slower_than_handoff_speed() {
+    fn terminal_align_creep_slower_than_handoff_speed() {
         let agg_near = careful_aggression(CAREFUL_NEAR_M);
         let agg_mid = careful_aggression(80.0);
         let v8 = trim_creep_speed(8.0, agg_near);
@@ -4680,22 +4568,27 @@ mod tests {
     }
 
     #[test]
-    fn terminal_trim_returns_to_upright_when_tilted() {
+    fn terminal_align_constraint_rises_when_tilted() {
+        let hp = HandoffSettlePlan {
+            t_att: 0.0,
+            t_vh: 0.0,
+            t_pos: 0.0,
+            t_settle: 0.0,
+        };
         let phase = update_terminal_settle_phase(
-            TerminalSettlePhase::Trim,
-            0.0,
-            1.0 / 120.0,
-            0.90,
-            0.05,
+            TerminalSettlePhase::Align,
             0.0,
             false,
             0.5,
             1.0,
             0.5,
-            0.0,
             VH_HANDOFF_MAX * 1.35,
         );
-        assert_eq!(phase.0, TerminalSettlePhase::Upright);
+        assert_eq!(phase, TerminalSettlePhase::Align);
+        assert!(
+            settle_attitude_constraint(hp, 0.90, 0.05) > 0.3,
+            "tilt should raise constraint without leaving Align"
+        );
     }
 
     #[test]
