@@ -42,7 +42,7 @@ cargo test -p pga-rocket                 # 物理・制御・着陸の全テス�
 （半辺 **30 m**、`TARGET_PAD_HALF_M`）。内側 Chebyshev 箱（半辺 **12 m**、
 `TARGET_SUCCESS_HALF_M`）は誘導・hand-off の目標であり、complete には不要です。
 Descend へのアームはパッド上空で横速度・姿勢が静かになったときの **離散 AND ゲート**
-（高度条件なし。L とその場着陸と相互排他）。
+（高度 150–600 m でエンベロープ緩和。高度自体は進入条件ではない。L とその場着陸と相互排他）。
 ファジー層の役割は後述「ファジー制御」を参照。
 
 ## モジュール構成
@@ -265,8 +265,11 @@ X' = M X M~      (M~ は反転 reverse)
    - **ラッチ進入（早期）:** lofted かつ **`range_eff ≤ d_stop + BRAKE_ENGAGE_MARGIN`**（ブレーキ開始と同時）**または** `range ≤ 300 m`（`CAREFUL_TERMINAL_ENTER_M`）。退出は **400 m**（`CAREFUL_TERMINAL_EXIT_M`）+ Chebyshev 退出。
    - **Climb は切らない:** 早期ラッチだけでは `near_handoff` 軟床（260 m で Cruise 移行）に入らない。フルスロットル Climb はゲート／弾道アポジまで継続。
    - **fine settle:** ラッチ後も Chebyshev **> 80 m**（`RANGE_FAR_M`）の間は mid-range **go/`d_stop` ブレーキを維持**（HUD も `cruise/go|brake`）。Chebyshev **≤ 80 m** で初めて Brake|Align（`cruise/s-*`）一本化。
-   - **アーム条件は離散 AND のまま**（Chebyshev ≤10 m、`vh` ≤4.0 m/s、
-     `ω_py` ≤0.12 rad/s、`up_y` ≥0.95）。**高度はゲートしない** — 整い次第すみやかに Descend。
+   - **アーム条件は離散 AND**（Chebyshev / `vh` / `ω_py` / `up_y` / ドリフト枝）。
+     **高度 150 m 以下は厳格**（Chebyshev ≤10 m、`vh` ≤4.0 m/s、`ω_py` ≤0.12 rad/s、
+     `up_y` ≥0.95）。**600 m 以上で緩和**（Chebyshev ≤20 m、`vh` ≤7.0 m/s、
+     `ω_py` ≤0.20 rad/s、`up_y` ≥0.90、ドリフト予算も拡大）。**高度自体は進入ゲートではない**
+     — 整い次第すみやかに Descend。
    - fine settle 内の motion/lean スケールは **`careful_aggression = 1.0` 固定**。mid-range のみ
      [`careful_aggression(range)`](src/fuzzy.rs)（近い→**0.70**、遠い→**1.0**）。
    - サブフェーズは **Brake | Align** の2相のみ。静かな進入は **Align から開始**、

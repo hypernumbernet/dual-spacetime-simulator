@@ -16,7 +16,8 @@
 //! [`long_range_weight`]. Same stop-distance gate hands off to reverse lean. Inside
 //! the terminal-settle envelope (enter ~140 m, exit ~200 m): sequenced
 //! Brake | Align drives lean and throttle while sinking toward
-//! [`HANDOFF_ALT_M`] (~300 m). Hard AND gates (position / attitude only) arm
+//! [`HANDOFF_ALT_M`] (~300 m). Altitude-scaled AND gates (position / attitude;
+//! strict ≤150 m, relaxed ≥600 m via [`handoff_envelope`]) arm
 //! [`TargetPhase::Descend`] via [`LandingAutopilot::update_target_descend`]
 //! (closed-loop suicide burn). Above [`h_freefall_m`] (Earth 6000 m / Moon 10000 m),
 //! transit flies a nose-down **dive** (full-T acceleration toward ground / pad)
@@ -78,6 +79,24 @@ const HANDOFF_DRIFT_CLOSING_M: f64 = 12.0;
 /// Max predicted touchdown miss (m) for the closing-branch arm (half of the
 /// ±12 m inner guidance box, leaving room for cross-track drift).
 const HANDOFF_MISS_MAX_M: f64 = 6.0;
+/// Altitude (m) at the low end of the hand-off envelope — strict pad values.
+const HANDOFF_ENV_ALT_LO_M: f64 = 150.0;
+/// Altitude (m) at the high end — full relaxation for high-altitude arm.
+const HANDOFF_ENV_ALT_HI_M: f64 = 600.0;
+/// High-altitude ceiling for Chebyshev arm gate (m).
+const HANDOFF_CHEBY_MAX_HI_M: f64 = 20.0;
+/// High-altitude ceiling for horizontal speed arm gate (m/s).
+const VH_HANDOFF_MAX_HI: f64 = 7.0;
+/// High-altitude ceiling for pitch/yaw rate arm gate (rad/s).
+const OMEGA_HANDOFF_MAX_HI: f64 = 0.20;
+/// High-altitude floor for body-up · world-up arm gate (~0.46 rad tilt).
+const COS_TILT_HANDOFF_HI: f64 = 0.90;
+/// High-altitude drift budget (m) for the near-pad arm branch.
+const HANDOFF_DRIFT_NEAR_HI_M: f64 = 16.0;
+/// High-altitude drift budget (m) for the closing arm branch.
+const HANDOFF_DRIFT_CLOSING_HI_M: f64 = 20.0;
+/// High-altitude predicted-miss ceiling (m) for the closing arm branch.
+const HANDOFF_MISS_MAX_HI_M: f64 = 12.0;
 /// Target altitude (m) during terminal settle — sink while trimming position/attitude.
 pub const HANDOFF_ALT_M: f64 = 300.0;
 /// Near-handoff loft floor (m) — stay in Cruise while settling over the pad.
@@ -86,6 +105,35 @@ const HANDOFF_ALT_MIN_M: f64 = 260.0;
 const NEAR_HANDOFF_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M + 20.0;
 /// Chebyshev (m) beyond which terminal latch may release on range exit.
 const TERMINAL_EXIT_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M + 35.0;
+
+/// Altitude-scaled Descend arm thresholds — strict at low altitude, relaxed high up
+/// so the terminal lander has more trim budget during the suicide burn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HandoffEnvelope {
+    cheby_max: f64,
+    vh_max: f64,
+    omega_max: f64,
+    cos_tilt_min: f64,
+    drift_near_m: f64,
+    drift_closing_m: f64,
+    miss_max_m: f64,
+}
+
+/// Linear hand-off envelope vs CoM altitude (150 m strict → 600 m relaxed).
+#[inline]
+fn handoff_envelope(alt: f64) -> HandoffEnvelope {
+    let u = ramp(alt, HANDOFF_ENV_ALT_LO_M, HANDOFF_ENV_ALT_HI_M);
+    HandoffEnvelope {
+        cheby_max: HANDOFF_CHEBY_MAX_M + u * (HANDOFF_CHEBY_MAX_HI_M - HANDOFF_CHEBY_MAX_M),
+        vh_max: VH_HANDOFF_MAX + u * (VH_HANDOFF_MAX_HI - VH_HANDOFF_MAX),
+        omega_max: OMEGA_HANDOFF_MAX + u * (OMEGA_HANDOFF_MAX_HI - OMEGA_HANDOFF_MAX),
+        cos_tilt_min: COS_TILT_HANDOFF + u * (COS_TILT_HANDOFF_HI - COS_TILT_HANDOFF),
+        drift_near_m: HANDOFF_DRIFT_NEAR_M + u * (HANDOFF_DRIFT_NEAR_HI_M - HANDOFF_DRIFT_NEAR_M),
+        drift_closing_m: HANDOFF_DRIFT_CLOSING_M
+            + u * (HANDOFF_DRIFT_CLOSING_HI_M - HANDOFF_DRIFT_CLOSING_M),
+        miss_max_m: HANDOFF_MISS_MAX_M + u * (HANDOFF_MISS_MAX_HI_M - HANDOFF_MISS_MAX_M),
+    }
+}
 
 // --- Terminal settle (Brake | Align) -----------------------------------------
 /// Attitude recovery horizon (s) for constraint ramp — no fixed upright wait.
@@ -892,16 +940,17 @@ impl TargetLandingAutopilot {
         // The coast time scales with hand-off altitude.
         let t_drift = (2.0 * alt.max(0.0) / GRAVITY).sqrt().clamp(8.0, 16.0);
         let miss_pred = (cheby - v_cheby_handoff * t_drift).abs();
+        let env = handoff_envelope(alt);
         let handoff_ready = self.phase == TargetPhase::Cruise
-            && cheby <= HANDOFF_CHEBY_MAX_M
-            && vh <= VH_HANDOFF_MAX
+            && cheby <= env.cheby_max
+            && vh <= env.vh_max
             && v_cheby_handoff > -0.25
-            && ((cheby <= HANDOFF_CHEBY_MAX_M * 0.60 && vh <= HANDOFF_DRIFT_NEAR_M / t_drift)
+            && ((cheby <= env.cheby_max * 0.60 && vh <= env.drift_near_m / t_drift)
                 || (v_cheby_handoff > 0.12
-                    && vh <= HANDOFF_DRIFT_CLOSING_M / t_drift
-                    && miss_pred <= HANDOFF_MISS_MAX_M))
-            && om_pitch_yaw_sq <= OMEGA_HANDOFF_MAX * OMEGA_HANDOFF_MAX
-            && world_up_in_body(&state.motor)[1] >= COS_TILT_HANDOFF;
+                    && vh <= env.drift_closing_m / t_drift
+                    && miss_pred <= env.miss_max_m))
+            && om_pitch_yaw_sq <= env.omega_max * env.omega_max
+            && world_up_in_body(&state.motor)[1] >= env.cos_tilt_min;
         if handoff_ready {
             self.handoff_settle_s += dt;
         } else {
@@ -1331,7 +1380,8 @@ impl HandoffSettlePlan {
         let up_y = world_up_in_body(&state.motor)[1];
         let om = state.omega;
         let omega_py = (om[0] * om[0] + om[2] * om[2]).sqrt();
-        let t_att = predicted_attitude_handoff_time(up_y, omega_py);
+        let env = handoff_envelope(pos[1]);
+        let t_att = predicted_attitude_handoff_time(up_y, omega_py, env.cos_tilt_min, env.omega_max);
 
         let a_lat = lateral_accel_for_lean(
             lean_cmd,
@@ -1339,17 +1389,17 @@ impl HandoffSettlePlan {
             state.params.mass,
             state.params.max_thrust,
         );
-        let t_vh = if vh <= VH_HANDOFF_MAX {
+        let t_vh = if vh <= env.vh_max {
             0.0
         } else {
-            predicted_decel_time(vh, VH_HANDOFF_MAX, a_lat, beta)
+            predicted_decel_time(vh, env.vh_max, a_lat, beta)
         };
 
         let cheby = chebyshev_xz(pos, target_xz);
-        let t_pos = if cheby <= HANDOFF_CHEBY_MAX_M {
+        let t_pos = if cheby <= env.cheby_max {
             0.0
         } else {
-            let delta = cheby - HANDOFF_CHEBY_MAX_M;
+            let delta = cheby - env.cheby_max;
             predicted_chebyshev_settle_time(delta, v_cheby, vh, a_lat)
         };
 
@@ -1535,15 +1585,16 @@ fn rollout_metrics(
     let cheby_end = chebyshev_xz(st.pos, target_xz);
     let vh_end = (st.vel[0] * st.vel[0] + st.vel[2] * st.vel[2]).sqrt();
     let v_approach_end = st.vel[0] * ux + st.vel[2] * uz;
+    let env = handoff_envelope(st.pos[1]);
     let mut handoff_penalty = 0.0;
     if st.pos[1] < GATE_ALT_MIN {
         handoff_penalty += (GATE_ALT_MIN - st.pos[1]).powi(2);
     }
-    if cheby_end > HANDOFF_CHEBY_MAX_M {
-        handoff_penalty += (cheby_end - HANDOFF_CHEBY_MAX_M).powi(2);
+    if cheby_end > env.cheby_max {
+        handoff_penalty += (cheby_end - env.cheby_max).powi(2);
     }
-    if vh_end > VH_HANDOFF_MAX {
-        handoff_penalty += (vh_end - VH_HANDOFF_MAX).powi(2);
+    if vh_end > env.vh_max {
+        handoff_penalty += (vh_end - env.vh_max).powi(2);
     }
     if v_approach_end < -0.5 {
         handoff_penalty += (-v_approach_end).powi(2);
@@ -1557,12 +1608,12 @@ fn rollout_metrics(
         if v_cheby_end < -0.25 {
             handoff_penalty += (-v_cheby_end - 0.25).powi(2);
         }
-        let vh_drift_max = HANDOFF_DRIFT_CLOSING_M / t_drift;
+        let vh_drift_max = env.drift_closing_m / t_drift;
         if vh_end > vh_drift_max {
             handoff_penalty += (vh_end - vh_drift_max).powi(2);
         }
-        if miss_pred > HANDOFF_MISS_MAX_M {
-            handoff_penalty += (miss_pred - HANDOFF_MISS_MAX_M).powi(2);
+        if miss_pred > env.miss_max_m {
+            handoff_penalty += (miss_pred - env.miss_max_m).powi(2);
         }
     }
     TransitRolloutMetrics {
@@ -2039,16 +2090,21 @@ fn predicted_chebyshev_settle_time(delta: f64, v_cheby: f64, vh: f64, a_lat: f64
 
 /// Time (s) to reach hand-off tilt and pitch/yaw rate from current state.
 #[inline]
-fn predicted_attitude_handoff_time(up_y: f64, omega_py: f64) -> f64 {
+fn predicted_attitude_handoff_time(
+    up_y: f64,
+    omega_py: f64,
+    cos_tilt_min: f64,
+    omega_max: f64,
+) -> f64 {
     let mut t: f64 = 0.0;
-    if up_y < COS_TILT_HANDOFF {
+    if up_y < cos_tilt_min {
         let theta = up_y.clamp(-1.0, 1.0).acos();
-        let theta_handoff = COS_TILT_HANDOFF.acos();
+        let theta_handoff = cos_tilt_min.acos();
         let angle = (theta - theta_handoff).max(0.0);
         t = t.max(brake_flip_time(angle));
     }
-    if omega_py > OMEGA_HANDOFF_MAX {
-        let excess = omega_py - OMEGA_HANDOFF_MAX;
+    if omega_py > omega_max {
+        let excess = omega_py - omega_max;
         let t_omega = (2.0 * excess / ALPHA_PLAN)
             .sqrt()
             .max(excess / OMEGA_MAX);
@@ -4029,6 +4085,57 @@ mod tests {
     }
 
     #[test]
+    fn handoff_envelope_strict_at_low_altitude() {
+        let env = handoff_envelope(100.0);
+        assert_eq!(env.cheby_max, HANDOFF_CHEBY_MAX_M);
+        assert_eq!(env.vh_max, VH_HANDOFF_MAX);
+        assert_eq!(env.omega_max, OMEGA_HANDOFF_MAX);
+        assert_eq!(env.cos_tilt_min, COS_TILT_HANDOFF);
+        assert_eq!(env.drift_near_m, HANDOFF_DRIFT_NEAR_M);
+        assert_eq!(env.drift_closing_m, HANDOFF_DRIFT_CLOSING_M);
+        assert_eq!(env.miss_max_m, HANDOFF_MISS_MAX_M);
+    }
+
+    #[test]
+    fn handoff_envelope_relaxed_at_high_altitude() {
+        let env = handoff_envelope(800.0);
+        assert_eq!(env.cheby_max, HANDOFF_CHEBY_MAX_HI_M);
+        assert_eq!(env.vh_max, VH_HANDOFF_MAX_HI);
+        assert_eq!(env.omega_max, OMEGA_HANDOFF_MAX_HI);
+        assert_eq!(env.cos_tilt_min, COS_TILT_HANDOFF_HI);
+        assert_eq!(env.drift_near_m, HANDOFF_DRIFT_NEAR_HI_M);
+        assert_eq!(env.drift_closing_m, HANDOFF_DRIFT_CLOSING_HI_M);
+        assert_eq!(env.miss_max_m, HANDOFF_MISS_MAX_HI_M);
+    }
+
+    #[test]
+    fn handoff_envelope_monotonic_between_endpoints() {
+        let lo = handoff_envelope(HANDOFF_ENV_ALT_LO_M);
+        let mid = handoff_envelope(375.0);
+        let hi = handoff_envelope(HANDOFF_ENV_ALT_HI_M);
+        assert!(mid.cheby_max > lo.cheby_max && mid.cheby_max < hi.cheby_max);
+        assert!(mid.vh_max > lo.vh_max && mid.vh_max < hi.vh_max);
+        assert!(mid.omega_max > lo.omega_max && mid.omega_max < hi.omega_max);
+        assert!(mid.cos_tilt_min < lo.cos_tilt_min && mid.cos_tilt_min > hi.cos_tilt_min);
+        assert!(mid.drift_near_m > lo.drift_near_m && mid.drift_near_m < hi.drift_near_m);
+        assert!(
+            mid.drift_closing_m > lo.drift_closing_m && mid.drift_closing_m < hi.drift_closing_m
+        );
+        assert!(mid.miss_max_m > lo.miss_max_m && mid.miss_max_m < hi.miss_max_m);
+    }
+
+    #[test]
+    fn handoff_envelope_allows_wider_gate_at_high_altitude() {
+        let low = handoff_envelope(120.0);
+        let high = handoff_envelope(650.0);
+        assert!(high.cheby_max > low.cheby_max);
+        assert!(high.vh_max > low.vh_max);
+        // Example: 5 m/s and 15 m cheby pass at high alt but not at low alt.
+        assert!(5.0 <= high.vh_max && 5.0 > low.vh_max);
+        assert!(15.0 <= high.cheby_max && 15.0 > low.cheby_max);
+    }
+
+    #[test]
     fn handoff_settle_time_zero_when_already_ready() {
         let mut state = RocketState::at_altitude(500.0);
         state.contacting = false;
@@ -4054,9 +4161,9 @@ mod tests {
 
     #[test]
     fn handoff_settle_time_positive_when_tilted() {
-        let mut state = RocketState::at_altitude(500.0);
+        let mut state = RocketState::at_altitude(120.0);
         state.contacting = false;
-        state.motor = crate::euclidean_pga::motor_from_pose(500.0, 500.0, 0.0, 0.35, 0.0, 0.0);
+        state.motor = crate::euclidean_pga::motor_from_pose(500.0, 120.0, 0.0, 0.35, 0.0, 0.0);
         state.velocity = [2.0, 0.0, 0.0];
         let pos = state.position();
         let v_cheby = chebyshev_closing_rate(pos, [500.0, 0.0], state.velocity);
