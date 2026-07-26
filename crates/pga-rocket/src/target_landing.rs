@@ -173,6 +173,8 @@ const CRUISE_ALT_CAP: f64 = GATE_ALT_MIN + 40.0;
 /// Near-full throttle for climb burn and airplane cruise (gimbal authority
 /// scales with thrust — full T is also max attitude authority).
 const THR_FULL: f64 = 0.97;
+/// Hard throttle ceiling during terminal settle (Brake | Align).
+const THR_SETTLE_MAX: f64 = 0.5;
 /// Flip-recover only when nearly inverted in airplane / deep-lean mode.
 /// Normal [`COS_TILT_AIM`] (0.30) would fight a legitimate nose-down dive.
 const COS_TILT_AIM_AIR: f64 = 0.10;
@@ -2572,7 +2574,7 @@ fn terminal_settle_throttle(
     t_neutral: f64,
     t_motion: f64,
 ) -> f64 {
-    match phase {
+    let t = match phase {
         TerminalSettlePhase::Align => {
             let t_align = hover * (0.96 + 0.03 * up_y.clamp(0.90, 1.0));
             let t_upright = hover * (0.92 + 0.06 * up_y.clamp(0.70, 1.0));
@@ -2588,10 +2590,11 @@ fn terminal_settle_throttle(
             if quiet {
                 t_hold.clamp(t_neutral * 0.90, t_neutral * 0.94)
             } else {
-                t_hold.clamp(t_motion * 0.92, (t_motion + 0.08).min(0.85))
+                t_hold.clamp(t_motion * 0.92, t_motion + 0.08)
             }
         }
-    }
+    };
+    t.min(THR_SETTLE_MAX)
 }
 
 /// World-frame thrust aim and dive-go membership for high-altitude T dive.
@@ -4422,6 +4425,27 @@ mod tests {
             vh_hot,
         );
         assert_eq!(phase, TerminalSettlePhase::Align);
+    }
+
+    #[test]
+    fn terminal_settle_throttle_brake_caps_without_clamp_panic() {
+        // t_motion high enough that t_motion * 0.92 > THR_SETTLE_MAX must not panic.
+        let t = terminal_settle_throttle(
+            TerminalSettlePhase::Brake,
+            false,
+            0.0,
+            0.35,
+            0.35,
+            1.0,
+            0.0,
+            0.55,
+            0.55,
+            0.55,
+        );
+        assert!(
+            t <= THR_SETTLE_MAX + 1e-9,
+            "settle throttle must respect cap, got {t}"
+        );
     }
 
     #[test]
