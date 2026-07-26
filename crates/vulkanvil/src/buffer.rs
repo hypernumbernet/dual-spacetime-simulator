@@ -98,7 +98,7 @@ pub struct AllocatedImage {
 }
 
 impl AllocatedImage {
-    /// Creates a 2D image with a device-local allocation and a matching image view.
+    /// Creates a 2D image with a single mip level, device-local allocation, and view.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &ash::Device,
@@ -110,6 +110,23 @@ impl AllocatedImage {
         aspect: vk::ImageAspectFlags,
         name: &str,
     ) -> Self {
+        Self::new_with_mips(device, allocator, width, height, 1, format, usage, aspect, name)
+    }
+
+    /// Creates a 2D image with `mip_levels` mips (must be ≥ 1), device-local allocation, and view.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_mips(
+        device: &ash::Device,
+        allocator: &Mutex<Allocator>,
+        width: u32,
+        height: u32,
+        mip_levels: u32,
+        format: vk::Format,
+        usage: vk::ImageUsageFlags,
+        aspect: vk::ImageAspectFlags,
+        name: &str,
+    ) -> Self {
+        let mip_levels = mip_levels.max(1);
         let image_ci = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .format(format)
@@ -118,7 +135,7 @@ impl AllocatedImage {
                 height,
                 depth: 1,
             })
-            .mip_levels(1)
+            .mip_levels(mip_levels)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
@@ -153,7 +170,7 @@ impl AllocatedImage {
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: aspect,
                 base_mip_level: 0,
-                level_count: 1,
+                level_count: mip_levels,
                 base_array_layer: 0,
                 layer_count: 1,
             });

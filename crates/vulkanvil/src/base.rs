@@ -83,9 +83,16 @@ impl VulkanBase {
         let queue_cis = [queue_ci];
 
         let device_extensions = [swapchain::NAME.as_ptr()];
+        // Enable sampler anisotropy when the GPU supports it (open-world ground filtering).
+        let supported = unsafe { instance.get_physical_device_features(physical_device) };
+        let mut features = vk::PhysicalDeviceFeatures::default();
+        if supported.sampler_anisotropy == vk::TRUE {
+            features.sampler_anisotropy = vk::TRUE;
+        }
         let device_ci = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_cis)
-            .enabled_extension_names(&device_extensions);
+            .enabled_extension_names(&device_extensions)
+            .enabled_features(&features);
 
         let device = unsafe { instance.create_device(physical_device, &device_ci, None) }
             .expect("Failed to create logical device");

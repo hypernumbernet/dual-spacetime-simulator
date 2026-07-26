@@ -11,6 +11,8 @@ pub mod landing;
 pub mod mesh;
 pub mod sim;
 pub mod target_landing;
+/// Procedural ground albedo generators (pure CPU; Vulkan upload is binary-only path).
+pub mod texture;
 
 pub use control::{
     ControlMapper, KeySnapshot, THROTTLE_LATCH_RAMP_S, ThrottleLatch, map_keys,

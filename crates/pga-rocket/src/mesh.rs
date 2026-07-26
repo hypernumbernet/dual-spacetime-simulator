@@ -31,8 +31,10 @@ pub struct GroundVertex {
 /// each frame; may be scaled in the vertex shader for high altitude (see
 /// [`ground_plane_scale`]).
 pub const GROUND_HALF_EXTENT: f32 = 1800.0;
-/// World meters covered by one grass texture tile (minecraft-like 1 m block).
-pub const GRASS_METERS_PER_TILE: f32 = 1.0;
+/// World meters covered by one grass/regolith albedo tile.
+/// Larger than the old 1 m Minecraft stamp so a 256×256 LINEAR+mip tile reads as
+/// continuous open-world ground and high-frequency repeats sit farther apart.
+pub const GRASS_METERS_PER_TILE: f32 = 24.0;
 /// Edge-fog start as a fraction of the effective ground half-extent (horizontal).
 /// Fragments with radial distance / half_extent_world below this stay fully lit;
 /// the rim fades to sky so the finite plane has no hard horizon.
@@ -72,8 +74,8 @@ pub fn camera_far_for_eye_height(eye_y: f32) -> f32 {
 /// Half-extent of the launch / target pad square (meters) → 60 m side.
 /// Painted in `ground.frag` on the single grass plane (no separate pad mesh).
 pub const LAUNCH_PAD_HALF_EXTENT: f32 = 30.0;
-/// World meters covered by one paved texture tile (ground.frag PAD_METERS_PER_TILE).
-pub const PAD_METERS_PER_TILE: f32 = 2.0;
+/// World meters covered by one paved texture tile (ground.frag uses fog_params.w).
+pub const PAD_METERS_PER_TILE: f32 = 8.0;
 
 /// Minimum horizontal range from launch origin to the random landing target (meters).
 pub const TARGET_DISTANCE_MIN_M: f32 = 100.0;
@@ -195,7 +197,14 @@ mod tests {
         // ground.frag uses PAD_HALF = 30.0; keep Rust and GLSL in lockstep.
         assert!((LAUNCH_PAD_HALF_EXTENT - 30.0).abs() < 1e-6);
         assert!((TARGET_PAD_HALF_EXTENT - LAUNCH_PAD_HALF_EXTENT).abs() < 1e-6);
-        assert!((PAD_METERS_PER_TILE - 2.0).abs() < 1e-6);
+        // Open-world paved tile scale (not the old 2 m Minecraft-adjacent stamp).
+        assert!((PAD_METERS_PER_TILE - 8.0).abs() < 1e-6);
+        // Grass/regolith tile covers many meters so LINEAR mips do not moiré.
+        assert!(
+            GRASS_METERS_PER_TILE >= 8.0,
+            "expected open-world grass mpt, got {}",
+            GRASS_METERS_PER_TILE
+        );
     }
 
     #[test]
