@@ -96,6 +96,13 @@ const ALIGN_DEADZONE_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M * 0.60;
 const TRIM_V_CREEP_PER_M_BASE: f64 = 0.32;
 const TRIM_V_CREEP_MAX_BASE: f64 = 6.90;
 const TRIM_V_CREEP_MIN_BASE: f64 = 1.5;
+/// Pad-near creep cap: intercept + slope·cheby, capped (keeps under hand-off vh gate).
+const CREEP_CAP_PAD_INTERCEPT: f64 = 0.45;
+const CREEP_CAP_PAD_SLOPE: f64 = 0.12;
+const CREEP_CAP_PAD_MAX: f64 = 2.60;
+/// Outer creep cap shoulder beyond the pad-near blend (10–50 m Chebyshev).
+const CREEP_CAP_OUTER_BASE: f64 = 4.50;
+const CREEP_CAP_OUTER_RAMP: f64 = 2.00;
 
 // --- Transit lean / envelope -------------------------------------------------
 /// Lean cap during the full-throttle ascent burn (rad) — MPC rollout / legacy label.
@@ -486,32 +493,26 @@ fn transit_lofted(alt: f64, vy: f64, near_handoff: bool) -> bool {
         || ballistic_apogee(alt, vy) >= CLIMB_ALT_M
 }
 
-/// Blend pad-near curve with outer Chebyshev shoulder (creep / v-cap shared).
-#[inline]
-fn cheby_near_pad_blend(cheby: f64, pad_near: f64, outer: f64) -> f64 {
-    let mu_pad = ramp_down(cheby, 12.0, 22.0);
-    mu_pad * pad_near + (1.0 - mu_pad) * outer
-}
-
 /// Continuous creep-speed cap vs Chebyshev offset (closer → slower).
 #[inline]
 fn cheby_creep_cap(cheby: f64) -> f64 {
     // Pad-near slope keeps creep just under the closing-branch hand-off vh
     // bound (`HANDOFF_DRIFT_CLOSING_M / t_drift`) so Descend arms on the fly.
-    let pad_near = (0.45 + 0.12 * cheby).min(2.60);
-    let outer = 4.50 + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * 2.00;
-    cheby_near_pad_blend(cheby, pad_near, outer)
+    let pad_near =
+        (CREEP_CAP_PAD_INTERCEPT + CREEP_CAP_PAD_SLOPE * cheby).min(CREEP_CAP_PAD_MAX);
+    let outer =
+        CREEP_CAP_OUTER_BASE + ramp(cheby, HANDOFF_CHEBY_MAX_M, 50.0) * CREEP_CAP_OUTER_RAMP;
+    let mu_pad = ramp_down(cheby, 12.0, 22.0);
+    mu_pad * pad_near + (1.0 - mu_pad) * outer
 }
 
 /// Horizontal creep speed (m/s) for Align position trim.
 #[inline]
 fn trim_creep_speed(cheby: f64, aggression: f64) -> f64 {
-    let mut v = (careful(TRIM_V_CREEP_PER_M_BASE, aggression) * cheby).clamp(
-        careful(TRIM_V_CREEP_MIN_BASE, aggression),
-        careful(TRIM_V_CREEP_MAX_BASE, aggression),
-    );
-    v = v.min(careful(cheby_creep_cap(cheby), aggression));
-    v
+    let v = (TRIM_V_CREEP_PER_M_BASE * cheby)
+        .clamp(TRIM_V_CREEP_MIN_BASE, TRIM_V_CREEP_MAX_BASE)
+        .min(cheby_creep_cap(cheby));
+    careful(v, aggression)
 }
 
 /// True when predicted stop distance says braking should begin — also arms terminal settle.
@@ -2201,8 +2202,8 @@ fn settle_attitude_constraint(hp: HandoffSettlePlan, up_y: f64, omega_py: f64) -
 /// "Too fast for here" speed: creep target plus margin, so a hot arrival
 /// brakes instead of sailing across the pad into the hand-off gate.
 #[inline]
-fn terminal_vh_hot(cheby: f64, aggression: f64) -> f64 {
-    (2.0 * trim_creep_speed(cheby, aggression) + 0.8).min(VH_HANDOFF_MAX * 1.35)
+fn terminal_vh_hot(v_creep: f64) -> f64 {
+    (2.0 * v_creep + 0.8).min(VH_HANDOFF_MAX * 1.35)
 }
 
 #[inline]
@@ -2236,7 +2237,7 @@ fn update_terminal_settle_phase(
 /// Pick initial settle sub-phase on envelope entry (quiet → Align, hot → Brake).
 #[inline]
 fn initial_terminal_settle_phase(v_cheby: f64, vh: f64, cheby: f64, aggression: f64) -> TerminalSettlePhase {
-    let vh_hot = terminal_vh_hot(cheby, aggression);
+    let vh_hot = terminal_vh_hot(trim_creep_speed(cheby, aggression));
     if terminal_needs_brake(v_cheby, vh, vh_hot, cheby) {
         TerminalSettlePhase::Brake
     } else {
@@ -2338,6 +2339,7 @@ fn terminal_align_aim(
     vz: f64,
     vh: f64,
     cheby: f64,
+    v_creep: f64,
     v_cheby: f64,
     omega_py: f64,
     lean_auth: f64,
@@ -2353,7 +2355,6 @@ fn terminal_align_aim(
         return ([0.0, 1.0, 0.0], 0.0);
     }
 
-    let v_creep = trim_creep_speed(cheby, aggression);
     let err_vx = ux * v_creep - vx;
     let err_vz = uz * v_creep - vz;
 
@@ -2405,7 +2406,8 @@ fn terminal_settle_aim(
     aggression: f64,
     aim_filtered: [f64; 3],
 ) -> TerminalSettleOutput {
-    let vh_hot = terminal_vh_hot(cheby, aggression);
+    let v_creep = trim_creep_speed(cheby, aggression);
+    let vh_hot = terminal_vh_hot(v_creep);
     let (brake_w, new_latch) =
         terminal_brake_blend(v_cheby, vh, v_approach, cheby, terminal_brake_latched, vh_hot);
 
@@ -2449,6 +2451,7 @@ fn terminal_settle_aim(
                 vz,
                 vh,
                 cheby,
+                v_creep,
                 v_cheby,
                 omega_py,
                 lean_auth,
@@ -4289,7 +4292,7 @@ mod tests {
 
     #[test]
     fn terminal_settle_brake_releases_to_align_when_quiet() {
-        let vh_hot = terminal_vh_hot(50.0, CAREFUL_AGGRESSION_MAX);
+        let vh_hot = terminal_vh_hot(trim_creep_speed(50.0, CAREFUL_AGGRESSION_MAX));
         let phase = update_terminal_settle_phase(
             TerminalSettlePhase::Brake,
             0.5,
@@ -4302,7 +4305,7 @@ mod tests {
 
     #[test]
     fn terminal_settle_brake_always_enters_align() {
-        let vh_hot = terminal_vh_hot(50.0, CAREFUL_AGGRESSION_MAX);
+        let vh_hot = terminal_vh_hot(trim_creep_speed(50.0, CAREFUL_AGGRESSION_MAX));
         let phase = update_terminal_settle_phase(
             TerminalSettlePhase::Brake,
             0.5,
@@ -4315,7 +4318,7 @@ mod tests {
 
     #[test]
     fn terminal_settle_align_reenters_brake_when_hot() {
-        let vh_hot = terminal_vh_hot(50.0, CAREFUL_AGGRESSION_MAX);
+        let vh_hot = terminal_vh_hot(trim_creep_speed(50.0, CAREFUL_AGGRESSION_MAX));
         let phase = update_terminal_settle_phase(
             TerminalSettlePhase::Align,
             0.5,
@@ -4506,6 +4509,7 @@ mod tests {
         let omega = 0.02;
         let auth_slow = settle_lean_auth(settle_freedom_effective(4.0, 0.0, 0.0), 0.0, 0.0);
         let auth_fast = settle_lean_auth(settle_freedom_effective(14.0, 0.0, 0.0), 0.0, 0.0);
+        let v_creep = trim_creep_speed(cheby, agg);
         let (_, lean_slow) = terminal_align_aim(
             -1.0,
             0.0,
@@ -4513,6 +4517,7 @@ mod tests {
             0.0,
             4.0,
             cheby,
+            v_creep,
             4.0,
             omega,
             auth_slow,
@@ -4528,6 +4533,7 @@ mod tests {
             0.0,
             14.0,
             cheby,
+            v_creep,
             14.0,
             omega,
             auth_fast,
@@ -4662,7 +4668,7 @@ mod tests {
             0.5,
             1.0,
             50.0,
-            terminal_vh_hot(50.0, CAREFUL_AGGRESSION_MAX),
+            terminal_vh_hot(trim_creep_speed(50.0, CAREFUL_AGGRESSION_MAX)),
         );
         assert_eq!(phase, TerminalSettlePhase::Align);
         assert!(
