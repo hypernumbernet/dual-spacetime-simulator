@@ -14,7 +14,7 @@
 //! [`long_range_go_aim`]). Hold [`LONG_CRUISE_ALT_M`] (~520 m, same band as the
 //! short-hop cruise cap). The climb apogee target soft-blends toward 480 m via
 //! [`long_range_weight`]. Same stop-distance gate hands off to reverse lean. Inside
-//! the terminal-settle envelope (enter ~140 m, exit ~200 m): sequenced
+//! the terminal-settle envelope (enter `d_stop` / ~300 m, exit ~400 m): sequenced
 //! Brake | Align drives lean and throttle while sinking toward
 //! [`HANDOFF_ALT_M`] (~300 m). Altitude-scaled AND gates (position / attitude;
 //! strict ≤150 m, relaxed ≥600 m via [`handoff_envelope`]) arm

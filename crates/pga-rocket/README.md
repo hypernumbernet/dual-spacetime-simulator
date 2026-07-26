@@ -3,7 +3,8 @@
 3D 射影幾何代数（PGA: Projective Geometric Algebra）を土台にした、脚付きロケットの
 打ち上げ・着陸シミュレータです。剛体の姿勢・位置を PGA のモーター（motor）1 個で表現し、
 物理・接地判定・自動着陸誘導のすべてを PGA のサンドイッチ積で計算します。
-描画は Vulkan（vulkanvil）、UI は egui です。
+描画は Vulkan（vulkanvil）、UI は egui で、半辺 20 km のオープンワールド地面と
+手続き生成テクスチャの上を飛びます（**Moon mode** で真空・月面に切り替え）。
 
 ```
 cargo run --release -p pga-rocket        # シミュレータ本体を起動
@@ -22,28 +23,26 @@ cargo test -p pga-rocket                 # 物理・制御・着陸の全テス�
 | Q / E | ヨー（ジンバル、体軸 +Z 回り） |
 | A / D | ロール（胴体中央の RCS スラスタ 4 基、体軸 +Y 回り。地上でも効く） |
 | L | **その場への自動着陸オートパイロットのトグル** |
-| T | **T マーク目標地点への自動着陸**（上昇と水平移動を同時。**水平 ≳ 1.5 km** は飛行機型：フルスロットルでターゲットへ、高度は pitch/lean のみで **~520 m** 保持（機首下げ dive 可）。`d_stop` ブレーキ包絡→ターミナル settle→Descend ハンドオフ） |
-| R | リセット |
+| T | **T マーク目標地点への自動着陸のトグル**（Climb → Cruise → Descend の 3 フェーズ。詳細は「[T モードの自動ターゲット着陸](#t-モードの自動ターゲット着陸)」） |
+| M | **Moon mode** のトグル（空気抵抗ゼロ＋月面ビジュアル） |
+| R | リセット（機体を発射パッドへ戻し、T マークを再抽選） |
 | ←→↑↓ | カメラ回転（マウスドラッグでも可） |
-| PageUp / PageDown | カメラ距離（マウスホイールでも可） |
+| PageUp / PageDown | カメラ距離（マウスホイールでも可。20–400 m） |
 | Esc | 終了 |
+
+L と T は相互排他で、一方を ON にすると他方は OFF になります。オートパイロット動作中に
+**手動飛行キー（Space / Ctrl / F / C / W / S / A / D / Q / E）を押すと両方とも解除**され、
+即座に手動操縦へ戻ります。
 
 接地時の法線方向衝突速度が `crash_impact_speed`（既定 10 m/s）を超えると機体は爆発します。
 自動着陸（L）はどんな姿勢からでも起動でき、横倒し・高速落下・倒立からの回復に対応しています
 （倒立は CoM 高度 ~150 m 以上が物理的な回復下限。詳細は後述）。
-目標着陸（T）は起動時に **100–8000 m** の一様環状上に置かれる黄色 T マーク地点へ航法します。
-誘導は PGA の点として「パッド上空のロフトウェイポイント」を取り、CoM からの自由ベクトル
-変位で **上昇と水平移動を同時に** 行います。遠距離はフルスロットル＋ pitch エレベータで
-`LONG_CRUISE_ALT_M`（~520 m）を保持、中距離は Transit MPC と `d_stop` ブレーキ包絡線
-で減速し、ターミナル settle（Brake | Align）で **~300 m まで降下しながら**
-姿勢・横速度を静かに整え、位置・姿勢が整い次第すみやかに最終降下（Descend）へ
-ハンドオフします。降下の後半（低高度）は位置微調整をせず
-直立＋ソフト接地にコミットします。**着陸成功（complete）**は描画パッド上への接地
-（半辺 **30 m**、`TARGET_PAD_HALF_M`）。内側 Chebyshev 箱（半辺 **12 m**、
-`TARGET_SUCCESS_HALF_M`）は誘導・hand-off の目標であり、complete には不要です。
-Descend へのアームはパッド上空で横速度・姿勢が静かになったときの **離散 AND ゲート**
-（高度 150–600 m でエンベロープ緩和。高度自体は進入条件ではない。L とその場着陸と相互排他）。
-ファジー層の役割は後述「ファジー制御」を参照。
+目標着陸（T）は **100–8000 m** の環状領域に置かれる黄色 T マーク地点へ航法します。
+誘導は PGA の逆サンドイッチ輸送で得た幾何量だけを使い、上昇と水平移動を同時に行う
+フルスロットル Climb → 停止距離 `d_stop` と短ホライズン MPC で組み立てる Cruise →
+閉ループ自殺バーンの Descend、という 3 段構成です。**着陸成功（complete）** は描画パッド
+（半辺 **30 m**、`TARGET_PAD_HALF_M`）上への静かな接地で、内側 Chebyshev 箱（半辺 **12 m**、
+`TARGET_SUCCESS_HALF_M`）は誘導目標であって complete の条件ではありません。
 
 ## モジュール構成
 
@@ -54,9 +53,17 @@ Descend へのアームはパッド上空で横速度・姿勢が静かになっ
 | [fuzzy.rs](src/fuzzy.rs) | メンバシップ・TS ブレンド・L/T 誘導の連続仲裁（安全ラッチは置換しない） |
 | [landing.rs](src/landing.rs) | その場への自動着陸オートパイロット（L キー） |
 | [target_landing.rs](src/target_landing.rs) | T マーク目標への航法付き自動着陸（T キー） |
-| [control.rs](src/control.rs) | キー入力 → 制御コマンドの純粋写像 |
-| [mesh.rs](src/mesh.rs) / [explosion.rs](src/explosion.rs) | 機体・草地・発射／目標パッド・爆発のジオメトリ生成 |
-| [app.rs](src/app.rs) / [renderer.rs](src/renderer.rs) / [ui.rs](src/ui.rs) | ウィンドウ・Vulkan 描画・HUD（原点パッド＋**100 m 〜 8000 m** のランダム距離先の T 目標） |
+| [control.rs](src/control.rs) | キー入力 → 制御コマンドの純粋写像（F/C ラッチは 0.2 s ランプ） |
+| [mesh.rs](src/mesh.rs) / [explosion.rs](src/explosion.rs) | 機体・地面（半辺 20 km）・発射／目標パッド・爆発のジオメトリ生成、目標 XZ の抽選 |
+| [texture.rs](src/texture.rs) | 地面アルベドの手続き生成（草地 fBm / 月レゴリス＋クレータ / 舗装、256 px タイル＋ミップ） |
+| [app.rs](src/app.rs) / [renderer.rs](src/renderer.rs) / [ui.rs](src/ui.rs) | ウィンドウ・Vulkan 描画・左ドックパネル（原点パッド＋**100 m 〜 8000 m** のランダム距離先の T 目標。パッドマークは `ground.frag` が描画） |
+
+`lib.rs` が公開するのは物理・制御・生成系（`control` / `euclidean_pga` / `explosion` /
+`fuzzy` / `landing` / `mesh` / `sim` / `target_landing` / `texture`）で、
+`app` / `renderer` / `ui` / `integration` はバイナリ専用です。
+
+左パネルの速度表示は **km/h**（`MS_TO_KMH`）、上部 HUD の `vel_y` は m/s です。
+`Land (L)` / `Target (T)` 行にはオートパイロットの現在フェーズラベルが出ます。
 
 物理・制御・誘導のモジュールはウィンドウ/GPU に依存しない純粋な計算なので、
 実際の物理そのものをユニットテストで検証できます。
@@ -147,6 +154,349 @@ X' = M X M~      (M~ は反転 reverse)
 
 チューニング時に判明した壊れやすい不変条件は各定数のコメントに記載しています。
 
+## T モードの自動ターゲット着陸
+
+T キーで起動する [`TargetLandingAutopilot`](src/target_landing.rs) は、離れた場所にある
+黄色 T マークまで飛行し、その描画パッド上へ軟着陸するまでを一貫して受け持ちます。
+制御の作りは 4 層です。
+
+| 層 | 役割 | 例 |
+|---|---|---|
+| **閉形式の物理予測** | 権威。指令の大きさを決める | 停止距離 `d_stop`、許容接近速度 `v_allow`、`HandoffSettlePlan`、自殺バーン `a_req` |
+| **短ホライズン MPC** | レジーム（行動）の選択 | `CruiseGo` / `Brake` / `Coast` / `SinkGo` / `AirplaneHold` / `LoftGo` |
+| **ファジー仲裁** | レジーム境界の肩付き接続 | [`CruiseThrottleFuzzy`](src/fuzzy.rs)、`cruise_brake_hardness`、`long_range_hold_cos` |
+| **離散ラッチ / ゲート** | 安全と非チャタ | ブレーキラッチ、ターミナル包絡ラッチ、ハンドオフ AND ゲート |
+
+さらにその外側に **アクチュエータ層**があり、GNC のセットポイントをそのまま機体へ渡さず、
+スロットルは [`slew_throttle`](src/fuzzy.rs) で非対称スプール（上げ 1.1 /s、
+大きな段差では 4.0 /s、下げ 2.5 /s）、ジンバルは `GIMBAL_SLEW_RATE = 5.0`（全偏向/秒）、
+推力 aim は `AIM_SLEW_SOFT` 1.0 〜 `AIM_SLEW_HARD` 3.0 rad/s でレート制限してから
+姿勢 PD に入れます。飽和した rate-PD がノズルをバンバン叩くのを防ぐためです。
+
+### 目標マークの配置
+
+`mesh.rs` の `random_target_xz` が **R リセットのたびに** 目標 XZ を抽選します。
+距離は `TARGET_DISTANCE_MIN_M` = 100 m 〜 `TARGET_DISTANCE_MAX_M` = 8000 m、
+方位は一様、半径は **面積一様**（`r = √(u·(r_max² − r_min²) + r_min²)`）です。
+描画パッドは半辺 30 m（`LAUNCH_PAD_HALF_EXTENT`）の正方形で、専用メッシュではなく
+`ground.frag` が地面テクスチャ上に T マークとして描きます。
+
+### フェーズと HUD ラベル
+
+`status_label()` は左パネル `Target (T)` 行と上部 HUD に出る **14 文字以内**の
+コンパクトラベルを返します。
+
+| フェーズ | ラベル | 内容 |
+|---|---|---|
+| Climb | `climb+go` | ロフトゲート未達。フルスロットル上昇＋開ループ pitch program |
+| Cruise | `cruise/loft` | ロフト前の MPC 上昇（低高度セーフティネット） |
+| Cruise | `cruise/air` | 遠距離 airplane 巡航（フル T ＋ pitch エレベータ） |
+| Cruise | `cruise/go` | 中距離の加速接近 |
+| Cruise | `cruise/brake` | 逆リーンブレーキ（MPC 選択 or `brake_latched`） |
+| Cruise | `cruise/coast` | `v_allow` 超過・弾道時の惰性 |
+| Cruise | `cruise/sink` | 巡航上限高度を超えたときの降下つき接近 |
+| Cruise | `cruise/s-brake` / `cruise/s-align` | fine settle のサブフェーズ（Brake / Align） |
+| Descend | `descend` | パッド上の閉ループ自殺バーン |
+| — | `off` / `complete` | 無効 / 着陸完了 |
+
+### 1 フレームの処理順（`update`）
+
+1. **ターミナル包絡ラッチ**を更新（[`careful_terminal_latch`](src/fuzzy.rs)）
+2. **fine settle 判定**: `pad_settle_active = terminal_latched && cheby ≤ 80 m`（`RANGE_FAR_M`）
+3. **ロフトゲート**[`transit_lofted`](src/target_landing.rs) で Climb / Cruise を決定
+4. **ハンドオフ AND ゲート**を評価。`HANDOFF_SETTLE_MIN_S` = 0.25 s 連続成立で
+   Descend へ遷移し、`lander.arm_from_transit(state)` が現在スロットルを引き継ぐ
+   （ハンドオフ直後の推力ゼロ落下を避けるため）
+5. 高度 ≥ `h_freefall_m`（地球 6000 m / 月 10000 m）なら**高高度ダイブ**へ分岐
+6. フェーズ別 GNC を計算し、アクチュエータ層を通して `ControlCommand` を出力
+
+Cheby はすべて **Chebyshev 距離**（`max(|dx|, |dz|)`）、`range` は水平ユークリッド距離、
+`range_eff = (range − 40 m)`（`CAREFUL_NEAR_M`）です。
+
+### 中核の物理: 停止距離と許容接近速度
+
+T モードの「いつ減速を始めるか」は、ヒューリスティックではなく**閉形式の予測停止距離**が
+決めます。
+
+```text
+d_stop = d_flip + d_burn
+d_flip = v·t_flip + ½·a_coast·t_flip²      a_coast = FLIP_COAST_ACCEL_FRAC(0.5) × go 側 a_lat
+t_flip = max( √(2θ/α_plan), θ/ω_max )      α_plan = 0.70 rad/s²、ω_max = 1.35 rad/s
+d_burn = (v² − v_end²) / (2a)                          （β = 0）
+       = (1/2β)·ln( (a + βv²) / (a + βv_end²) )        （β = k/m > 0）
+v_end  = VH_HANDOFF_MAX = 4.0 m/s      Moon（無風・無抗力）は d_stop に ×1.15
+```
+
+横加速度 `a_lat` は推力レジームで切り替えます。
+
+```text
+VerticalNeutral: a_lat = max( g·tan θ, 0.15 )
+FullThrottle   : a_lat = max( THR_FULL·(T/m)·sin θ, 0.15 )   THR_FULL = 0.97
+```
+
+`FullThrottle` を選ぶのは **airplane 域 / vh > 20 m/s（`VH_BRAKE_FULL_THR`）/ Moon** のいずれか
+（`brake_lateral_mode`）。実際にフル T を焚くのはさらにファジー hardness > 0.55 を要求します
+（減速し終わった低速ラッチが full-T を打ち続けないように）。
+
+同じ式を二分法（≤16 反復）で逆に解いたものが `allowed_approach_speed` で、
+**「残距離で止まりきれる接近速度 `v_allow`」** を返します。go 側はこれを速度上限として使い、
+`v_approach > v_allow` の間は加速をやめて `Coast` に落ちます。
+
+### 0. Climb（ロフトゲート未達）
+
+MPC も速度フィードバック lean も使わない、単純物理の上昇です。
+
+- スロットルは常に `THR_FULL = 0.97`
+- 接地中・`CLIMB_CLEAR_ALT_M` = 25 m 未満・残距離 1 m 未満は直立 `[0,1,0]`
+- クリア後は**開ループ pitch program**:
+  `u = smoothstep01(ramp(alt, 25, 480))`、`lean_cap = 0.30 + u·(0.90 − 0.30)`、
+  `lean = u·lean_cap` をパッド方向へ `clamp_tilt`。距離による lean 床は持ちません
+  （dive 用の `LEAN_LONG_MAX` は Cruise 専用）
+- 姿勢 PD は全区間ソフト（lean が開き切る前にジンバルを蹴らないため）
+- **Cruise 移行**（`transit_lofted`）: `alt ≥ 480 m`（`GATE_ALT_MIN`）、
+  near-handoff 時は `alt ≥ 260 m`（`HANDOFF_ALT_MIN_M`）、または
+  **弾道アポジ** `alt + vy²/2g ≥ 500 m`（`CLIMB_ALT_M`）。アポジ判定があるので
+  過剰ロフトしません
+- パッド上空（cheby ≤ 30 m、ラッチ中は ≤ 45 m）では Climb へ戻らない
+  （settle 中にフル T 再ロフトしないため）
+
+### 1. Cruise: Transit MPC
+
+`transit_mpc_select` が簡易 3DOF ロールアウトで候補を評価します。
+
+| 項目 | 値 |
+|---|---|
+| 刻み / ホライズン | `MPC_DT` = 0.10 s / 8・10・12 s（range < 80 m、< 1500 m、それ以上） |
+| 再計画 | `MPC_REPLAN_EVERY` = 2 フレームごと（receding horizon） |
+| 状態 | 位置・速度・**lean の 1 次遅れ**（時定数は `brake_flip_time` 相当、下限 0.35 s） |
+| 力 | `(T/m)·thr·û`、二次抗力 `−(k/m)·‖v‖·v`（Moon は k = 0）、重力、地面クランプ |
+
+候補集合は状況で絞り込みます。
+
+| 状況 | 候補 |
+|---|---|
+| ブレーキ確定 | `Brake` のみ |
+| `v_approach > v_allow + 0.25` | `Coast`, `Brake` |
+| airplane 域で go 中 | `AirplaneHold`, `Brake` |
+| ロフト前 | `LoftGo`, `CruiseGo`, `Brake`, `Coast`, `SinkGo` |
+| ロフト後 | `CruiseGo`, `Brake`, `Coast`, `SinkGo`, `AirplaneHold` |
+
+コストは次の重み付き和です（`mpc_rollout_cost`）。
+
+```text
+cost = 55.0  · (480 m ゲート未達)²        W_MPC_GATE
+     + 0.45  · (巡航上限超過)²            W_MPC_OVERLOFT   上限 520 m / airplane は 540 m
+     + 0.07  · 終端残距離                 W_MPC_RANGE
+     + 0.015 · ホライズン長               W_MPC_TIME
+     + 16.0  · (オーバーシュート)²        W_MPC_OVERSHOOT
+     + 18.0  · boost · ハンドオフ可行性   W_MPC_HANDOFF
+     + 0.12  · ∫throttle dt               W_MPC_IMPULSE
+```
+
+ハンドオフ項の `boost` は残距離 200 m（`MPC_HANDOFF_BOOST_RANGE_M`）から
+**×1 → ×2.5** へ連続的に立ち上がり、パッドに近いほど「Descend にアームできる状態か」を
+重視します。残距離 ≲140 m では発散 `v_cheby`・ドリフト予算・予測ミスも可行性に加算されます。
+`Coast` には非弾道時 +25、残距離 > 80 m で +35 のペナルティ。保持中の候補には
+`MPC_COST_HYSTERESIS` = 2.5（`Brake` ラッチ時は満額、それ以外の保持は半額）のコスト優遇が入り、
+候補のちらつきを抑えます。
+
+### 2. 遠距離 airplane 巡航（水平 ≳ 1.5 km）
+
+`LONG_AIRPLANE_RANGE_M` = 1500 m を超えると、飛行機のように **推力は前進、高度は pitch** で
+取る巡航に入ります。
+
+- 停止距離の外側ではフルスロットルでターゲット方向へ。ただし `v_approach > v_allow` の間は
+  `Coast` が優先され、横速度は常に停止距離の包絡内に拘束されます
+- 巡航高度は全距離 **`LONG_CRUISE_ALT_M` ≈ 520 m**（短距離の `CRUISE_ALT_CAP` と同じ帯）
+- [`long_range_hold_cos(alt, alt_tgt, vy, hover)`](src/fuzzy.rs) が高度誤差・鉛直速度・
+  **弾道予測アポジ**のメンバシップから `v_des → a_cmd → cos`（=aim の鉛直成分）を作ります。
+  フル T では `a_y = g·(cos/hover − 1)` なので平衡は `cos ≈ hover`（T/W = 3 なら ≈ 1/3）。
+  **非対称**で、上昇は控えめ、過高度・通過上昇は `cos` 下限 0.12 まで許す強い機首下げ dive
+- `long_range_go_aim(ux, uz, cos_up)` が水平（パッド方向）と鉛直を合成した単位 aim を返す
+- 深リーン中は flip 復帰ゲートを `COS_TILT_AIM_AIR` = 0.10 に下げ、正当な dive を
+  「倒立」と誤認して直立復帰しないようにしています
+- `range_eff ≤ d_stop` に入った瞬間、airplane も**同じ物理ゲート**で逆リーンへ譲ります
+  （`is_long_range_cruise` はブレーキ中 false）
+
+### 3. 中距離 go / brake
+
+- **投入**: `range_eff ≤ d_stop + BRAKE_ENGAGE_MARGIN_M`（25 m 早め）。
+  **保持**: `range_eff ≤ d_stop + BRAKE_RELEASE_MARGIN_M`（10 m）という幾何ヒステリシスで
+  go↔brake のチャタを抑止。オーバーシュート（`v_approach < −1.5`）は即ブレーキ
+- **計画 lean** は `LEAN_BRAKE_MAX` = 1.45 rad を [`apply_cruise_alt_lean_cap`](src/target_landing.rs) が
+  `long_range_hold_cos` の高度保持 `cos` 下限で cap した値（計画と実行が同じ天井を見る）
+- **実行**: 高速時は逆リーン＋フル T。減速後は
+  [`cruise_brake_hardness`](src/fuzzy.rs)（vh 6→22 m/s の肩＋オーバーシュート項）が
+  lean・full-T・aim・rate-kill を連続減衰させ、低速では直立寄り＋ソフト PD へ移ります
+- **aim** は高速で反速度ブレーキ、低速で直立とファジーブレンド。ただし
+  **go と brake の「選択」自体は離散**のまま（反対向きの自由ベクトルを平均すると
+  水平 aim が打ち消されるため）
+- 上昇中の横速度床 `V_CLIMB_H_MAX` ≈ 28 m/s は **未ロフト時のみ**。ロフト後の
+  airplane 巡航に掛けると長距離が Coast に張り付きます
+- 垂直は `cruise_v_des_y` が高度保持: `CRUISE_ALT_CAP` 超過分を時定数 ~12 s で
+  1〜8 m/s の沈下として抜き、ロフト後は決して上昇を指令しません
+
+### 4. ターミナル settle（Cruise → Descend の手前）
+
+パッド周辺で「位置・速度・姿勢を、降下しながら」整える区間です。
+
+**ラッチ**（`careful_terminal_latch`）
+
+| 遷移 | 条件 |
+|---|---|
+| 進入 | lofted かつ（`range_eff ≤ d_stop + 25 m` **または** `range ≤ 300 m`（`CAREFUL_TERMINAL_ENTER_M`）） |
+| 退出 | `range > 400 m`（`CAREFUL_TERMINAL_EXIT_M`）かつ `cheby > 45 m`（`TERMINAL_EXIT_CHEBY_M`） |
+
+**外側ラッチと fine settle の分離**が要点です。ラッチしていても Chebyshev が
+**80 m（`RANGE_FAR_M`）を超える間は中距離の go / `d_stop` ブレーキを維持**し
+（HUD も `cruise/go|brake`）、高度も落としません。Chebyshev ≤ 80 m で初めて
+`pad_settle_active` が立ち、Brake | Align 一本化＋`HANDOFF_ALT_M` = 300 m への沈下
+（`cruise_v_des_y(terminal = true)`、−0.08·(alt − 300) を 0.8〜8 m/s にクランプ）が始まります。
+早期ラッチだけでは Climb を切らない設計で、フルスロットル上昇はゲート／弾道アポジまで続きます。
+
+**サブフェーズ**は Brake と Align の 2 相のみ。静かな進入は **Align から開始**します。
+
+```text
+needs_brake ⇔ vh > vh_hot
+            ∨ a_stop_req = vh²/(2·max(cheby − 10, 1)) > g·tan(LEAN_BRAKE_MAX)
+            ∨ v_cheby < −1.2                       （明確な発散）
+vh_hot = min(2·v_creep + 0.8, VH_HANDOFF_MAX·1.35)
+```
+
+- **Brake**: 需要 `demand` で `a_cmd` をシェーピングし、
+  [`lean_for_lateral_accel`](src/target_landing.rs) で lean を逆算。天井は物理的な
+  `LEAN_BRAKE_MAX` のみ（`careful_brake_lean_cap` の浅い屋根は撤廃済み）。
+  位置 PD と反速度 aim を `terminal_brake_blend` の重みで混ぜます
+- **Align**: 目標クリープ速度 `v_creep = trim_creep_speed(cheby, aggression)` へ
+  横速度を合わせる連続トリム。Chebyshev ≤ 6 m（`ALIGN_DEADZONE_CHEBY_M`）かつ
+  `vh ≤ 3.4 m/s` かつ非発散なら直立ホールド（追いかけない）
+- **クリープ上限** `cheby_creep_cap` は近距離ほど遅く: パッド近傍は
+  `0.45 + 0.12·cheby`（上限 2.60 m/s）、外側は `4.50 + ramp(cheby, 10, 50)·2.00`、
+  12–22 m で連続ブレンド。**ハンドオフの vh 制限を下回るように設計**されているので、
+  クリープしたまま Descend にアームできます
+- `careful_aggression(range)` は中距離のみ（近い 0.70 → 遠い 1.0）。fine settle 内では
+  常に 1.0 固定です
+
+**残り時間の物理予測**（[`HandoffSettlePlan`](src/target_landing.rs)）が settle のゲインを決めます。
+
+```text
+t_att   : 現 tilt → hand-off tilt（√-profile 反転時間 + レート減速）
+t_vh    : 残 vh → 包絡の vh_max（a_lat ≈ g·tan θ、抗力込みの ∫dv/(a+βv²)）
+t_pos   : Chebyshev 残差 → 包絡の cheby_max（接近率 v_cheby、発散時は減速＋反転時間を加算）
+t_settle = max(t_att, t_vh, t_pos)        cleared() ⇔ t_settle ≤ 1e-3
+```
+
+`t_att` が支配的なときは aim を直立寄りにし、**スロットルを hover/cos 付近まで上げて
+ジンバルトルクを優先**します（深リーン中に 0.35–0.55 で頭打ちにする旧仕様は撤廃）。
+`settle_lean_freedom` / `settle_freedom_effective` / `settle_brake_lean_scale` は
+**常に 1.0** で、直立優先は `settle_attitude_constraint`（`t_att` / tilt / レートの最大値）
+だけが担います。
+
+### 5. Descend へのハンドオフ AND ゲート
+
+**高度自体は進入条件ではありません。** 整い次第すみやかに渡します。ただし全条件が
+`HANDOFF_SETTLE_MIN_S` = 0.25 s 連続で成立する必要があります。
+
+```text
+phase == Cruise
+∧ cheby ≤ env.cheby_max
+∧ vh    ≤ env.vh_max
+∧ v_cheby > −0.25                                   （速い発散でない）
+∧ (  近傍枝: cheby ≤ 0.60·env.cheby_max ∧ vh ≤ env.drift_near_m / t_drift
+   ∨ 接近枝: v_cheby > 0.12 ∧ vh ≤ env.drift_closing_m / t_drift
+             ∧ |cheby − v_cheby·t_drift| ≤ env.miss_max_m )
+∧ ω_pitch_yaw ≤ env.omega_max
+∧ world_up_in_body[1] ≥ env.cos_tilt_min
+t_drift = clamp( √(2·alt/g), 8, 16 ) s              （ハンドオフ後の惰性時間）
+```
+
+包絡 `env` は **CoM 高度 150 m（厳格）→ 600 m（緩和）で線形補間**されます
+（`handoff_envelope`）。高いところで渡すほど、着陸機側に修正の余地が残るためです。
+
+| 閾値 | 150 m 以下 | 600 m 以上 |
+|---|---|---|
+| Chebyshev | 10 m | 20 m |
+| 横速度 `vh` | 4.0 m/s | 7.0 m/s |
+| ピッチ/ヨー角速度 | 0.12 rad/s | 0.20 rad/s |
+| `up_y`（cos 傾き） | ≥ 0.95 | ≥ 0.90 |
+| ドリフト予算（近傍枝 / 接近枝） | 9 m / 12 m | 16 m / 20 m |
+| 予測ミス上限 | 6 m | 12 m |
+
+### 6. Descend（パッド上・ハンドオフ後）
+
+`LandingAutopilot::update_target_descend`（[landing.rs](src/landing.rs)）に委譲します。
+
+- **垂直**: 閉ループ自殺バーン。
+  `a_req = 1.15·(v_down² − v_touch_eff²)/(2h)`、`t = m(a_req + g)/(T_max·up_y)`。
+  コースト／ブレーキ／接地カットは [`PhysicsPadThrottleFuzzy`](src/fuzzy.rs) が
+  肩付きでブレンドし、包絡遅刻時の hard floor だけ離散のまま
+- **飛行中の最低推力**: 再点火をモデル化しないため、接地前は
+  `DESCEND_MIN_THROTTLE` = 0.03 を下回りません。接地 settle / complete のゼロカットは従来どおり
+- **姿勢**: 足高度 45 m 超かつ Chebyshev > 8 m（`TARGET_CENTER_TOL_M`）ならパッド seek lean、
+  それ以下では位置微調整をやめて**直立＋ソフト接地にコミット**。lean は
+  `brake_safe_lean`（`LEAN_TERMINAL_VH` = 0.18）で自殺バーンの必要減速度から制限
+- ハンドオフ直後は現在スロットルを引き継ぎ、`v_down < 0.6` かつ十分な高度差があれば
+  一度コーストして降下を始めます（ホバーのまま歩み寄らない）
+
+### 7. 成功判定
+
+| 判定 | 領域 |
+|---|---|
+| **complete（成功）** | 描画パッド上（Chebyshev ≤ **30 m** = `TARGET_PAD_HALF_M`）に接地し、傾き < 0.12–0.18 rad・横速度 < 1.5 m/s・鉛直速度 < 0.8–1.0 m/s・ω < 0.22 rad/s |
+| 誘導目標 | 内側 Chebyshev 箱 半辺 **12 m**（`TARGET_SUCCESS_HALF_M`） |
+| Descend の seek 打ち切り | Chebyshev ≤ **8 m**（`TARGET_CENTER_TOL_M`） |
+
+内側 12 m 箱への収束は complete の条件ではありません（誘導が狙う場所と、成功と認める場所を
+分けています）。
+
+### 8. 高高度ダイブ
+
+CoM 高度が `h_freefall_m`（地球 6000 m / 月 10000 m）以上のとき、フェーズ計算を迂回して
+`high_alt_freefall_to_pad` が走ります。
+
+- 速度包絡の下では**機首下げのフル T ダイブ**。`range > alt + HIGH_ALT_OVERHEAD_BIAS_M`（1000 m）
+  なら目標方向へ斜めに、そうでなければ純鉛直 `[0, −1, 0]`
+- 予測停止距離の内側に入ると横方向の傾きを純鉛直ダイブへフェード
+- `freefall_v_cap` を超える過速では直立へブレンドしてブレーキ（**安全降下速度が最優先**）
+- flip 復帰ゲートは `COS_TILT_AIM_FF` = −1.01。ダイブ中に「倒立」と誤認して
+  姿勢を奪い合わないようにしています
+
+### 9. Moon mode（M キー / 左パネルのチェックボックス）
+
+重力は 9.81 m/s² のままで、変わるのは**空気と見た目、そしてそれに追随する GNC** です。
+
+| 項目 | Earth | Moon |
+|---|---|---|
+| 空気抵抗 | `k(h) = k_sl·exp(−h/8500)` の二次抗力 | **0**（真空） |
+| 停止距離 | 抗力込みの閉形式 | ×1.15 の悲観係数 |
+| ブレーキ推力レジーム | 中距離は垂直中立が多い | 常に full-T |
+| 自由落下しきい値 / 速度上限 | 6000 m / 80–240 m/s | 10000 m / 60–120 m/s |
+| ビジュアル | 空 `[0.45, 0.62, 0.85]`・草地テクスチャ | 黒空・レゴリス＋クレータテクスチャ |
+
+### 10. 定数リファレンス（抜粋）
+
+| 定数 | 値 | 意味 |
+|---|---|---|
+| `CLIMB_ALT_M` / `GATE_ALT_MIN` | 500 / 480 m | 公称ロフト高度 / ソフト床 |
+| `CRUISE_ALT_CAP` / `LONG_CRUISE_ALT_M` | 520 / 520 m | 巡航上限 / airplane 保持高度 |
+| `HANDOFF_ALT_M` / `HANDOFF_ALT_MIN_M` | 300 / 260 m | settle 沈下目標 / near-handoff 床 |
+| `CLIMB_CLEAR_ALT_M` | 25 m | lean を開き始める高度 |
+| `LONG_AIRPLANE_RANGE_M` | 1500 m | airplane 巡航に入る水平距離 |
+| `CAREFUL_TERMINAL_ENTER_M` / `_EXIT_M` | 300 / 400 m | ターミナル包絡ラッチ |
+| `RANGE_FAR_M` | 80 m | fine settle（Brake\|Align）の箱 |
+| `CAREFUL_NEAR_M` | 40 m | `range_eff` のオフセット |
+| `BRAKE_ENGAGE_MARGIN_M` / `_RELEASE_` | 25 / 10 m | ブレーキ投入 / 保持ヒステリシス |
+| `LEAN_LONG_MAX` = `LEAN_BRAKE_MAX` | 1.45 rad | airplane / 逆ブレーキの lean 天井 |
+| `LEAN_BURN_MAX` | 0.30 rad | Climb pitch program の初期天井（最終 0.90） |
+| `THR_FULL` | 0.97 | フルスロットル指令 |
+| `ALPHA_PLAN` / `OMEGA_MAX` | 0.70 rad/s² / 1.35 rad/s | 姿勢 √-profile の計画値 |
+| `VH_BRAKE_SOFT` / `_HARD` / `_FULL_THR` | 6 / 22 / 20 m/s | ブレーキ hardness の肩 / full-T しきい |
+| `TARGET_PAD_HALF_M` / `TARGET_SUCCESS_HALF_M` | 30 / 12 m | complete 領域 / 誘導目標箱 |
+| `DESCEND_MIN_THROTTLE` | 0.03 | 飛行中の最低スロットル |
+
+数値の権威はソース先頭のコメントとユニットテスト（`fuzzy::tests`、`target_landing` の
+MPC / long-range / terminal settle 系）です。
+
 ## ファジー制御
 
 実装は [fuzzy.rs](src/fuzzy.rs) です。ここでの「ファジー」は **閉形式の物理スケジューラを
@@ -193,121 +543,32 @@ X' = M X M~      (M~ は反転 reverse)
      **ブレーキ安全 lean 上限**（残り高度で垂直成分が足りるか）でハード制限。
    - `flip_aim_weight`: 傾きが `TILT_AIM` 付近で lean aim ↔ 純直立を肩付きで切替。
 
-4. **T-Cruise 垂直スロットル** — `CruiseThrottleFuzzy`
-   - 入力: 各局所指令（`t_hold`, `t_full`, `t_auth`, `t_deep`, `t_settle`, `t_contact`）と
-     レジームフラグ（airplane full-T、deep reverse lean、terminal settle、ballistic 等）。
-   - ファジーは **レジーム境界の肩**のみ: full-T ↔ authority、deep、settle、ballistic 床。
-   - go/brake の aim 選択・Descend ハンドオフ AND は離散のまま。
-
 ### T モード（目標着陸）
 
-0. **Climb（480 m ゲート未満）** — 単純物理のフルスロットル上昇
-   - 常に `THR_FULL`。MPC・速度フィードバック lean・ブレーキラッチは使わない。
-   - 接地中および `CLIMB_CLEAR_ALT_M`（25 m）未満: 直立 `[0,1,0]`（`soft_att` で PD を穏やかに）。
-   - クリア後: 開ループ pitch program — smoothstep で lean を 0 → ~0.90 rad まで開き、
-     パッド方向へ `clamp_tilt`。短距離 `LEAN_CLIMB_MAX` / `long_range_weight` 床は撤廃
-     （dive 用 `LEAN_LONG_MAX` は Climb では使わない）。
-   - **Cruise 移行:** 高度 ≥480 m、near-handoff 440 m、または
-     `ballistic_apogee = h + vy²/(2g) ≥ CLIMB_ALT_M`（500 m）で即 Cruise へ（過剰ロフト防止）。
+制御の全体像は「[T モードの自動ターゲット着陸](#t-モードの自動ターゲット着陸)」にまとめてあります。
+ここでは **ファジー層がどこで何を連続化しているか**だけを整理します。
 
-0.5. **Transit MPC（Cruise）** — 簡易 3DOF 前方ロールアウト + 候補サンプリング
-   - HUD / 左パネルの `Target (T)` は短いサブラベルを表示（幅 ≤14）:
-     `cruise/air` `cruise/go` `cruise/brake` `cruise/coast` `cruise/sink` `cruise/loft`、
-     ターミナル settle は `cruise/s-brake` `cruise/s-align`。
-     トップフェーズ（Climb / Cruise / Descend）は変更しない。
-   - 状態: 位置・速度 + lean 1 次遅れ（`brake_flip_time` 相当）。推力は `(T/m)·thr·û`、
-     二次抗力 `F=−k|v|v`、重力。Moon は `k=0`。
-   - 候補: `CruiseGo` / `Brake` / `Coast` / `SinkGo` / `AirplaneHold`（低高度安全網として
-     `LoftGo` は MPC 内部のみ）。遠距離 go 中は `AirplaneHold` と `Brake` のみ。
-     2 フレームごとに再計画（receding horizon）。
-   - コスト: 480 m ロフトゲート未達・過剰ロフト・残距離・オーバーシュート・**ハンドオフ可行性**
-     （高度・Chebyshev・vh；残距離 ≲140 m では発散 `v_cheby`・drift 予算・予測ミスも追加）・∫throttle dt。
-     残距離 ≲200 m ではハンドオフ重みを連続ブースト（×1→×2.5）。
-   - 内ループ: 姿勢 PD + 垂直スロットルは hover 保持・full-T・authority・deep/settle などの
-     **局所則**を [`CruiseThrottleFuzzy`](src/fuzzy.rs) で肩付きブレンド（離散 step なし）。
-     ターミナル settle / Descend 硬 AND は不変。
-   - **エンジンアクチュエータ（Climb / Cruise）:** GNC セットポイントを
-     [`slew_throttle`](src/fuzzy.rs) で非対称スプールしてから sim に渡す（Descend と同型）。
+| 関数 / 構造体 | 使われる場所 | 何を肩付きにするか |
+|---|---|---|
+| [`CruiseThrottleFuzzy`](src/fuzzy.rs) | Cruise の垂直スロットル | `t_hold` / `t_full` / `t_auth` / `t_deep` / `t_settle` / `t_contact` の局所則を、full-T ↔ authority、deep、settle、ballistic 床の境界で連続合成 |
+| `cruise_brake_hardness` | 中距離ブレーキ実行 | vh 6→22 m/s の肩とオーバーシュート項から「ブレーキの硬さ」を 0–1 で出し、lean・full-T・aim・rate-kill をまとめて減衰 |
+| `long_range_hold_cos` / `long_range_go_aim` | airplane 巡航の高度保持 | 高度誤差・鉛直速度・弾道アポジ → aim の鉛直成分 `cos`（上昇は控えめ、過高度は dive） |
+| `long_range_weight` | 巡航レジーム | 約 3–7 km の肩で長距離寄りの重み |
+| `careful_aggression` | 中距離 settle | 距離に応じた動きの控えめさ（近い 0.70 → 遠い 1.0） |
+| `careful_terminal_latch` | ターミナル包絡 | **離散ラッチ**（ここはファジー化しない） |
+| `settle_urgency` / `settle_aim_blend` / `settle_motion_scale` / `settle_trim_rate_gate` | fine settle | 残り時間に応じた直立寄せ・トリム量・レートゲート |
+| `freefall_v_cap` / `FreefallThrottleFuzzy` | 高高度ダイブ | 降下速度包絡と直立ブレーキの遷移 |
+| [`slew_throttle`](src/fuzzy.rs) | 全フェーズのアクチュエータ | スロットルの非対称スプール（L/T 共通） |
 
-1. **中距離 go / brake** — 物理予測停止距離 `d_stop = d_flip + d_burn`
-   - 計画 lean は **`LEAN_BRAKE_MAX` を [`long_range_hold_cos`](src/fuzzy.rs) の高度保持上限で cap** した値（実行時の [`apply_cruise_alt_lean_cap`](src/target_landing.rs) と整合）。`a_lat = g·tan(θ)`（垂直中立）または
-     **airplane 域 / Moon / vh≳20 m/s** では full-T 時 `(T/m)·thr·sin(θ)`。
-   - 二次抗力 `β = k/m`（Moon は `β=0`、停止距離に **×1.15** の悲観係数）。
-   - 減速時間 `t_decel` も同型の閉形式（`a_eff` 近似は廃止）。
-   - 姿勢反転 `d_flip = v·t_flip + ½·a_coast·t_flip²`（`a_coast` は go 側残推力の 50% を flip 中の前進距離として加算）。
-   - **開始条件:** `range_eff ≤ d_stop + BRAKE_ENGAGE_MARGIN`（25 m 早め開始。ターミナル station-keep を除く）。
-     幾何ヒステリシス `BRAKE_RELEASE_MARGIN` で go↔brake チャタを抑止。オーバーシュート（`v_approach < 0`）も即 brake。
-   - **実行:** 高速時は `LEAN_BRAKE_MAX` 逆リーン + Moon / vh≳20 / airplane で full-T。
-     減速後は [`cruise_brake_hardness`](src/fuzzy.rs)（vh 6→22 m/s 肩 + オーバーシュート）で
-     lean・full-T・aim・rate-kill を連続減衰し、低速では直立寄り + soft PD で姿勢安定化。
-   - **aim:** 高速は反速度ブレーキ、低速は upright とファジーブレンド（go/brake の離散選択は維持）。
-   - go 側の目標接近速度は同じ式の逆算（`allowed_approach_speed`、engage margin 込み）。**`v_approach > v_allow` の間は Airplane / go 加速を止め Coast で横速度を拘束。**
-   - 上昇中の横速床 `V_CLIMB_H_MAX`（~28 m/s）は **未ロフト時のみ**。ロフト後の airplane 巡航に掛けると長距離が Coast 張り付きになる。
+**離散のまま残しているもの**: go↔brake の選択とヒステリシス、ターミナル包絡ラッチ、
+fine settle の Brake / Align 判定、Descend ハンドオフの AND ゲート、complete 条件。
+ここをメンバシップで薄めると「半分ブレーキ・半分ホバー」になり、横滑りやロフトに戻ります。
 
-2. **遠距離 airplane 巡航**（水平距離 ≳ 1.5 km）
-   - **優先順位:** 予測停止距離の外側ではフルスロットルでターゲット方向へ行くが、**`v_allow` 超過時は Coast で横速度を抑える**。高度は
-     **pitch / lean（エレベータ）** のみ（推力床でロフトしない）。
-   - `range_eff ≤ d_stop` に入った瞬間、airplane も **同じ物理ゲート**で逆リーンへ譲る
-     （`is_long_range_cruise` は brake 中 false）。
-   - 巡航高度目標は全距離 **`LONG_CRUISE_ALT_M` ≈ 520 m**（短距離 `CRUISE_ALT_CAP` と同帯）。
-   - `long_range_weight(range)`: 約 3–7 km の肩で Climb pitch program の lean 上限を
-     短距離 ~0.30 rad → 長距離 ~0.9 rad に連続ブレンド。
-   - `long_range_hold_cos(alt, alt_tgt, vy, hover)`:
-     - フル T では `a_y = g·(cos/hover − 1)`。平衡は `cos ≈ hover`（T/W≈3 なら ≈1/3）。
-     - 高度誤差・鉛直速度・**弾道予測アポジ**のメンバシップから `v_des` → `a_cmd` → `cos`。
-     - **非対称:** 上昇は控えめ、過高度・通過上昇は強い dive（`cos` 下限 ≈ 0.12、
-       機首下げを許容）。フリップ復帰ゲートも dive を邪魔しないよう低くする。
-   - `long_range_go_aim(ux, uz, cos_up)`: 水平はパッド方向、鉛直は上記 `cos` の単位 aim。
-   - 距離フロアにより、高速で 3 km まで寄っても airplane 法を維持する。
-
-2.5. **ターミナル settle（Cruise→Descend 手渡し前）**
-   - settle 包絡内で **~300 m（`HANDOFF_ALT_M`）まで降下**しながら位置・姿勢を調整。
-   - **ラッチ進入（早期）:** lofted かつ **`range_eff ≤ d_stop + BRAKE_ENGAGE_MARGIN`**（ブレーキ開始と同時）**または** `range ≤ 300 m`（`CAREFUL_TERMINAL_ENTER_M`）。退出は **400 m**（`CAREFUL_TERMINAL_EXIT_M`）+ Chebyshev 退出。
-   - **Climb は切らない:** 早期ラッチだけでは `near_handoff` 軟床（260 m で Cruise 移行）に入らない。フルスロットル Climb はゲート／弾道アポジまで継続。
-   - **fine settle:** ラッチ後も Chebyshev **> 80 m**（`RANGE_FAR_M`）の間は mid-range **go/`d_stop` ブレーキを維持**（HUD も `cruise/go|brake`）。Chebyshev **≤ 80 m** で初めて Brake|Align（`cruise/s-*`）一本化。
-   - **アーム条件は離散 AND**（Chebyshev / `vh` / `ω_py` / `up_y` / ドリフト枝）。
-     **高度 150 m 以下は厳格**（Chebyshev ≤10 m、`vh` ≤4.0 m/s、`ω_py` ≤0.12 rad/s、
-     `up_y` ≥0.95）。**600 m 以上で緩和**（Chebyshev ≤20 m、`vh` ≤7.0 m/s、
-     `ω_py` ≤0.20 rad/s、`up_y` ≥0.90、ドリフト予算も拡大）。**高度自体は進入ゲートではない**
-     — 整い次第すみやかに Descend。
-   - fine settle 内の motion/lean スケールは **`careful_aggression = 1.0` 固定**。mid-range のみ
-     [`careful_aggression(range)`](src/fuzzy.rs)（近い→**0.70**、遠い→**1.0**）。
-   - サブフェーズは **Brake | Align** の2相のみ。静かな進入は **Align から開始**、
-     `vh > vh_hot` / `a_stop > a_lat` / 明確な発散（`v_cheby < −1.2`）のみ Brake。
-   - [`HandoffSettlePlan`](src/target_landing.rs) で **クリアまでの残り時間**を物理予測:
-     - `t_att`: 現 tilt → hand-off tilt（√-profile 反転時間 + レート減速）
-     - `t_vh`: 残 `vh` → `VH_HANDOFF_MAX`（`a_lat ≈ g·tan(θ_lean)`、抗力込み）
-     - `t_pos`: Chebyshev 残差 → `HANDOFF_CHEBY_MAX`（**Chebyshev 接近率**
-     `v_cheby` — diverging 時は減速＋反転時間を加算）
-     - `t_settle = max(t_att, t_vh, t_pos)` — 大きいほど lean / aim ゲインを上げる。
-   - **Brake lean:** `a_cmd` は需要シェーピング、lean 天井は **`LEAN_BRAKE_MAX` のみ**（`careful_brake_lean_cap` 浅い屋根を撤廃）。高度保持 cap は cruise brake 側で維持。
-   - **Align:** 必要横加速度から [`lean_for_lateral_accel(..., LEAN_BRAKE_MAX)`](src/target_landing.rs)。人工 `ALIGN_LEAN_*` 天井は撤去。デッドゾーン到達後は直立ホールド。
-   - **lean freedom:** [`settle_lean_freedom`](src/fuzzy.rs) / `settle_freedom_effective` / `settle_brake_lean_scale` は **常に 1.0**。upright 優先は `constraint` のみ。
-   - **settle `v_allow`:** 巡航と同じ [`allowed_approach_speed`](src/target_landing.rs)（残 Chebyshev → `VH_HANDOFF_MAX`）に一本化。
-   - `t_att` 支配時は aim を直立寄りにし、**スロットルを hover/cos 付近まで上げて
-     ジンバルトルクを優先**（深リーン中の 0.35–0.55 上限は撤廃）。
-   - ターミナル域では `vh` 過大・オーバーシュート・Chebyshev 超過時に **逆リーン
-     ブレーキ**を再投入。`a_stop = vh²/(2Δcheby)` から lean を逆算して位置収束を加速。
-   - 低速 Align/Brake では `constraint` が aim を直立寄りにし振り子揺れを抑え、
-     高速では深リーン減速権威（`LEAN_BRAKE_MAX`）を維持する。
-
-3. **ターミナル Descend（パッド上・hand-off 後）**
-   - 垂直: 物理閉ループ自殺バーン — `a_req = clamp((v² − v_touch²)/(2h), 0, a_brake)`、
-     `t = m(a_req + g)/(T_max·up_y)`。コースト／ブレーキ／接地カットは
-     [`PhysicsPadThrottleFuzzy`](src/fuzzy.rs) で肩付きブレンド（離散 step なし）。
-     包絡遅刻の hard floor のみ離散のまま。
-   - **飛行中の最低推力:** 再点火はモデル化しないため、接地前（`!contacting`）は
-     `DESCEND_MIN_THROTTLE`（0.03）を下回らない。接地 settle / complete 時のゼロカットは従来どおり。
-   - **エンジンアクチュエータ:** GNC セットポイントを [`slew_throttle`](src/fuzzy.rs)
-     で非対称スプール（上 ~0.9 s、下 ~0.4 s の 0↔1）してから sim に渡す（L/T 共通）。
-   - 姿勢: lean aim + √-profile PD + **`brake_safe_lean`**（`LEAN_TERMINAL_VH=0.18`）。
-     固定 0.10 rad キャップは廃止。mid-range 包絡が残差 `vh` の大半を既に落とす。
-
-4. **成功判定（T モード）**
-   - **描画パッド / complete:** 半辺 30 m（`TARGET_PAD_HALF_M`、mesh / shader と同期）。
-     パッド上に接地し姿勢・横速度が落ち着いていれば complete（内側箱への収束は不要）。
-   - **誘導目標:** 内側の Chebyshev 箱 半辺 **12 m**（`TARGET_SUCCESS_HALF_M`）。
-   - Descend の高高度 seek 打ち切り: Chebyshev ≤ **8 m**（`TARGET_CENTER_TOL_M`）。
+`settle_lean_freedom` / `settle_freedom_effective` / `settle_brake_lean_scale` は
+現在**常に 1.0** を返すスタブで、直立優先は `settle_attitude_constraint` だけが決めます
+（`SETTLE_LEAN_V_STRICT` などの速度ベース定数は現状未使用）。
+`cruise_brake_weight` / `careful_envelope_membership` も現在は誘導本体から呼ばれておらず、
+ユニットテストだけが参照しています。
 
 ### 設計上の教訓（要約）
 
@@ -427,10 +688,22 @@ Scenario { name: "my_case", alt: 70.0, pitch: 0.8, yaw: 0.0, roll: 0.3,
 cargo run --release -p pga-rocket --example target_stress
 ```
 
-500 m 〜 8 km の複数シナリオ（パッド上発射・途中高度・長距離 airplane 巡航など）で
-`TargetLandingAutopilot` を最後まで走らせ、飛行時間・最大高度・スロットル積分・
-Descend 中の姿勢揺れを 1 行ずつ出力します。シナリオ名を引数に渡すと 0.25 秒刻みの
-トレースが得られます（`landing_stress` と同様）。
+500 m 〜 8 km の 8 シナリオで `TargetLandingAutopilot` を最後まで走らせ（1 本あたり最大 400 秒）、
+飛行時間・最大高度・スロットル積分・Descend 中の姿勢揺れを 1 行ずつ出力します。
+
+| シナリオ | 内容 |
+|---|---|
+| `pad_500x` / `pad_500diag` / `pad_800x` | 中距離（MPC ＋ `d_stop` ブレーキが主役） |
+| `pad_overhead` | 目標の真上から発射（水平移動なしの settle → Descend） |
+| `high_600_off400` | 高度 600 m からの開始（Climb をスキップして Cruise 入り） |
+| `mid_250_500x` | 途中高度 250 m からの開始（ロフト再開の確認） |
+| `pad_6000x` / `pad_8000x` | 長距離 airplane 巡航（~520 m 保持 → 逆リーンブレーキ） |
+
+シナリオ名を引数に渡すと 0.25 秒刻みのトレースが得られます（`landing_stress` と同様）。
+
+```
+cargo run --release -p pga-rocket --example target_stress pad_6000x
+```
 
 ## テスト
 
@@ -438,10 +711,14 @@ Descend 中の姿勢揺れを 1 行ずつ出力します。シナリオ名を引
 cargo test -p pga-rocket
 ```
 
-- [tests/physics.rs](tests/physics.rs) — 剛体物理・接地・破壊判定
+- [tests/physics.rs](tests/physics.rs) — 剛体物理・接地・反発・ジンバル / RCS・破壊判定、
+  Moon mode で抗力が消えること
 - [tests/landing.rs](tests/landing.rs) — L モード自動着陸の統合テスト（横倒し・倒立・高速落下・
-  タンブリングからの無傷着陸、コースト燃費、ソフト接地）
+  タンブリングからの無傷着陸、コースト燃費、ソフト接地、高高度ダイブ）
 - [tests/target_landing.rs](tests/target_landing.rs) — T モード目標着陸の統合テスト
+  （500 m 級の Climb→Cruise→Descend、高高度スタート、Moon の長距離巡航）
 - [tests/control.rs](tests/control.rs) / [tests/explosion.rs](tests/explosion.rs) — 入力写像・爆発演出
+- [tests/texture.rs](tests/texture.rs) — 手続き地面テクスチャ（サイズ・色統計・ミップ生成）
 - 各モジュール内ユニットテスト — PGA 恒等式（閉形式とサンドイッチの一致など)、
-  包絡線・軸角度変換の境界値、**target_landing** の MPC / 長距離 cruise / ターミナル settle
+  包絡線・軸角度変換の境界値、**target_landing** の MPC / 長距離 cruise / ターミナル settle /
+  ハンドオフ包絡

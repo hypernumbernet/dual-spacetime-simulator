@@ -35,10 +35,19 @@ Cargo workspace 構成です。ルート `Cargo.toml` は workspace 定義（メ
 - **`pga-rocket`**（`crates/pga-rocket`・lib + bin）— PGA 脚付きロケット打ち上げ・着陸シミュレータ
   - G(3,0,1) 射影幾何代数（PGA）のモーター 1 個で剛体姿勢・位置・誘導を統一
   - 剛体物理（ジンバル推力・RCS・接地・破壊）と L/T 自動着陸オートパイロット
-  - **L**: その場着陸 / **T**: 100–8000 m 先の T マーク目標への航法着陸（遠距離は ~520 m airplane 巡航）
+  - **L**: その場着陸（横倒し・倒立・高速落下からの回復に対応）
+  - **T**: 100–8000 m 先の T マーク目標への航法着陸。Climb（フルスロットル上昇＋開ループ
+    pitch program）→ Cruise（停止距離 `d_stop` ゲート＋短ホライズン MPC、遠距離は
+    ~520 m の airplane 巡航、パッド手前で Brake/Align のターミナル settle）→
+    Descend（閉ループ自殺バーン）の 3 フェーズ構成
+  - **Moon mode**（M キー）で真空・月面ビジュアルに切り替え。半辺 20 km のオープンワールド地面と
+    手続き生成の地面テクスチャ
   - `vulkanvil`（Vulkan）+ egui、`dst-math`（PGA 乗法表）に path 依存
-  - 主なモジュール: `euclidean_pga` / `sim` / `landing` / `target_landing` / `fuzzy` / `mesh`
+  - 主なモジュール: `euclidean_pga` / `sim` / `landing` / `target_landing` / `fuzzy` /
+    `control` / `mesh` / `texture`
   - 詳細・操作・誘導アルゴリズム: [crates/pga-rocket/README.md](crates/pga-rocket/README.md)
+    （T モードの制御は
+    [T モードの自動ターゲット着陸](crates/pga-rocket/README.md#t-モードの自動ターゲット着陸)）
 - **`vulkanvil`**（`crates/vulkanvil`・lib）— 共有 Vulkan 基盤ライブラリ
   - ワークスペース内のレンダラが共有する Vulkan の土台
   - インスタンス / デバイス / スワップチェーン構築、バッファ・イメージ確保、シェーダモジュール生成を担う
