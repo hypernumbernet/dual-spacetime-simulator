@@ -14,7 +14,7 @@
 //! [`long_range_go_aim`]). Hold [`LONG_CRUISE_ALT_M`] (~520 m, same band as the
 //! short-hop cruise cap). The climb apogee target soft-blends toward 480 m via
 //! [`long_range_weight`]. Same stop-distance gate hands off to reverse lean. Inside
-//! the terminal-settle envelope (enter ~90 m, exit ~140 m): sequenced
+//! the terminal-settle envelope (enter ~140 m, exit ~200 m): sequenced
 //! Brake | Align drives lean and throttle while sinking toward
 //! [`HANDOFF_ALT_M`] (~300 m). Hard AND gates (position / attitude only) arm
 //! [`TargetPhase::Descend`] via [`LandingAutopilot::update_target_descend`]
@@ -33,9 +33,11 @@ use crate::fuzzy::{
     blend_vec3, careful_aggression, careful_terminal_latch, cruise_brake_hardness,
     freefall_overspeed_mu, long_range_go_aim, long_range_hold_cos, long_range_weight, ramp,
     ramp_down, settle_aim_blend, settle_brake_lean_scale, settle_freedom_effective,
-    settle_lean_freedom, settle_motion_scale, settle_trim_rate_gate, slew_throttle,
+    settle_lean_auth, settle_lean_freedom, settle_motion_scale, settle_trim_rate_gate,
+    settle_urgency, slew_throttle,
     CruiseThrottleFuzzy, FreefallThrottleFuzzy,
-    CAREFUL_NEAR_M, CAREFUL_RANGE_M, CAREFUL_TERMINAL_ENTER_M, LONG_CRUISE_ALT_M,
+    CAREFUL_AGGRESSION_MAX, CAREFUL_NEAR_M, CAREFUL_RANGE_M, CAREFUL_TERMINAL_ENTER_M,
+    LONG_CRUISE_ALT_M,
 };
 use crate::landing::{
     axis_angle_from_cross, chebyshev_xz, clamp_tilt, high_alt_dive_throttle_gate,
@@ -565,7 +567,7 @@ pub struct TargetLandingAutopilot {
     lander: LandingAutopilot,
     /// Latched reverse-lean brake (hysteresis) — kills go↔brake sway.
     brake_latched: bool,
-    /// Terminal settle envelope latch (enter ~90 m, exit ~140 m).
+    /// Terminal settle envelope latch (enter ~140 m, exit ~200 m).
     terminal_latched: bool,
     /// Terminal-pad brake blend latch (separate from mid-range [`brake_latched`]).
     terminal_brake_latched: bool,
@@ -807,6 +809,20 @@ impl TargetLandingAutopilot {
             );
             if was_terminal && !self.terminal_latched {
                 self.reset_terminal_settle();
+            } else if !was_terminal && self.terminal_latched {
+                let vh_entry = (state.velocity[0] * state.velocity[0]
+                    + state.velocity[2] * state.velocity[2])
+                    .sqrt();
+                let v_cheby_entry =
+                    chebyshev_closing_rate(pos, target_xz, state.velocity);
+                self.terminal_brake_latched = false;
+                self.handoff_settle_s = 0.0;
+                self.terminal_settle_phase = initial_terminal_settle_phase(
+                    v_cheby_entry,
+                    vh_entry,
+                    cheby,
+                    CAREFUL_AGGRESSION_MAX,
+                );
             }
 
             // Climb → Cruise once altitude or ballistic apogee clears the 500 m target.
@@ -2150,33 +2166,22 @@ fn terminal_vh_hot(cheby: f64, aggression: f64) -> f64 {
 }
 
 #[inline]
-fn terminal_needs_brake(
-    brake_w: f64,
-    brake_latched: bool,
-    v_cheby: f64,
-    vh: f64,
-    v_approach: f64,
-    vh_hot: f64,
-) -> bool {
-    // Terminal is always inside [`CAREFUL_RANGE_M`]: prefer Align unless clearly too fast.
-    vh > vh_hot
-        || v_cheby < -0.70
-        || v_approach < -2.5
-        || (brake_latched && brake_w > 0.55 && vh > VH_HANDOFF_MAX)
+fn terminal_needs_brake(v_cheby: f64, vh: f64, vh_hot: f64, cheby: f64) -> bool {
+    let delta_cheby = (cheby - HANDOFF_CHEBY_MAX_M).max(1.0);
+    let a_stop_req = vh * vh / (2.0 * delta_cheby);
+    let a_lat_avail = GRAVITY * LEAN_BRAKE_MAX.tan();
+    vh > vh_hot || a_stop_req > a_lat_avail || v_cheby < -1.2
 }
 
 /// Advance terminal settle sub-phase (Brake | Align).
 fn update_terminal_settle_phase(
     phase: TerminalSettlePhase,
-    brake_w: f64,
-    brake_latched: bool,
     v_cheby: f64,
     vh: f64,
-    v_approach: f64,
+    cheby: f64,
     vh_hot: f64,
 ) -> TerminalSettlePhase {
-    let needs_brake =
-        terminal_needs_brake(brake_w, brake_latched, v_cheby, vh, v_approach, vh_hot);
+    let needs_brake = terminal_needs_brake(v_cheby, vh, vh_hot, cheby);
     match phase {
         TerminalSettlePhase::Brake | TerminalSettlePhase::Align => {
             if needs_brake {
@@ -2185,6 +2190,17 @@ fn update_terminal_settle_phase(
                 TerminalSettlePhase::Align
             }
         }
+    }
+}
+
+/// Pick initial settle sub-phase on envelope entry (quiet → Align, hot → Brake).
+#[inline]
+fn initial_terminal_settle_phase(v_cheby: f64, vh: f64, cheby: f64, aggression: f64) -> TerminalSettlePhase {
+    let vh_hot = terminal_vh_hot(cheby, aggression);
+    if terminal_needs_brake(v_cheby, vh, vh_hot, cheby) {
+        TerminalSettlePhase::Brake
+    } else {
+        TerminalSettlePhase::Align
     }
 }
 
@@ -2360,19 +2376,12 @@ fn terminal_settle_aim(
     let (brake_w, new_latch) =
         terminal_brake_blend(v_cheby, vh, v_approach, cheby, terminal_brake_latched, vh_hot);
 
-    let phase = update_terminal_settle_phase(
-        phase,
-        brake_w,
-        new_latch,
-        v_cheby,
-        vh,
-        v_approach,
-        vh_hot,
-    );
+    let phase = update_terminal_settle_phase(phase, v_cheby, vh, cheby, vh_hot);
 
     let constraint = settle_attitude_constraint(hp, up_y, omega_py);
     let freedom_eff = settle_freedom_effective(vh, hp.t_pos, hp.t_vh);
-    let lean_auth = freedom_eff * (1.0 - constraint);
+    let urgency = settle_urgency(hp.t_pos, hp.t_vh);
+    let lean_auth = settle_lean_auth(freedom_eff, constraint, urgency);
     let freedom = settle_lean_freedom(vh);
 
     let (desired_raw, lean_max) = match phase {
@@ -2687,7 +2696,12 @@ fn transit_command(
     let vy = state.velocity[1];
     let vz = state.velocity[2];
     let lofted = transit_lofted(pos[1], vy, near_handoff);
-    let aggression = careful_aggression(range);
+    let terminal = lofted && terminal_latched;
+    let aggression = if terminal {
+        CAREFUL_AGGRESSION_MAX
+    } else {
+        careful_aggression(range)
+    };
     let mu_long = long_range_weight(range);
 
     let vh = (vx * vx + vz * vz).sqrt();
@@ -2714,7 +2728,6 @@ fn transit_command(
     let v_approach = vx * ux + vz * uz;
     let v_cheby = chebyshev_closing_rate(pos, target_xz, state.velocity);
 
-    let terminal = lofted && terminal_latched;
     let range_eff = (range - CAREFUL_NEAR_M).max(0.0);
     let aim_prev = *aim_filtered;
 
@@ -4224,43 +4237,52 @@ mod tests {
 
     #[test]
     fn terminal_settle_brake_releases_to_align_when_quiet() {
+        let vh_hot = terminal_vh_hot(50.0, CAREFUL_AGGRESSION_MAX);
         let phase = update_terminal_settle_phase(
             TerminalSettlePhase::Brake,
-            0.0,
-            false,
             0.5,
             2.0,
-            1.0,
-            VH_HANDOFF_MAX * 1.35,
+            50.0,
+            vh_hot,
         );
         assert_eq!(phase, TerminalSettlePhase::Align);
     }
 
     #[test]
     fn terminal_settle_brake_always_enters_align() {
+        let vh_hot = terminal_vh_hot(50.0, CAREFUL_AGGRESSION_MAX);
         let phase = update_terminal_settle_phase(
             TerminalSettlePhase::Brake,
-            0.0,
-            false,
             0.5,
             2.0,
-            1.0,
-            VH_HANDOFF_MAX * 1.35,
+            50.0,
+            vh_hot,
         );
         assert_eq!(phase, TerminalSettlePhase::Align);
     }
 
     #[test]
     fn terminal_settle_align_reenters_brake_when_hot() {
+        let vh_hot = terminal_vh_hot(50.0, CAREFUL_AGGRESSION_MAX);
         let phase = update_terminal_settle_phase(
             TerminalSettlePhase::Align,
-            0.0,
-            false,
             0.5,
             VH_HANDOFF_MAX * 2.0,
-            1.0,
-            VH_HANDOFF_MAX * 1.35,
+            50.0,
+            vh_hot,
         );
+        assert_eq!(phase, TerminalSettlePhase::Brake);
+    }
+
+    #[test]
+    fn initial_terminal_settle_phase_quiet_starts_align() {
+        let phase = initial_terminal_settle_phase(0.5, 2.0, 50.0, CAREFUL_AGGRESSION_MAX);
+        assert_eq!(phase, TerminalSettlePhase::Align);
+    }
+
+    #[test]
+    fn initial_terminal_settle_phase_hot_starts_brake() {
+        let phase = initial_terminal_settle_phase(0.5, VH_HANDOFF_MAX * 2.0, 50.0, CAREFUL_AGGRESSION_MAX);
         assert_eq!(phase, TerminalSettlePhase::Brake);
     }
 
@@ -4430,8 +4452,8 @@ mod tests {
         let agg = careful_aggression(80.0);
         let cheby = 30.0;
         let omega = 0.02;
-        let auth_slow = settle_freedom_effective(4.0, 0.0, 0.0) * (1.0 - 0.0);
-        let auth_fast = settle_freedom_effective(14.0, 0.0, 0.0) * (1.0 - 0.0);
+        let auth_slow = settle_lean_auth(settle_freedom_effective(4.0, 0.0, 0.0), 0.0, 0.0);
+        let auth_fast = settle_lean_auth(settle_freedom_effective(14.0, 0.0, 0.0), 0.0, 0.0);
         let (_, lean_slow) = terminal_align_aim(
             -1.0,
             0.0,
@@ -4560,11 +4582,11 @@ mod tests {
 
     #[test]
     fn terminal_latch_hysteresis() {
-        assert!(!careful_terminal_latch(false, 120.0, 50.0, true, TERMINAL_EXIT_CHEBY_M));
-        assert!(careful_terminal_latch(false, 85.0, 50.0, true, TERMINAL_EXIT_CHEBY_M));
-        assert!(careful_terminal_latch(true, 120.0, 50.0, true, TERMINAL_EXIT_CHEBY_M));
-        assert!(!careful_terminal_latch(true, 150.0, 60.0, true, TERMINAL_EXIT_CHEBY_M));
-        assert!(careful_terminal_latch(true, 150.0, 30.0, true, TERMINAL_EXIT_CHEBY_M));
+        assert!(!careful_terminal_latch(false, 150.0, 50.0, true, TERMINAL_EXIT_CHEBY_M));
+        assert!(careful_terminal_latch(false, 135.0, 50.0, true, TERMINAL_EXIT_CHEBY_M));
+        assert!(careful_terminal_latch(true, 180.0, 50.0, true, TERMINAL_EXIT_CHEBY_M));
+        assert!(!careful_terminal_latch(true, 210.0, 60.0, true, TERMINAL_EXIT_CHEBY_M));
+        assert!(careful_terminal_latch(true, 210.0, 30.0, true, TERMINAL_EXIT_CHEBY_M));
     }
 
     #[test]
@@ -4577,12 +4599,10 @@ mod tests {
         };
         let phase = update_terminal_settle_phase(
             TerminalSettlePhase::Align,
-            0.0,
-            false,
             0.5,
             1.0,
-            0.5,
-            VH_HANDOFF_MAX * 1.35,
+            50.0,
+            terminal_vh_hot(50.0, CAREFUL_AGGRESSION_MAX),
         );
         assert_eq!(phase, TerminalSettlePhase::Align);
         assert!(

@@ -220,7 +220,7 @@ X' = M X M~      (M~ は反転 reverse)
      `LoftGo` は MPC 内部のみ）。遠距離 go 中は `AirplaneHold` と `Brake` のみ。
      2 フレームごとに再計画（receding horizon）。
    - コスト: 480 m ロフトゲート未達・過剰ロフト・残距離・オーバーシュート・**ハンドオフ可行性**
-     （高度・Chebyshev・vh；残距離 ≲90 m では発散 `v_cheby`・drift 予算・予測ミスも追加）・∫throttle dt。
+     （高度・Chebyshev・vh；残距離 ≲140 m では発散 `v_cheby`・drift 予算・予測ミスも追加）・∫throttle dt。
      残距離 ≲200 m ではハンドオフ重みを連続ブースト（×1→×2.5）。
    - 内ループ: 姿勢 PD + 垂直スロットルは hover 保持・full-T・authority・deep/settle などの
      **局所則**を [`CruiseThrottleFuzzy`](src/fuzzy.rs) で肩付きブレンド（離散 step なし）。
@@ -258,13 +258,15 @@ X' = M X M~      (M~ は反転 reverse)
    - `long_range_go_aim(ux, uz, cos_up)`: 水平はパッド方向、鉛直は上記 `cos` の単位 aim。
    - 距離フロアにより、高速で 3 km まで寄っても airplane 法を維持する。
 
-2.5. **ターミナル settle（Cruise→Descend 手渡し前、~90–140 m 肩）**
+2.5. **ターミナル settle（Cruise→Descend 手渡し前、~140–200 m 肩）**
    - settle 包絡内で **~300 m（`HANDOFF_ALT_M`）まで降下**しながら位置・姿勢を調整。
    - **アーム条件は離散 AND のまま**（Chebyshev ≤10 m、`vh` ≤4.0 m/s、
      `ω_py` ≤0.12 rad/s、`up_y` ≥0.95）。**高度はゲートしない** — 整い次第すみやかに Descend。
-   - 進入は ~90 m、退出は ~140 m のヒステリシス。包絡内の motion/lean は
-     [`careful_aggression(range)`](src/fuzzy.rs) で距離連続スケール（近い→**0.70**、遠い→**1.0**）。
-   - サブフェーズは **Brake | Align** の2相のみ。Brake 要否だけ離散＋ヒステリシス。
+   - 進入は ~140 m、退出は ~200 m のヒステリシス。包絡内の motion/lean スケールは
+     **`careful_aggression = 1.0` 固定**（距離二重減衰なし）。mid-range のみ
+     [`careful_aggression(range)`](src/fuzzy.rs)（近い→**0.70**、遠い→**1.0**）。
+   - サブフェーズは **Brake | Align** の2相のみ。静かな進入は **Align から開始**、
+     `vh > vh_hot` / `a_stop > a_lat` / 明確な発散（`v_cheby < −1.2`）のみ Brake。
    - [`HandoffSettlePlan`](src/target_landing.rs) で **クリアまでの残り時間**を物理予測:
      - `t_att`: 現 tilt → hand-off tilt（√-profile 反転時間 + レート減速）
      - `t_vh`: 残 `vh` → `VH_HANDOFF_MAX`（`a_lat ≈ g·tan(θ_lean)`、抗力込み）
@@ -274,14 +276,15 @@ X' = M X M~      (M~ は反転 reverse)
    - lean 上限は固定 `LEAN_MID`/`LEAN_CRUISE` ではなく **物理逆算 + `LEAN_BRAKE_MAX`（= `LEAN_LONG_MAX` 1.45 rad）ソフト天井**。
    - **Align 中の連続仲裁:** 姿勢拘束 `constraint = f(t_att, tilt, rate)` と
      位置自由度 `freedom_eff = max(settle_lean_freedom(vh), settle_urgency(t_pos, t_vh))` から
-     `lean_auth = freedom_eff × (1 − constraint)`。固定 upright 待ち時間はなし。
+     [`settle_lean_auth(freedom − constraint, urgency floor)`](src/fuzzy.rs)。
+     固定 upright 待ち時間はなし。
    - `t_att` 支配時は aim を直立寄りにし、**スロットルを hover/cos 付近まで上げて
      ジンバルトルクを優先**（深リーン中の 0.35–0.55 上限は撤廃）。
    - ターミナル域では `vh` 過大・オーバーシュート・Chebyshev 超過時に **逆リーン
      ブレーキ**を再投入。`a_stop = vh²/(2Δcheby)` から lean を逆算して位置収束を加速。
    - **姿勢 vs 減速の仲裁:** [`settle_lean_freedom(vh)`](src/fuzzy.rs) とその派生ヘルパ
      （`settle_motion_scale` / `settle_aim_blend` / `settle_brake_lean_scale` /
-     `settle_trim_rate_gate` / `settle_freedom_effective`）が横速 **3 m/s → 14 m/s** の肩で
+     `settle_trim_rate_gate` / `settle_freedom_effective` / `settle_lean_auth`）が横速 **3 m/s → 14 m/s** の肩で
      **lean 自由度 0.3→1** を開く。定数は [`fuzzy.rs`](src/fuzzy.rs) に集約。
      低速 Align/Brake では `constraint` が aim を直立寄りにし振り子揺れを抑え、
      高速では既存の深リーン減速権威を維持する。

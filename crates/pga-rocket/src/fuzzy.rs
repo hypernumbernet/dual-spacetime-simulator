@@ -900,6 +900,19 @@ pub fn settle_freedom_effective(vh: f64, t_pos: f64, t_vh: f64) -> f64 {
     settle_lean_freedom(vh).max(settle_urgency(t_pos, t_vh))
 }
 
+/// Minimum lean authority floor scaled by settle urgency (keeps residual trim under attitude lock).
+pub const SETTLE_AUTH_FLOOR: f64 = 0.12;
+
+/// Continuous lean authority: freedom minus constraint, floored by urgency.
+///
+/// Replaces the product `freedom × (1 − constraint)` so attitude lock does not
+/// fully zero lateral trim when position or speed still need correction.
+#[inline]
+pub fn settle_lean_auth(freedom: f64, constraint: f64, urgency: f64) -> f64 {
+    let floor = SETTLE_AUTH_FLOOR * urgency.clamp(0.0, 1.0);
+    (freedom - constraint).max(floor).clamp(0.0, 1.0)
+}
+
 /// Position/anti-v gain scale from freedom (floor → 1.0 at full).
 #[inline]
 pub fn settle_motion_scale(freedom: f64) -> f64 {
@@ -937,9 +950,9 @@ pub const CAREFUL_AGGRESSION_MIN: f64 = 0.70;
 /// Full cruise aggression outside the far shoulder.
 pub const CAREFUL_AGGRESSION_MAX: f64 = 1.0;
 /// Enter terminal settle when range drops below this (m).
-pub const CAREFUL_TERMINAL_ENTER_M: f64 = 90.0;
+pub const CAREFUL_TERMINAL_ENTER_M: f64 = 140.0;
 /// Exit terminal settle when range exceeds this (m) — hysteresis vs enter.
-pub const CAREFUL_TERMINAL_EXIT_M: f64 = 140.0;
+pub const CAREFUL_TERMINAL_EXIT_M: f64 = 200.0;
 
 /// Continuous motion/lean scale: closer → cautious, farther → bold.
 ///
@@ -959,7 +972,7 @@ pub fn careful_envelope_membership(range_m: f64) -> f64 {
         / (CAREFUL_AGGRESSION_MAX - CAREFUL_AGGRESSION_MIN)
 }
 
-/// Hysteresis latch for the terminal settle envelope (enter ~90 m, exit ~140 m).
+/// Hysteresis latch for the terminal settle envelope (enter ~140 m, exit ~200 m).
 /// Altitude does not gate entry: a pad arrival at long-range cruise altitude
 /// settles and hands off to Descend right there (no bleed-down approach).
 #[inline]
@@ -1420,6 +1433,25 @@ mod tests {
         assert!((settle_brake_lean_scale(f_full) - 1.0).abs() < 1e-9);
         assert!((settle_trim_rate_gate(1.0, f_min) - 1.0).abs() < 1e-9);
         assert!(settle_trim_rate_gate(0.5, f_min) < settle_trim_rate_gate(0.5, f_full));
+    }
+
+    #[test]
+    fn settle_lean_auth_subtractive_balance() {
+        let freedom = 0.8;
+        let constraint = 0.9;
+        assert!(
+            (settle_lean_auth(freedom, constraint, 0.0) - 0.0).abs() < 1e-9,
+            "no urgency → no floor when freedom < constraint"
+        );
+        let auth = settle_lean_auth(freedom, constraint, 1.0);
+        assert!(
+            (auth - SETTLE_AUTH_FLOOR).abs() < 1e-9,
+            "urgency floor survives high constraint, auth={auth}"
+        );
+        assert!(
+            settle_lean_auth(1.0, 0.2, 0.0) > settle_lean_auth(0.5, 0.2, 0.0),
+            "higher freedom → higher auth"
+        );
     }
 
     #[test]
