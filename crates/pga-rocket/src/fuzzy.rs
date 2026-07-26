@@ -863,29 +863,10 @@ pub const SETTLE_LEAN_V_FREE: f64 = 14.0;
 /// Brake lean-cap scale at minimum freedom (keeps residual decel authority).
 pub const SETTLE_LEAN_CAP_FLOOR_FRAC: f64 = 0.20;
 
-const SETTLE_LEAN_CURVE_ALPHA: f64 = 2.75;
-
-/// Lean freedom for terminal settle: [`SETTLE_LEAN_FREEDOM_MIN`] at strict speeds, 1 at full decel.
-///
-/// Shoulders [`SETTLE_LEAN_V_STRICT`, `SETTLE_LEAN_V_FREE`]: membership ramps linearly then
-/// maps through an exponential curve so freedom stays near the floor and opens quickly near 1.
+/// Lean freedom for terminal settle: full authority (constraint-only upright bias).
 #[inline]
-pub fn settle_lean_freedom(vh: f64) -> f64 {
-    let min_f = SETTLE_LEAN_FREEDOM_MIN;
-    let mu = ramp(
-        vh.max(0.0),
-        SETTLE_LEAN_V_STRICT,
-        SETTLE_LEAN_V_FREE.max(SETTLE_LEAN_V_STRICT + 1e-6),
-    );
-    if mu <= 0.0 {
-        return min_f;
-    }
-    if mu >= 1.0 {
-        return 1.0;
-    }
-    let exp_a = SETTLE_LEAN_CURVE_ALPHA.exp();
-    let curve = ((SETTLE_LEAN_CURVE_ALPHA * mu).exp() - 1.0) / (exp_a - 1.0);
-    min_f + (1.0 - min_f) * curve
+pub fn settle_lean_freedom(_vh: f64) -> f64 {
+    1.0
 }
 
 /// Urgency from remaining settle time — opens lean when position or speed are bottlenecks.
@@ -896,8 +877,8 @@ pub fn settle_urgency(t_pos: f64, t_vh: f64) -> f64 {
 
 /// Effective lean freedom: speed-based floor opened by settle urgency.
 #[inline]
-pub fn settle_freedom_effective(vh: f64, t_pos: f64, t_vh: f64) -> f64 {
-    settle_lean_freedom(vh).max(settle_urgency(t_pos, t_vh))
+pub fn settle_freedom_effective(_vh: f64, _t_pos: f64, _t_vh: f64) -> f64 {
+    1.0
 }
 
 /// Minimum lean authority floor scaled by settle urgency (keeps residual trim under attitude lock).
@@ -927,8 +908,8 @@ pub fn settle_aim_blend(freedom: f64) -> f64 {
 
 /// Brake lean-cap multiplier from freedom (floor → 1.0 at full).
 #[inline]
-pub fn settle_brake_lean_scale(freedom: f64) -> f64 {
-    SETTLE_LEAN_CAP_FLOOR_FRAC + (1.0 - SETTLE_LEAN_CAP_FLOOR_FRAC) * freedom.clamp(0.0, 1.0)
+pub fn settle_brake_lean_scale(_freedom: f64) -> f64 {
+    1.0
 }
 
 /// Trim rate gate: tighter attitude lock when freedom is low.
@@ -950,9 +931,9 @@ pub const CAREFUL_AGGRESSION_MIN: f64 = 0.70;
 /// Full cruise aggression outside the far shoulder.
 pub const CAREFUL_AGGRESSION_MAX: f64 = 1.0;
 /// Enter terminal settle when range drops below this (m).
-pub const CAREFUL_TERMINAL_ENTER_M: f64 = 140.0;
+pub const CAREFUL_TERMINAL_ENTER_M: f64 = 300.0;
 /// Exit terminal settle when range exceeds this (m) — hysteresis vs enter.
-pub const CAREFUL_TERMINAL_EXIT_M: f64 = 200.0;
+pub const CAREFUL_TERMINAL_EXIT_M: f64 = 400.0;
 
 /// Continuous motion/lean scale: closer → cautious, farther → bold.
 ///
@@ -972,7 +953,8 @@ pub fn careful_envelope_membership(range_m: f64) -> f64 {
         / (CAREFUL_AGGRESSION_MAX - CAREFUL_AGGRESSION_MIN)
 }
 
-/// Hysteresis latch for the terminal settle envelope (enter ~140 m, exit ~200 m).
+/// Hysteresis latch for the terminal settle envelope
+/// (enter ≤300 m or `brake_engage`, exit ≤400 m + cheby exit).
 /// Altitude does not gate entry: a pad arrival at long-range cruise altitude
 /// settles and hands off to Descend right there (no bleed-down approach).
 #[inline]
@@ -982,11 +964,12 @@ pub fn careful_terminal_latch(
     cheby_m: f64,
     lofted: bool,
     cheby_exit_m: f64,
+    brake_engage: bool,
 ) -> bool {
     if latched {
         range_m <= CAREFUL_TERMINAL_EXIT_M || cheby_m <= cheby_exit_m
     } else {
-        lofted && range_m <= CAREFUL_TERMINAL_ENTER_M
+        lofted && (brake_engage || range_m <= CAREFUL_TERMINAL_ENTER_M)
     }
 }
 
@@ -1399,40 +1382,10 @@ mod tests {
     }
 
     #[test]
-    fn settle_lean_freedom_endpoints_and_shape() {
-        assert!((settle_lean_freedom(0.0) - SETTLE_LEAN_FREEDOM_MIN).abs() < 1e-9);
-        assert!((settle_lean_freedom(SETTLE_LEAN_V_STRICT) - SETTLE_LEAN_FREEDOM_MIN).abs() < 1e-9);
-        assert!((settle_lean_freedom(SETTLE_LEAN_V_FREE) - 1.0).abs() < 1e-9);
-        assert!((settle_lean_freedom(20.0) - 1.0).abs() < 1e-9);
-        let mid = settle_lean_freedom(8.0);
-        let linear_mid = SETTLE_LEAN_FREEDOM_MIN + (1.0 - SETTLE_LEAN_FREEDOM_MIN) * 0.5;
-        assert!(
-            mid > SETTLE_LEAN_FREEDOM_MIN + 0.01 && mid < linear_mid,
-            "mid={mid}"
-        );
-        let a = settle_lean_freedom(6.0);
-        let b = settle_lean_freedom(8.0);
-        let c = settle_lean_freedom(10.0);
-        assert!(a < b && b < c, "monotone: {a} {b} {c}");
-    }
-
-    #[test]
-    fn settle_freedom_helpers_endpoints() {
-        let f_min = SETTLE_LEAN_FREEDOM_MIN;
-        let f_full = 1.0;
-        assert!((settle_motion_scale(f_min) - (0.35 + 0.65 * f_min)).abs() < 1e-9);
-        assert!((settle_motion_scale(f_full) - 1.0).abs() < 1e-9);
-        assert!((settle_aim_blend(f_min) - (0.25 + 0.75 * f_min)).abs() < 1e-9);
-        assert!((settle_aim_blend(f_full) - 1.0).abs() < 1e-9);
-        assert!(
-            (settle_brake_lean_scale(f_min)
-                - (SETTLE_LEAN_CAP_FLOOR_FRAC + (1.0 - SETTLE_LEAN_CAP_FLOOR_FRAC) * f_min))
-                .abs()
-                < 1e-9
-        );
-        assert!((settle_brake_lean_scale(f_full) - 1.0).abs() < 1e-9);
-        assert!((settle_trim_rate_gate(1.0, f_min) - 1.0).abs() < 1e-9);
-        assert!(settle_trim_rate_gate(0.5, f_min) < settle_trim_rate_gate(0.5, f_full));
+    fn settle_lean_freedom_is_full() {
+        assert!((settle_lean_freedom(0.0) - 1.0).abs() < 1e-9);
+        assert!((settle_lean_freedom(8.0) - 1.0).abs() < 1e-9);
+        assert!((settle_brake_lean_scale(0.3) - 1.0).abs() < 1e-9);
     }
 
     #[test]
