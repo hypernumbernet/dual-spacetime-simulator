@@ -126,6 +126,7 @@ impl App {
             toggle_landing: self.input.just_pressed(KeyCode::KeyL),
             toggle_target_landing: self.input.just_pressed(KeyCode::KeyT),
             toggle_moon_mode: self.input.just_pressed(KeyCode::KeyM),
+            random_load_test: self.input.just_pressed(KeyCode::KeyY),
         }
     }
 
@@ -219,6 +220,15 @@ impl App {
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.set_target_xz(self.target_xz);
             }
+        }
+
+        if keys.random_load_test {
+            let moon_mode = self.rocket.moon_mode;
+            self.rocket = RocketState::random_load_test();
+            self.rocket.moon_mode = moon_mode;
+            self.control = ControlMapper::default();
+            self.landing.disable();
+            self.target_landing.enable();
         }
 
         let target_xz_f64 = [self.target_xz[0] as f64, self.target_xz[1] as f64];

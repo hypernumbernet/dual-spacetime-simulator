@@ -40,6 +40,8 @@ pub struct KeySnapshot {
     pub toggle_target_landing: bool,
     /// Toggle Moon mode (M key, edge-triggered).
     pub toggle_moon_mode: bool,
+    /// Y-key load test: random IC then force T autopilot (edge-triggered).
+    pub random_load_test: bool,
 }
 
 impl KeySnapshot {
@@ -62,7 +64,7 @@ impl KeySnapshot {
 ///
 /// - Space / Ctrl: hold to raise / lower throttle
 /// - F / C: edge-triggered latch ramps (full / cut) over [`THROTTLE_LATCH_RAMP_S`]
-/// - W/S pitch, Q/E yaw, A/D roll; R / L / T / M are edge signals for the app
+/// - W/S pitch, Q/E yaw, A/D roll; R / L / T / M / Y are edge signals for the app
 /// - Any manual flight key cancels L/T autopilot (handled in the app layer)
 #[derive(Clone, Debug)]
 pub struct ControlMapper {
@@ -179,6 +181,7 @@ pub fn map_keys(
     l: bool,
     t: bool,
     m: bool,
+    y: bool,
 ) -> KeySnapshot {
     KeySnapshot {
         thrust_up: space,
@@ -196,6 +199,7 @@ pub fn map_keys(
         toggle_landing: l,
         toggle_target_landing: t,
         toggle_moon_mode: m,
+        random_load_test: y,
     }
 }
 
@@ -272,6 +276,7 @@ mod unit_tests {
             toggle_landing: true,
             toggle_target_landing: true,
             toggle_moon_mode: true,
+            random_load_test: true,
             ..Default::default()
         };
         assert!(!keys.manual_control_active());

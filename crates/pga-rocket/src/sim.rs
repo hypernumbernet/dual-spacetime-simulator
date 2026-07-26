@@ -10,6 +10,15 @@ use std::ops::Add;
 /// Standard gravity (m/s²).
 pub const GRAVITY: f64 = 9.81;
 
+/// Y-key load-test bounds: max horizontal offset from origin (m).
+pub const LOAD_TEST_XZ_MAX_M: f64 = 30000.0;
+/// Y-key load-test bounds: max CoM altitude (m).
+pub const LOAD_TEST_ALT_MAX_M: f64 = 100000.0;
+/// Y-key load-test bounds: max ground-relative speed (m/s); 3000 km/h.
+pub const LOAD_TEST_SPEED_MAX_MS: f64 = 3000.0 / 3.6;
+/// Y-key load-test bounds: max body-frame angular rate per axis (rad/s).
+pub const LOAD_TEST_OMEGA_MAX: f64 = std::f64::consts::PI;
+
 /// Sea-level air density (kg/m³), ISA.
 pub const AIR_DENSITY: f64 = 1.225;
 
@@ -265,6 +274,40 @@ pub struct ContactProbe {
 /// Angular resolution of cylindrical hull rings (matches visual mesh segments).
 const HULL_RING_SEGS: usize = 8;
 
+fn load_test_wall_seed() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1)
+}
+
+fn load_test_splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E3779B97F4A7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z ^ (z >> 31)
+}
+
+fn load_test_unit_f64(state: &mut u64) -> f64 {
+    load_test_splitmix64(state) as f64 / u64::MAX as f64
+}
+
+fn load_test_range(state: &mut u64, lo: f64, hi: f64) -> f64 {
+    lo + load_test_unit_f64(state) * (hi - lo)
+}
+
+/// Uniform direction on the unit sphere (Marsaglia).
+fn load_test_unit_direction(state: &mut u64) -> [f64; 3] {
+    let u1 = load_test_unit_f64(state);
+    let u2 = load_test_unit_f64(state);
+    let z = 1.0 - 2.0 * u1;
+    let phi = std::f64::consts::TAU * u2;
+    let r = (1.0 - z * z).max(0.0).sqrt();
+    [r * phi.cos(), z, r * phi.sin()]
+}
+
 /// Full rocket rigid-body state. Pose is a PGA motor; velocities are rates.
 #[derive(Clone, Debug)]
 pub struct RocketState {
@@ -332,6 +375,47 @@ impl RocketState {
         s.destroyed = false;
         s.explosion_age = 0.0;
         s.explosion_origin = [0.0, altitude_com, 0.0];
+        s.last_impact_speed = 0.0;
+        s
+    }
+
+    /// Random free-flight IC for the Y-key load-test harness (wall-clock seed).
+    pub fn random_load_test() -> Self {
+        Self::random_load_test_from_seed(load_test_wall_seed())
+    }
+
+    /// Random free-flight IC from a deterministic seed (tests / replay).
+    pub fn random_load_test_from_seed(mut seed: u64) -> Self {
+        let pad = Self::resting_on_pad();
+        let alt_min = pad.altitude();
+        let x = load_test_range(&mut seed, -LOAD_TEST_XZ_MAX_M, LOAD_TEST_XZ_MAX_M);
+        let z = load_test_range(&mut seed, -LOAD_TEST_XZ_MAX_M, LOAD_TEST_XZ_MAX_M);
+        let y = load_test_range(&mut seed, alt_min, LOAD_TEST_ALT_MAX_M);
+        let pitch = load_test_range(&mut seed, -std::f64::consts::PI, std::f64::consts::PI);
+        let yaw = load_test_range(&mut seed, -std::f64::consts::PI, std::f64::consts::PI);
+        let roll = load_test_range(&mut seed, -std::f64::consts::PI, std::f64::consts::PI);
+        let speed = load_test_range(&mut seed, 0.0, LOAD_TEST_SPEED_MAX_MS);
+        let dir = load_test_unit_direction(&mut seed);
+        let velocity = [
+            dir[0] * speed,
+            dir[1] * speed,
+            dir[2] * speed,
+        ];
+        let omega = [
+            load_test_range(&mut seed, -LOAD_TEST_OMEGA_MAX, LOAD_TEST_OMEGA_MAX),
+            load_test_range(&mut seed, -LOAD_TEST_OMEGA_MAX, LOAD_TEST_OMEGA_MAX),
+            load_test_range(&mut seed, -LOAD_TEST_OMEGA_MAX, LOAD_TEST_OMEGA_MAX),
+        ];
+        let mut s = pad;
+        s.motor = motor_from_pose(x, y, z, pitch, yaw, roll);
+        s.velocity = velocity;
+        s.omega = omega;
+        s.command = ControlCommand::default();
+        s.contacting = false;
+        s.body_contacting = false;
+        s.destroyed = false;
+        s.explosion_age = 0.0;
+        s.explosion_origin = [x, y, z];
         s.last_impact_speed = 0.0;
         s
     }
@@ -1002,5 +1086,42 @@ mod unit_tests {
         let k_520 = air_drag_k_at_altitude(k_sl, 520.0);
         assert!(k_520 < k_sl);
         assert!((k_520 / k_sl - air_density_ratio(520.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn random_load_test_respects_bounds() {
+        let pad_alt = RocketState::resting_on_pad().altitude();
+        for seed in [1u64, 42, 999, 12345, u64::MAX / 3] {
+            let s = RocketState::random_load_test_from_seed(seed);
+            let pos = s.position();
+            assert!(
+                pos[0].abs() <= LOAD_TEST_XZ_MAX_M + 1e-6,
+                "seed={seed} x={}",
+                pos[0]
+            );
+            assert!(
+                pos[2].abs() <= LOAD_TEST_XZ_MAX_M + 1e-6,
+                "seed={seed} z={}",
+                pos[2]
+            );
+            assert!(
+                pos[1] >= pad_alt - 1e-6 && pos[1] <= LOAD_TEST_ALT_MAX_M + 1e-6,
+                "seed={seed} y={}",
+                pos[1]
+            );
+            assert!(
+                s.speed() <= LOAD_TEST_SPEED_MAX_MS + 1e-6,
+                "seed={seed} speed={}",
+                s.speed()
+            );
+            for (i, &w) in s.omega.iter().enumerate() {
+                assert!(
+                    w.abs() <= LOAD_TEST_OMEGA_MAX + 1e-6,
+                    "seed={seed} omega[{i}]={w}"
+                );
+            }
+            assert!(!s.contacting);
+            assert!(!s.destroyed);
+        }
     }
 }

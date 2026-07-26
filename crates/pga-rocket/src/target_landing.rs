@@ -789,15 +789,19 @@ impl TargetLandingAutopilot {
         cmd.roll = roll;
     }
 
+    pub fn enable(&mut self) {
+        self.enabled = true;
+        self.complete = false;
+        self.phase = TargetPhase::Climb;
+        self.reset_transit_latches();
+        self.lander.disable();
+    }
+
     pub fn toggle(&mut self) {
-        self.enabled = !self.enabled;
         if self.enabled {
-            self.complete = false;
-            self.phase = TargetPhase::Climb;
-            self.reset_transit_latches();
-            self.lander.disable();
+            self.disable();
         } else {
-            self.lander.disable();
+            self.enable();
         }
     }
 
@@ -3365,6 +3369,16 @@ mod tests {
         assert!(!ap.complete);
         ap.disable();
         assert!(!ap.enabled);
+    }
+
+    #[test]
+    fn enable_starts_climb_from_off() {
+        let mut ap = TargetLandingAutopilot::default();
+        assert!(!ap.enabled);
+        ap.enable();
+        assert!(ap.enabled);
+        assert_eq!(ap.phase, TargetPhase::Climb);
+        assert!(!ap.complete);
     }
 
     #[test]
