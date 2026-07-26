@@ -30,7 +30,11 @@ pub struct GroundVertex {
 /// Half-extent of the local grass plane mesh (meters). Re-centered under the rocket
 /// each frame; may be scaled in the vertex shader for high altitude (see
 /// [`ground_plane_scale`]).
-pub const GROUND_HALF_EXTENT: f32 = 1800.0;
+///
+/// 20 km keeps a ground-level view open to a soft horizon (edge fog) and fully
+/// covers the max T-target annulus ([`TARGET_DISTANCE_MAX_M`]). Triangle count is
+/// fixed ([`grass_ground_mesh`]); only this floor and VS scale change the disk.
+pub const GROUND_HALF_EXTENT: f32 = 20000.0;
 /// World meters covered by one grass/regolith albedo tile.
 /// Larger than the old 1 m Minecraft stamp so a 256×256 LINEAR+mip tile reads as
 /// continuous open-world ground and high-frequency repeats sit farther apart.
@@ -38,12 +42,17 @@ pub const GRASS_METERS_PER_TILE: f32 = 24.0;
 /// Edge-fog start as a fraction of the effective ground half-extent (horizontal).
 /// Fragments with radial distance / half_extent_world below this stay fully lit;
 /// the rim fades to sky so the finite plane has no hard horizon.
-pub const GROUND_EDGE_FOG_START: f32 = 0.72;
+pub const GROUND_EDGE_FOG_START: f32 = 0.85;
 /// How much the ground disk grows with camera eye height: half_extent ≥ eye_y × this.
-/// ~2.5 keeps a 45° FOV looking down mostly filled with terrain at high altitude.
-pub const GROUND_EXTENT_PER_EYE_Y: f32 = 2.5;
+/// 25× keeps a 45° FOV looking down filled with terrain from mid-altitude upward
+/// (10× the previous 2.5 so the disk expands early enough that ~5 km eye height
+/// does not look like a finite disc against empty sky).
+pub const GROUND_EXTENT_PER_EYE_Y: f32 = 25.0;
 /// Baseline far plane (meters) used near the pad / low flight.
-pub const CAMERA_FAR_BASE: f32 = 4000.0;
+/// Sized to cover the ground-disk corner slant at [`GROUND_HALF_EXTENT`] with margin
+/// (`half × √2 × 1.15 ≈ 32.5 km`); high altitude uses the larger of this and the
+/// altitude-scaled slant in [`camera_far_for_eye_height`].
+pub const CAMERA_FAR_BASE: f32 = 35000.0;
 /// Near plane (meters); keep small so the rocket stays sharp at orbit distance.
 pub const CAMERA_NEAR: f32 = 0.5;
 
@@ -211,29 +220,49 @@ mod tests {
     fn ground_scale_is_one_near_the_pad() {
         assert!((ground_plane_scale(0.0) - 1.0).abs() < 1e-6);
         assert!((ground_plane_scale(100.0) - 1.0).abs() < 1e-6);
-        // Still under the floor: 1800 / 2.5 = 720 m eye height.
+        // Floor holds until eye_y × GROUND_EXTENT_PER_EYE_Y exceeds GROUND_HALF_EXTENT
+        // (20000 / 25 = 800 m).
         assert!((ground_plane_scale(700.0) - 1.0).abs() < 1e-6);
         assert!((ground_half_extent_for_eye_height(50.0) - GROUND_HALF_EXTENT).abs() < 1e-3);
     }
 
     #[test]
+    fn ground_extent_covers_max_target_at_pad_altitude() {
+        let half = ground_half_extent_for_eye_height(2.0);
+        assert!(
+            half >= TARGET_DISTANCE_MAX_M,
+            "low-altitude ground disk must cover farthest T pad: half={half} max_r={TARGET_DISTANCE_MAX_M}"
+        );
+        // Fully lit radius should still reach the max target annulus.
+        assert!(half * GROUND_EDGE_FOG_START >= TARGET_DISTANCE_MAX_M);
+    }
+
+    #[test]
     fn ground_extent_grows_with_high_altitude() {
-        let half = ground_half_extent_for_eye_height(2000.0);
+        // Growth after the 20 km floor (eye_y > 800 m at 25×).
+        let half = ground_half_extent_for_eye_height(5000.0);
         assert!(half > GROUND_HALF_EXTENT);
-        assert!((half - 2000.0 * GROUND_EXTENT_PER_EYE_Y).abs() < 1e-3);
-        assert!(ground_plane_scale(2000.0) > 1.0);
-        assert!(ground_plane_scale(5000.0) > ground_plane_scale(2000.0));
+        assert!((half - 5000.0 * GROUND_EXTENT_PER_EYE_Y).abs() < 1e-3);
+        assert!(ground_plane_scale(5000.0) > 1.0);
+        assert!(ground_plane_scale(10000.0) > ground_plane_scale(5000.0));
+        // Still on the floor below the threshold.
+        assert!((ground_half_extent_for_eye_height(500.0) - GROUND_HALF_EXTENT).abs() < 1e-3);
     }
 
     #[test]
     fn camera_far_covers_high_altitude_ground() {
-        assert!((camera_far_for_eye_height(50.0) - CAMERA_FAR_BASE).abs() < 1e-3);
-        let far_hi = camera_far_for_eye_height(3000.0);
-        assert!(far_hi > CAMERA_FAR_BASE);
+        let far_lo = camera_far_for_eye_height(50.0);
+        let half_lo = ground_half_extent_for_eye_height(50.0);
+        let slant_lo = (50.0f32 * 50.0 + 2.0 * half_lo * half_lo).sqrt();
+        assert!(far_lo >= CAMERA_FAR_BASE - 1e-3);
+        assert!(far_lo >= slant_lo * 1.15 - 1e-2);
+
+        let far_hi = camera_far_for_eye_height(5000.0);
         // Far must exceed the slant range to a ground-plane corner.
-        let half = ground_half_extent_for_eye_height(3000.0);
-        let slant = (3000.0f32 * 3000.0 + 2.0 * half * half).sqrt();
+        let half = ground_half_extent_for_eye_height(5000.0);
+        let slant = (5000.0f32 * 5000.0 + 2.0 * half * half).sqrt();
         assert!(far_hi >= slant);
+        assert!(far_hi >= CAMERA_FAR_BASE);
     }
 
     #[test]
