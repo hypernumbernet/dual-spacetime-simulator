@@ -93,9 +93,9 @@ const T_ATT_STRICT_S: f64 = 0.8;
 /// Inside this Chebyshev (m) with quiet vh, Align holds upright (no chase).
 const ALIGN_DEADZONE_CHEBY_M: f64 = HANDOFF_CHEBY_MAX_M * 0.60;
 // Unscaled bases; runtime values multiply by distance-dependent aggression.
-const TRIM_V_CREEP_PER_M_BASE: f64 = 0.28;
-const TRIM_V_CREEP_MAX_BASE: f64 = 6.00;
-const TRIM_V_CREEP_MIN_BASE: f64 = 1.3;
+const TRIM_V_CREEP_PER_M_BASE: f64 = 0.32;
+const TRIM_V_CREEP_MAX_BASE: f64 = 6.90;
+const TRIM_V_CREEP_MIN_BASE: f64 = 1.5;
 
 // --- Transit lean / envelope -------------------------------------------------
 /// Lean cap during the full-throttle ascent burn (rad) — MPC rollout / legacy label.
