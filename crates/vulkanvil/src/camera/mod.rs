@@ -2,7 +2,7 @@ mod orbit;
 mod spacecraft;
 mod trace;
 
-pub use orbit::OrbitCamera;
+pub use orbit::{get_closest_perp_unit_to_y, OrbitCamera};
 pub use trace::trace_particle_from_behind;
 pub use spacecraft::{
     apply_spacecraft_keyboard, apply_spacecraft_roll_pitch, apply_spacecraft_steer_from_offset,

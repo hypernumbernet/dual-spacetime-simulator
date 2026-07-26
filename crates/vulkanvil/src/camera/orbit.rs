@@ -473,7 +473,10 @@ pub(crate) fn clamp_pitch(relative: Vec3) -> Vec3 {
 }
 
 /// Returns a unit up vector perpendicular to view direction and closest to world-up.
-pub(crate) fn get_closest_perp_unit_to_y(position: Vec3, target: Vec3) -> Vec3 {
+///
+/// Safe at nadir/zenith: when the view is parallel to world Y, falls back to a
+/// stable horizontal axis so `look_at` does not become singular.
+pub fn get_closest_perp_unit_to_y(position: Vec3, target: Vec3) -> Vec3 {
     let dir = (target - position).normalize_or_zero();
     if dir == Vec3::ZERO {
         return Vec3::Y;

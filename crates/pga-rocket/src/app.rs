@@ -7,7 +7,7 @@ use crate::mesh::{GRASS_METERS_PER_TILE, hud_text, random_target_xz};
 use crate::target_landing::TargetLandingAutopilot;
 use crate::renderer::{
     MIN_CAMERA_HEIGHT, MOON_SKY_COLOR, Renderer, SKY_COLOR, camera_view_proj, min_orbit_pitch,
-    orbit_camera_far,
+    orbit_camera_far, orbit_eye_offset,
 };
 use crate::sim::{ControlCommand, RocketState, step_rocket};
 use crate::ui::{ContentRegion, draw_params_panel};
@@ -16,7 +16,7 @@ use glam::Vec3;
 use std::ffi::CString;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use vulkanvil::{InputState, VulkanBase};
+use vulkanvil::{InputState, OrbitCamera, VulkanBase, get_closest_perp_unit_to_y};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -30,6 +30,48 @@ const MOUSE_ORBIT_SENS: f32 = 0.005;
 /// Render/update rate cap (also paired with FIFO present / vsync).
 const TARGET_FPS: u32 = 60;
 const FRAME_PERIOD: Duration = Duration::from_nanos(1_000_000_000 / TARGET_FPS as u64);
+const CAM_DISTANCE_MIN: f32 = 20.0;
+const CAM_DISTANCE_MAX: f32 = 400.0;
+const CAM_PITCH_MAX: f32 = 1.2;
+
+fn initial_orbit_camera(target: Vec3) -> OrbitCamera {
+    let eye = target + orbit_eye_offset(0.8, 0.35, 80.0);
+    let mut cam = OrbitCamera::new(eye, target);
+    cam.set_lock_up(true);
+    cam
+}
+
+/// Yaw / pitch / distance HUD values from the current orbit pose.
+fn orbit_hud_angles(cam: &OrbitCamera) -> (f32, f32, f32) {
+    let offset = cam.position - cam.target;
+    let distance = offset.length().max(1e-6);
+    let pitch = (offset.y / distance).asin();
+    let yaw = offset.z.atan2(offset.x);
+    (yaw, pitch, distance)
+}
+
+fn clamp_orbit_distance(cam: &mut OrbitCamera) {
+    let distance = cam.orbit_distance().clamp(CAM_DISTANCE_MIN, CAM_DISTANCE_MAX);
+    let dir = cam.view_relative().normalize_or_zero();
+    if dir != Vec3::ZERO {
+        cam.position = cam.target - dir * distance;
+    }
+}
+
+fn clamp_orbit_above_ground(cam: &mut OrbitCamera) {
+    let distance = cam.orbit_distance().max(1e-3);
+    let pitch_floor = min_orbit_pitch(cam.target.y, distance, MIN_CAMERA_HEIGHT);
+    let offset = cam.position - cam.target;
+    let horiz = (offset.x * offset.x + offset.z * offset.z).sqrt().max(1e-6);
+    let pitch = offset.y.atan2(horiz);
+    let pitch = pitch.clamp(pitch_floor, CAM_PITCH_MAX);
+    let yaw = offset.z.atan2(offset.x);
+    cam.position = cam.target + orbit_eye_offset(yaw, pitch, distance);
+    if cam.position.y < MIN_CAMERA_HEIGHT {
+        cam.position.y = MIN_CAMERA_HEIGHT;
+    }
+    cam.up = get_closest_perp_unit_to_y(cam.position, cam.target);
+}
 
 pub struct App {
     /// Dropped before `renderer` / `vulkan_base` so egui Vulkan resources release cleanly.
@@ -44,9 +86,7 @@ pub struct App {
     input: InputState,
     last_frame: Option<Instant>,
     accum: f64,
-    cam_yaw: f32,
-    cam_pitch: f32,
-    cam_distance: f32,
+    camera: OrbitCamera,
     fps: f32,
     fps_acc: f32,
     fps_frames: u32,
@@ -66,21 +106,22 @@ pub struct App {
 
 impl Default for App {
     fn default() -> Self {
+        let rocket = RocketState::resting_on_pad();
+        let p = rocket.position();
+        let target = Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
         Self {
             gui: None,
             renderer: None,
             vulkan_base: None,
             window: None,
-            rocket: RocketState::resting_on_pad(),
+            rocket,
             control: ControlMapper::default(),
             landing: LandingAutopilot::default(),
             target_landing: TargetLandingAutopilot::default(),
             input: InputState::default(),
             last_frame: None,
             accum: 0.0,
-            cam_yaw: 0.8,
-            cam_pitch: 0.35,
-            cam_distance: 80.0,
+            camera: initial_orbit_camera(target),
             fps: 0.0,
             fps_acc: 0.0,
             fps_frames: 0,
@@ -171,23 +212,29 @@ impl App {
         let page_down = self.input.held(KeyCode::PageDown);
         let keys = self.keys_from_input();
 
-        self.cam_yaw += cam_yaw_rate * dt * 1.2;
-        self.cam_pitch += cam_pitch_rate * dt * 1.0;
+        // vulkanvil OrbitCamera: quaternion revolve around target (same as dst-graph3d).
+        // Mouse pitch is negated: DeviceEvent::MouseMotion Y is opposite the
+        // cursor-space (y-down) deltas that dual-spacetime / dst-graph3d pass to revolve.
+        let mut dyaw = cam_yaw_rate * dt * 1.2;
+        let mut dpitch = cam_pitch_rate * dt * 1.0;
+        if self.mouse_dragging {
+            dyaw += mdx as f32 * MOUSE_ORBIT_SENS;
+            dpitch += -mdy as f32 * MOUSE_ORBIT_SENS;
+        }
+        if dyaw != 0.0 || dpitch != 0.0 {
+            self.camera.revolve(dyaw, dpitch);
+        }
         if page_up {
-            self.cam_distance = (self.cam_distance - 40.0 * dt).max(20.0);
+            self.camera.zoom(40.0 * dt);
         }
         if page_down {
-            self.cam_distance = (self.cam_distance + 40.0 * dt).min(400.0);
-        }
-        if self.mouse_dragging {
-            self.cam_yaw += mdx as f32 * MOUSE_ORBIT_SENS;
-            self.cam_pitch += mdy as f32 * MOUSE_ORBIT_SENS;
+            self.camera.zoom(-40.0 * dt);
         }
         if self.scroll_zoom != 0.0 {
-            self.cam_distance =
-                (self.cam_distance - self.scroll_zoom * 8.0).clamp(20.0, 400.0);
+            self.camera.zoom(self.scroll_zoom * 8.0);
             self.scroll_zoom = 0.0;
         }
+        clamp_orbit_distance(&mut self.camera);
 
         if keys.toggle_landing {
             self.landing.toggle();
@@ -217,6 +264,8 @@ impl App {
             self.landing.disable();
             self.target_landing.disable();
             self.target_xz = random_target_xz();
+            let p = self.rocket.position();
+            self.camera = initial_orbit_camera(Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32));
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.set_target_xz(self.target_xz);
             }
@@ -258,9 +307,11 @@ impl App {
 
         let pos = self.rocket.position();
         let target = Vec3::new(pos[0] as f32, pos[1] as f32, pos[2] as f32);
-        // Keep orbit pitch above the ground plane (eye.y >= MIN_CAMERA_HEIGHT).
-        let pitch_floor = min_orbit_pitch(target.y, self.cam_distance, MIN_CAMERA_HEIGHT);
-        self.cam_pitch = self.cam_pitch.clamp(pitch_floor, 1.2);
+        // Keep orbit focus on the rocket CoM without changing relative view.
+        let follow = target - self.camera.target;
+        self.camera.target = target;
+        self.camera.position += follow;
+        clamp_orbit_above_ground(&mut self.camera);
         // Frustum + viewport share ContentRegion so the look-at sits in the
         // middle of the area to the right of the left panel.
         let content = ContentRegion::from_framebuffer(
@@ -268,15 +319,9 @@ impl App {
             size.height as f32,
             window.scale_factor() as f32,
         );
-        let far = orbit_camera_far(target.y, self.cam_pitch, self.cam_distance);
-        let (vp, eye) = camera_view_proj(
-            target,
-            self.cam_yaw,
-            self.cam_pitch,
-            self.cam_distance,
-            content.aspect,
-            far,
-        );
+        let eye = self.camera.position;
+        let far = orbit_camera_far(eye.y);
+        let vp = camera_view_proj(eye, target, content.aspect, far);
         // Snap ground origin to the grass tile grid under the rocket so tiling stays stable.
         let tile = GRASS_METERS_PER_TILE;
         let ground_xz = [
@@ -289,9 +334,7 @@ impl App {
 
         let needs_resize = self.needs_resize;
         let fps = self.fps;
-        let cam_yaw = self.cam_yaw;
-        let cam_pitch = self.cam_pitch;
-        let cam_distance = self.cam_distance;
+        let (cam_yaw, cam_pitch, cam_distance) = orbit_hud_angles(&self.camera);
         let target_xz = self.target_xz;
 
         let (Some(vb), Some(renderer), Some(gui)) = (

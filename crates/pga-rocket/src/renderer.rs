@@ -16,7 +16,7 @@ use std::ffi::CStr;
 use std::sync::{Arc, Mutex};
 use vulkanvil::{
     AllocatedBuffer, AllocatedImage, MAX_FRAMES_IN_FLIGHT, VulkanBase, create_buffer_with_data,
-    create_depth_image, create_shader_module, select_depth_format,
+    create_depth_image, create_shader_module, get_closest_perp_unit_to_y, select_depth_format,
 };
 
 const MESH_VERT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/mesh.vert.spv"));
@@ -882,6 +882,15 @@ fn content_viewport_scissor(
 /// Minimum camera eye height above the ground plane (y = 0).
 pub const MIN_CAMERA_HEIGHT: f32 = 0.75;
 
+/// Spherical orbit offset from target (matches legacy yaw/pitch HUD angles).
+pub fn orbit_eye_offset(yaw: f32, pitch: f32, distance: f32) -> Vec3 {
+    Vec3::new(
+        distance * yaw.cos() * pitch.cos(),
+        distance * pitch.sin(),
+        distance * yaw.sin() * pitch.cos(),
+    )
+}
+
 /// Lowest orbit pitch (radians) that keeps the eye at or above `min_eye_y`.
 ///
 /// With `eye = target + distance * (…, sin(pitch), …)`, require
@@ -892,49 +901,79 @@ pub fn min_orbit_pitch(target_y: f32, distance: f32, min_eye_y: f32) -> f32 {
     ratio.asin()
 }
 
-/// Build look-at view-projection and return (view_proj, eye position).
-/// Eye is never placed below the ground plane.
+/// Build view-projection looking from `eye` at `target` with a stable up.
 ///
-/// `far` is the perspective far plane (meters). Callers should pass
-/// [`camera_far_for_eye_height`] for the expected eye height so the scaled
-/// ground disk is not clipped at high altitude.
+/// Uses [`get_closest_perp_unit_to_y`] from vulkanvil so nadir/zenith views stay
+/// well-defined (no `look_at` singularity from world-Y up).
 pub fn camera_view_proj(
+    eye: Vec3,
     target: Vec3,
-    yaw: f32,
-    pitch: f32,
-    distance: f32,
     aspect: f32,
     far: f32,
-) -> (Mat4, Vec3) {
-    let max_pitch = 1.4;
-    let min_pitch = min_orbit_pitch(target.y, distance, MIN_CAMERA_HEIGHT);
-    let pitch = pitch.clamp(min_pitch, max_pitch);
-    let offset = Vec3::new(
-        distance * yaw.cos() * pitch.cos(),
-        distance * pitch.sin(),
-        distance * yaw.sin() * pitch.cos(),
-    );
-    let mut eye = target + offset;
-    // Hard floor in case of numerical edge cases or extreme targets.
-    if eye.y < MIN_CAMERA_HEIGHT {
-        eye.y = MIN_CAMERA_HEIGHT;
-    }
-    let view = Mat4::look_at_rh(eye, target, Vec3::Y);
+) -> Mat4 {
+    let up = get_closest_perp_unit_to_y(eye, target);
+    let view = Mat4::look_at_rh(eye, target, up);
     // Vulkan NDC has +Y down; flip projection Y so world +Y appears up on screen.
     let far = far.max(10.0);
     let mut proj = Mat4::perspective_rh(45f32.to_radians(), aspect.max(0.1), CAMERA_NEAR, far);
     proj.y_axis.y *= -1.0;
-    (proj * view, eye)
+    proj * view
 }
 
-/// Estimate orbit eye height without building the full view matrix.
-pub fn estimate_orbit_eye_y(target_y: f32, pitch: f32, distance: f32) -> f32 {
-    let min_pitch = min_orbit_pitch(target_y, distance, MIN_CAMERA_HEIGHT);
-    let pitch = pitch.clamp(min_pitch, 1.4);
-    (target_y + distance * pitch.sin()).max(MIN_CAMERA_HEIGHT)
+/// Far plane covering the altitude-scaled ground for the given eye height.
+pub fn orbit_camera_far(eye_y: f32) -> f32 {
+    camera_far_for_eye_height(eye_y.max(MIN_CAMERA_HEIGHT))
 }
 
-/// Far plane covering the altitude-scaled ground for the given orbit.
-pub fn orbit_camera_far(target_y: f32, pitch: f32, distance: f32) -> f32 {
-    camera_far_for_eye_height(estimate_orbit_eye_y(target_y, pitch, distance))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::FRAC_PI_2;
+
+    fn assert_mat_finite(m: Mat4) {
+        for col in 0..4 {
+            for row in 0..4 {
+                let v = m.col(col)[row];
+                assert!(v.is_finite(), "expected finite, got {v} at ({row},{col})");
+            }
+        }
+    }
+
+    #[test]
+    fn camera_view_proj_finite_at_high_altitude_nadir() {
+        let target = Vec3::new(0.0, 5000.0, 0.0);
+        let eye = target + orbit_eye_offset(0.8, -FRAC_PI_2, 80.0);
+        let vp = camera_view_proj(eye, target, 16.0 / 9.0, 35000.0);
+        assert!(eye.is_finite());
+        assert!((eye.y - (5000.0 - 80.0)).abs() < 1e-3, "eye.y={}", eye.y);
+        assert_mat_finite(vp);
+    }
+
+    #[test]
+    fn camera_view_proj_finite_at_high_altitude_shallow_nadir() {
+        let target = Vec3::new(0.0, 5000.0, 0.0);
+        let eye = target + orbit_eye_offset(0.8, -1.2, 80.0);
+        let vp = camera_view_proj(eye, target, 16.0 / 9.0, 35000.0);
+        assert_mat_finite(vp);
+    }
+
+    #[test]
+    fn min_orbit_pitch_blocks_nadir_at_low_altitude() {
+        let floor = min_orbit_pitch(50.0, 80.0, MIN_CAMERA_HEIGHT);
+        assert!(floor > -FRAC_PI_2 + 0.01);
+    }
+
+    #[test]
+    fn orbit_eye_offset_matches_spherical_trig() {
+        let yaw = 0.8_f32;
+        let pitch = -0.4_f32;
+        let distance = 80.0_f32;
+        let offset = orbit_eye_offset(yaw, pitch, distance);
+        let expected = Vec3::new(
+            distance * yaw.cos() * pitch.cos(),
+            distance * pitch.sin(),
+            distance * yaw.sin() * pitch.cos(),
+        );
+        assert!((offset - expected).length() < 1e-5);
+    }
 }
